@@ -39,6 +39,7 @@ _timeout_cmd() {
 	elif command -v perl &>/dev/null; then
 		perl -e 'alarm shift; exec @ARGV' "$secs" "$@"
 	else
+		echo "[WARN] No timeout command available - running without timeout" >&2
 		"$@"
 	fi
 }
