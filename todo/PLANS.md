@@ -22,6 +22,47 @@ Each plan includes:
 
 ## Active Plans
 
+### [2026-03-05] Fix Runaway Memory Consumption — Process Guards, ShellCheck Limits, Session Awareness
+
+**Status:** Planning
+**Estimate:** ~6h (ai:4h test:1.5h read:30m)
+**TODO:** t1398 (parent), t1398.1-t1398.5 (subtasks)
+**Logged:** 2026-03-05
+**Issue:** [GH#2854](https://github.com/marcusquinn/aidevops/issues/2854)
+**Replaces:** PR #2792 (declined)
+
+#### Purpose
+
+Root-cause fix for the March 3 kernel panic and ongoing memory pressure. Analysis identified three sources of excessive RAM consumption, all caused by aidevops itself:
+
+1. **ShellCheck exponential expansion** (highest impact) — `shellcheck --external-sources` with recursive `--source-path` follows source directives across 100+ scripts. Single invocation observed at 5.7 GB RSS, 88% CPU, 35+ minutes runtime. Most likely cause of the kernel panic (46 swap files, 100% compressor saturation, watchdog timeout at 94s).
+
+2. **Zombie pulse processes** — opencode enters idle state after completing but never exits. Stale detection depends on launchd re-invoking pulse-wrapper.sh. If launchd stops firing (sleep, plist unloaded), zombies persist indefinitely. Observed: 28+ hour zombie.
+
+3. **Session accumulation** — 10+ interactive opencode sessions across terminal tabs, each 100-440 MB plus language servers. Total ~2.5 GB with no framework warning.
+
+#### Phases
+
+**Phase 1: Process guards (t1398.1, t1398.2)** ~2.5h
+- Add `cleanup_runaway_processes()` to pulse-wrapper.sh — kill child processes exceeding RSS limit (2 GB) or runtime limit (10 min for shellcheck)
+- Harden ShellCheck: remove `--external-sources` or restrict `--source-path`, add per-file timeout
+
+**Phase 2: Self-watchdog and session awareness (t1398.3, t1398.4)** ~2h
+- Pulse self-watchdog: process-level idle timeout (not just external stale detection)
+- Session count check: warn when >5 concurrent interactive sessions open
+
+**Phase 3: Memory pressure monitor rewrite (t1398.5)** ~1.5h
+- Monitor the right signals: process count, individual RSS, process runtime
+- Incorporate valid concepts from PR #2792 (launchd integration, notifications) with correct thresholds
+- `kern.memorystatus_level` as secondary signal only, with much higher thresholds (macOS runs fine with compression + swap)
+
+#### Decision Log
+
+- **2026-03-05:** Declined PR #2792 — monitored wrong signals (kern.memorystatus_level at 40%/20% thresholds too aggressive), had unresolved security issues (command injection via arithmetic eval, XML injection in plist, AppleScript injection), CI failures, external contributor unresponsive to review feedback. Core concept (memory monitoring) valid but implementation needs rewrite.
+- **2026-03-05:** Root cause is aidevops processes, not external memory pressure — the framework should fix its own resource consumption before adding a generic OS monitor.
+
+---
+
 ### [2026-03-02] Prompt Injection Scanner — Tool-Agnostic Defense for aidevops and Agentic Apps
 
 **Status:** Planning
