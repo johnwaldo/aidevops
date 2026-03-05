@@ -372,11 +372,19 @@ main() {
 				# Commands are hardcoded in tool definitions, not user input
 				# Timeout prevents hangs on slow registries/network issues
 				# Use timeout_sec for macOS compatibility (no native timeout)
-				if timeout_sec 120 bash -c "$update_cmd" 2>&1 | tail -2; then
+				# NOTE: Do NOT pipe timeout_sec output to tail/head — on macOS the
+				# perl alarm fallback doesn't close the pipe's write end on SIGALRM,
+				# causing tail to block forever. Use a temp file instead.
+				local _update_log
+				_update_log=$(mktemp "${TMPDIR:-/tmp}/tool-update.XXXXXX")
+				if timeout_sec 120 bash -c "$update_cmd" >"$_update_log" 2>&1; then
+					tail -2 "$_update_log"
 					echo -e "  ${GREEN}✓ Updated${NC}"
 				else
+					tail -2 "$_update_log"
 					echo -e "  ${RED}✗ Failed${NC}"
 				fi
+				rm -f "$_update_log"
 				echo ""
 			done
 			echo -e "${GREEN}Updates complete. Re-run to verify.${NC}"
