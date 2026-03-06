@@ -22,6 +22,149 @@ Each plan includes:
 
 ## Active Plans
 
+### [2026-03-06] Recursive Task Decomposition for Dispatch — Classify/Decompose Pipeline
+
+**Status:** Planning
+**Estimate:** ~10h (ai:7h test:2h read:1h)
+**TODO:** t1408 (parent), t1408.1-t1408.5 (subtasks)
+**Logged:** 2026-03-06
+**Brief:** [todo/tasks/t1408-brief.md](tasks/t1408-brief.md)
+**Inspired by:** [TinyAGI/fractals](https://github.com/TinyAGI/fractals) (recursive agentic task orchestrator, 146 stars, MIT)
+
+<!--TOON:plan{id,title,status,phase,total_phases,owner,tags,est,est_ai,est_test,est_read,logged}:
+p041,Recursive Task Decomposition for Dispatch,planning,0,3,,plan|feature|orchestration|decomposition,10h,7h,2h,1h,2026-03-06T00:00Z
+-->
+
+#### Purpose
+
+Add an LLM-powered pre-dispatch step that classifies tasks as atomic (execute directly) or composite (split into subtasks), then recursively decomposes composites into 2-5 independent subtasks with dependency edges and lineage context. Catches "task too big for one worker" failures that currently require human judgment.
+
+**Three problems solved:**
+
+1. **Over-scoped tasks cause worker failures.** A task like "build auth with login, registration, password reset, and OAuth" dispatched to one worker produces either a massive unfocused PR or fails partway. Currently, decomposition requires human judgment at task creation time.
+
+2. **Workers drift off-scope without context.** Workers don't know what their siblings are doing, so they duplicate work or implement functionality that belongs to another subtask. Lineage context (ancestor chain + sibling descriptions) keeps workers focused.
+
+3. **No batch ordering for parallel dispatch.** When multiple subtasks are ready, the pulse dispatches them ad-hoc. Explicit batch strategies (depth-first, breadth-first) enable smarter parallel execution that respects dependencies and rate limits.
+
+**Catalyst:** [TinyAGI/fractals](https://github.com/TinyAGI/fractals) — a ~500-line TypeScript recursive task orchestrator that demonstrates the classify -> decompose -> lineage -> batch pattern works reliably. Their prompts are well-tuned with the right biases: "when in doubt, choose atomic" and "break into MINIMUM number of subtasks." We adopt the pattern, not the code.
+
+#### Architecture
+
+```text
+Current dispatch flow:
+  Task description → dispatch worker → worker executes → PR
+
+New flow with decomposition:
+  Task description
+    │
+    ▼
+  classify(task, lineage)
+    ├── atomic → dispatch worker directly (unchanged)
+    │
+    └── composite → decompose(task, lineage)
+                      │
+                      ▼
+                    [2-5 subtasks with dependency edges]
+                      │
+                      ├── Interactive: show tree, ask confirmation
+                      │   └── create child TODOs + briefs → dispatch leaves
+                      │
+                      └── Pulse: auto-proceed (depth limit: 3)
+                          └── create child TODOs + briefs → dispatch leaves
+
+Lineage context (passed to each worker):
+  0. Build a CRM with contacts, deals, and email
+    1. Implement contact management module
+    2. Implement deal pipeline module  <-- (this task)
+    3. Implement email integration module
+
+  "You are one of several agents working in parallel on sibling tasks.
+   Do not duplicate work that sibling tasks would handle."
+
+Batch strategies:
+  depth-first (default):        breadth-first:
+    1.1 ─┐                       1.1, 2.1, 3.1 ─ batch 1
+    1.2 ─┤ batch 1 (concurrent)  1.2, 2.2, 3.2 ─ batch 2
+    1.3 ─┘                       1.3, 2.3, 3.3 ─ batch 3
+    2.1 ─┐
+    2.2 ─┤ batch 2 (concurrent)
+    2.3 ─┘
+```
+
+#### Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Haiku-tier for classify/decompose | Judgment calls, not complex reasoning. ~$0.001/call. Opus would be overkill. |
+| "When in doubt, atomic" bias | Over-decomposition creates more overhead (tasks, PRs, merge conflicts) than under-decomposition |
+| Depth limit of 3 | Deeper decomposition suggests the original task was poorly scoped. Fractals allows 5 but notes depth as open question. |
+| Reuse existing infrastructure | Child tasks use `claim-task-id.sh`, `blocked-by:`, standard briefs. No new state management. |
+| Skip already-decomposed tasks | If TODO.md task already has subtasks, don't re-decompose. Prevents pulse from re-splitting manually decomposed tasks. |
+| Shell script, not TypeScript | Consistent with aidevops infrastructure. Fractals is TypeScript but the pattern is language-agnostic. |
+
+#### What Fractals Does That We Don't Need
+
+| Fractals feature | Why we skip it |
+|---|---|
+| Web UI tree visualization | `/dashboard` + TODO.md serve the same purpose CLI-natively |
+| Worktree-per-task isolation | Already have this via worktree workflow |
+| Session management | Already have cross-session memory + TODO.md persistence |
+| `--dangerously-skip-permissions` | Never — we have pre-edit checks and quality gates |
+
+#### What We Have That Fractals Doesn't
+
+| aidevops capability | Fractals gap |
+|---|---|
+| PR-based merge flow with review gates | No merge/backpropagation |
+| `blocked-by:` dependency tracking | No dependency ordering |
+| Cross-session memory + TODO.md | Session dies with process |
+| Pre-edit checks, linters, review bot gate | Workers run unguarded |
+| Cross-repo orchestration | Single-repo only |
+| Model routing (haiku→opus by complexity) | Uses gpt-5.4 for everything |
+| Full audit trail (task→issue→branch→PR→merge) | No traceability |
+
+#### Subtask Breakdown
+
+| ID | Task | Est | Model | Dependencies |
+|----|------|-----|-------|-------------|
+| t1408.1 | Classify/decompose helper script + prompts + lineage formatter | ~3h | sonnet | none |
+| t1408.2 | Wire into dispatch pipeline (interactive + pulse + mission) | ~3h | sonnet | t1408.1 |
+| t1408.3 | Lineage context in worker dispatch prompts | ~1.5h | sonnet | t1408.1 |
+| t1408.4 | Batch execution strategies | ~1.5h | sonnet | t1408.2 |
+| t1408.5 | Testing and verification | ~1h | sonnet | t1408.1-t1408.4 |
+
+t1408.1 runs first (no dependencies). t1408.2 and t1408.3 can start after t1408.1 (parallel). t1408.4 depends on t1408.2. t1408.5 is the final verification step.
+
+#### Progress
+
+- [ ] (2026-03-06) Phase 1: Core implementation ~3h
+  - [ ] t1408.1 Classify/decompose helper script, prompts, lineage formatter
+- [ ] Phase 2: Integration ~4.5h
+  - [ ] t1408.2 Dispatch pipeline integration (interactive + pulse + mission)
+  - [ ] t1408.3 Lineage context in worker prompts (parallel with t1408.2)
+  - [ ] t1408.4 Batch execution strategies
+- [ ] Phase 3: Verification ~1h
+  - [ ] t1408.5 Testing against real tasks, regression check
+
+#### Decision Log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-03-06 | Adopt classify/decompose pattern from Fractals | Highest-ROI idea — catches over-scoped tasks before dispatch at ~$0.001/call |
+| 2026-03-06 | Shell script implementation, not TypeScript | Consistent with aidevops infrastructure; pattern is language-agnostic |
+| 2026-03-06 | Lineage context as prompt engineering, not code | Adding ancestor/sibling descriptions to worker prompts is a guidance change, not a tool change |
+| 2026-03-06 | Depth-first as default batch strategy | Fractals found this works well; completing one branch before starting next reduces coordination overhead |
+
+#### Surprises & Discoveries
+
+- Fractals' entire orchestration is ~500 lines of TypeScript — the pattern is simpler than expected
+- Their classify/decompose prompts have well-tuned heuristics that prevent over-decomposition
+- The lineage context formatter is trivially simple (indented text with a marker) but highly effective at keeping workers focused
+- aidevops already has all the infrastructure Fractals is missing (merge flow, dependencies, persistence, quality gates) — we just need the decomposition step
+
+---
+
 ### [2026-03-05] LLM Evaluation Suite — Benchmarking, Evaluators, Datasets, and Prompt Version Tracking
 
 **Status:** Planning
