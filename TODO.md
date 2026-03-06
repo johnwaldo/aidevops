@@ -1616,6 +1616,8 @@ t193,setup.sh fails in non-interactive supervisor deploy step,,bugfix|setup,1h,4
 
 ## In Progress
 
+- [ ] t1409 refactor: memory-pressure-monitor — remove runtime alerts for app processes, keep RSS monitoring only. Classify processes as app vs tool; skip runtime checks for apps (Claude, Electron, ShipIt, OpenCode); raise session count threshold to 8. #refactor #monitoring ~1h ref:GH#2992 started:2026-03-06
+
 - [x] t1402 fix: remove stderr suppression from shellcheck invocation in pulse-wrapper.sh quality sweep — `2>/dev/null` hides real errors, `|| true` already prevents exit #bugfix #quality-debt ~15m ref:GH#2902 started:2026-03-05 pr:#2907 completed:2026-03-05
 
 - [x] t1400 fix: pulse-wrapper.sh 2>/dev/null suppressions — replace kill -0 with ps -p to avoid masking EPERM, remove redundant stderr suppression after -f check #bugfix #quality-debt ~30m ref:GH#2857 started:2026-03-05 pr:#2879 completed:2026-03-05
