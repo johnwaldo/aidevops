@@ -7,9 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.154.4] - 2026-03-07
+
+### Added
+
+- add URL-based skill import to add-skill-helper.sh (#3139)
+- add URL-based update checking for non-GitHub skills (t1415.2) (#3141)
+
+### Changed
+
+- Documentation: add changelog for shellcheck wrapper staleness fix (#3163)
+- Documentation: add Convos encrypted messaging agent (t1414.1) (#3140)
+
 ### Fixed
 
-- setup.sh now updates stale shellcheck wrapper instead of skipping when already installed (#3163)
+- capture Tier 2 classifier stderr in cmd_classify_deep (#3144)
+- update stale shellcheck wrapper during setup (#3163)
+- prevent command injection in worker sandbox env generation (GH#3119) (#3123)
+- address PR #3081 review feedback in sandbox-exec-helper.sh (#3129)
+- prevent command injection in sandbox cleanup and add consistent error logging (#3130)
+- remove silent error suppression in content-classifier-helper.sh (#3137)
+- address quality-debt in network-tier-helper.sh from PR #3081 review (#3138)
 
 ## [2.154.3] - 2026-03-07
 
