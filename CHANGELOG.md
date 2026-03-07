@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- setup.sh now updates stale shellcheck wrapper instead of skipping when already installed (#3163)
+
 ## [2.154.3] - 2026-03-07
 
 ### Changed
