@@ -55,10 +55,12 @@ Key files:
 - TTL: 1 hour (or session duration)
 - Pass to worker via environment, not filesystem
 - Requires: GitHub API for token creation, or `gh auth token` scoping
+- **User action:** May require one-time GitHub App installation (org/account level) if using the App-based token creation route. If using `gh auth` delegation with dispatch-level restriction, no user action needed — but isolation is weaker (worker still has the full token, restrictions are advisory not enforced by GitHub). Prefer the zero-config approach; fall back gracefully if GitHub App is not installed rather than breaking existing dispatch.
 
 ### Phase 3: Network tiering
 
-Implement as a transparent logging proxy or iptables/pf rules wrapper:
+Implement as a transparent logging proxy or pf/iptables rules wrapper.
+- **User action:** If implemented via local proxy or firewall rules, `setup.sh` should handle installation automatically. Users with legitimate use of denied domains (e.g., ngrok for local tunnel testing) need a config escape hatch (`~/.config/aidevops/network-allowlist-overrides.yaml` or similar). If proxy is not installed, fall back to logging-only mode (no blocking) rather than breaking workers.
 
 **Tier 1 — Always allowed (no logging overhead):**
 - `github.com`, `*.github.com`, `*.githubusercontent.com`
@@ -100,6 +102,36 @@ Implement as a transparent logging proxy or iptables/pf rules wrapper:
 - Flag anomalous patterns: `npm install` from git URLs not in lockfile, `curl | bash`, `wget` to unknown domains, reads of `~/.ssh/` or credential paths
 - Baseline built from historical transcript analysis (session data already collected)
 
+### Phase 6: Startup security posture check
+
+Extend `aidevops-update-check.sh` (the interactive session greeting script) to scan for pending security actions the user needs to take. The script already has a pattern for appending checks (stale local models at line 239, concurrent sessions at line 250).
+
+Add a `security-posture-helper.sh check` call that reports:
+- Whether worker credential isolation is active (fake HOME configured in dispatch)
+- Whether scoped GitHub tokens are available (GitHub App installed, or fallback mode)
+- Whether network tiering proxy is installed and running
+- Whether prompt-guard-helper.sh patterns are up to date (YAML file present, not stale)
+- Any other pending security setup actions
+
+Output format follows existing pattern — a single line or short block appended to the greeting. Example:
+
+```text
+Security: 2 actions needed — run `aidevops security setup` for details
+```
+
+Or when everything is configured:
+
+```text
+Security: all worker protections active
+```
+
+The `aidevops security setup` command walks the user through any pending actions (GitHub App install, proxy setup, etc.) interactively. This is the only user-facing entry point for security configuration.
+
+Key files:
+- `.agents/scripts/aidevops-update-check.sh:239` — insertion point (after stale models, before session warning)
+- `.agents/scripts/security-posture-helper.sh` — new script for posture checks
+- `setup.sh` — may need security setup integration
+
 ## Acceptance Criteria
 
 - [ ] Workers dispatched by pulse/supervisor run with isolated HOME (no access to real `~/.ssh/`, gopass, `credentials.sh`)
@@ -124,6 +156,13 @@ Implement as a transparent logging proxy or iptables/pf rules wrapper:
 - [ ] Network deny list blocks known exfiltration endpoints (requestbin, ngrok, webhook.site, raw IPs)
 - [ ] All worker network connections to Tier 4 (unknown) domains are logged with timestamps
 - [ ] Content fetched during worker execution is scanned for injection patterns before reaching LLM context
+- [ ] Interactive session startup shows pending security actions (or "all protections active")
+  ```yaml
+  verify:
+    method: bash
+    run: "bash ~/.aidevops/agents/scripts/security-posture-helper.sh check 2>/dev/null; test $? -le 1"
+  ```
+- [ ] `aidevops security setup` command walks user through pending actions interactively
 - [ ] Documentation updated: `prompt-injection-defender.md`, `headless-dispatch.md`, `build.txt`
 - [ ] ShellCheck clean on all new/modified scripts
 - [ ] Existing worker dispatch tests still pass
@@ -149,6 +188,8 @@ Key decisions from the conversation:
 - `.agents/configs/prompt-injection-patterns.yaml` — pattern database
 - `.agents/tools/security/prompt-injection-defender.md` — security docs to update
 - `prompts/build.txt` — framework rules, security section to update
+- `.agents/scripts/aidevops-update-check.sh:239` — startup greeting, insertion point for security posture check
+- `.agents/scripts/security-posture-helper.sh` — new: security posture checker
 
 ## Dependencies
 
@@ -165,6 +206,7 @@ Key decisions from the conversation:
 | Phase 3: Network tiering | ~4h | Proxy/firewall wrapper, config, logging |
 | Phase 4: Runtime content scanning | ~3h | Hook integration, scan-stdin wiring |
 | Phase 5: Command baseline | ~3h | Logging, anomaly patterns, transcript analysis |
+| Phase 6: Startup security check | ~2h | security-posture-helper.sh, update-check integration, `aidevops security setup` |
 | Documentation | ~1h | Update security docs |
 | Testing | ~2h | End-to-end worker dispatch verification |
-| **Total** | **~18h** | Phases are independent, can be parallelised |
+| **Total** | **~20h** | Phases are independent, can be parallelised |
