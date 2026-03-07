@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- fix shellcheck memory explosion by replacing binary with wrapper during setup (GH#2915) (#3125)
+- fix quality-fix.sh using -x -P SCRIPTDIR flags that triggered memory explosion
+- fix parallel-quality.ts running shellcheck on all files at once with no timeout
+- fix shellcheck-wrapper.sh crash with empty args under set -u
+
 ## [2.154.0] - 2026-03-07
 
 ### Added
