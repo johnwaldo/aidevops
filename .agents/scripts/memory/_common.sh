@@ -116,6 +116,10 @@ DROP TABLE learnings;
 ALTER TABLE learnings_new RENAME TO learnings;
 
 -- Create relations table if not exists
+-- Column semantics vary by relation_type:
+--   updates: id = new version,    supersedes_id = old version it replaces
+--   extends: id = extension,      supersedes_id = memory being extended
+--   derives: id = derived memory, supersedes_id = source memory it derives from
 CREATE TABLE IF NOT EXISTS learning_relations (
     id TEXT PRIMARY KEY,
     supersedes_id TEXT,
@@ -471,7 +475,11 @@ CREATE TABLE IF NOT EXISTS learning_access (
 );
 
 -- Relational versioning table (inspired by Supermemory)
--- Tracks how memories relate to each other over time
+-- Tracks how memories relate to each other over time.
+-- Column semantics vary by relation_type:
+--   updates: id = new version,    supersedes_id = old version it replaces
+--   extends: id = extension,      supersedes_id = memory being extended
+--   derives: id = derived memory, supersedes_id = source memory it derives from
 CREATE TABLE IF NOT EXISTS learning_relations (
     id TEXT PRIMARY KEY,
     supersedes_id TEXT,
