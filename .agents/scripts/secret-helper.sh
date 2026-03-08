@@ -490,7 +490,7 @@ _import_credential_file() {
 			fi
 
 			# Import to gopass
-			echo "$val" | gopass insert --force "$gopass_path"
+			printf '%s\n' "$val" | gopass insert --force "$gopass_path"
 			((++imported))
 			print_success "Imported $name${tenant:+ (tenant: $tenant)}"
 		fi

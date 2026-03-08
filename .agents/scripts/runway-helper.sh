@@ -305,7 +305,7 @@ cmd_image() {
 			# Split on last colon; if suffix has no slash, treat as tag
 			local ref_tag="${ref##*:}"
 			local ref_uri="${ref%:*}"
-			if [[ "$ref_tag" != "$ref" ]] && [[ "$ref_tag" != "//"* ]] && [[ "$ref_tag" != *"/"* ]]; then
+			if [[ "$ref_tag" != "$ref" ]] && [[ -n "$ref_tag" ]] && [[ "$ref_tag" =~ ^[a-zA-Z0-9._-]+$ ]]; then
 				ref_json="$(jq -n --argjson arr "$ref_json" --arg u "$ref_uri" --arg t "$ref_tag" \
 					'$arr + [{uri: $u, tag: $t}]')"
 			else

@@ -33,6 +33,7 @@ readonly CODERABBIT_SCRIPT=".agents/scripts/coderabbit-cli.sh"
 readonly CODACY_SCRIPT=".agents/scripts/codacy-cli.sh"
 readonly SONAR_SCRIPT=".agents/scripts/sonarscanner-cli.sh"
 readonly SNYK_SCRIPT=".agents/scripts/snyk-helper.sh"
+readonly QLTY_SCRIPT=".agents/scripts/qlty-cli.sh"
 
 # CLI Names
 readonly CLI_CODERABBIT="coderabbit"
@@ -71,6 +72,10 @@ execute_cli_command() {
         "$CLI_SNYK")
             script="$SNYK_SCRIPT"
             cli_name="Snyk CLI"
+            ;;
+        "qlty")
+            script="$QLTY_SCRIPT"
+            cli_name="Qlty CLI"
             ;;
         *)
             print_error "Unknown CLI: $cli"
@@ -281,7 +286,7 @@ analyze_with_clis() {
         print_info "Running Qlty analysis..."
         # Add organization parameter if provided
         local qlty_args="$args"
-        if [[ -n "$QLTY_ORG" ]]; then
+        if [[ -n "${QLTY_ORG:-}" ]]; then
             qlty_args="$args $QLTY_ORG"
         fi
         if execute_cli_command "qlty" "check" "$qlty_args"; then

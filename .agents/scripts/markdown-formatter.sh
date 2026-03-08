@@ -97,13 +97,22 @@ process_directory() {
 
 	print_header "Processing markdown files in: $dir"
 
+	# Portable hash function (macOS uses shasum, Linux uses sha256sum)
+	hash_file() {
+		if command -v sha256sum >/dev/null 2>&1; then
+			sha256sum "$1" | awk '{print $1}'
+		else
+			shasum -a 256 "$1" | awk '{print $1}'
+		fi
+	}
+
 	# Find all markdown files
 	while IFS= read -r -d '' file; do
 		((++total_files))
 		local before_hash after_hash
-		before_hash=$(sha256sum "$file" | awk '{print $1}')
+		before_hash=$(hash_file "$file")
 		fix_markdown_file "$file"
-		after_hash=$(sha256sum "$file" | awk '{print $1}')
+		after_hash=$(hash_file "$file")
 		if [[ "$before_hash" != "$after_hash" ]]; then
 			((++changed_files))
 		fi

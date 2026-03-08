@@ -454,6 +454,9 @@ cmd_batch_record() {
 	if [[ "$dry_run" == "true" ]]; then
 		print_info "[DRY RUN - no changes were made]"
 	fi
+	if [[ "$failed" -gt 0 ]]; then
+		return 1
+	fi
 	return 0
 }
 

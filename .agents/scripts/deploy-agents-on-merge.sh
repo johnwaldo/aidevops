@@ -139,10 +139,14 @@ pull_latest() {
 		return 0
 	fi
 
-	log_info "Pulling latest main..."
-	if ! git -C "$REPO_DIR" pull --ff-only origin main --quiet 2>/dev/null; then
+	local remote
+	remote=$(git -C "$REPO_DIR" config "branch.main.remote" 2>/dev/null || echo "origin")
+	log_info "Pulling latest main from $remote..."
+	if ! git -C "$REPO_DIR" pull --ff-only "$remote" main --quiet 2>/dev/null; then
 		log_warn "Fast-forward pull failed — trying regular pull"
-		git -C "$REPO_DIR" pull origin main --quiet 2>/dev/null || true
+		if ! git -C "$REPO_DIR" pull "$remote" main --quiet 2>/dev/null; then
+			log_warn "Pull from $remote failed — continuing with local state"
+		fi
 	fi
 
 	return 0
@@ -259,6 +263,10 @@ deploy_all_agents() {
 			return 1
 		fi
 
+		# Remove stale files (except preserved dirs) before overlay
+		find "$TARGET_DIR" -mindepth 1 -maxdepth 1 \
+			! -name 'custom' ! -name 'draft' ! -name 'loop-state' \
+			-exec rm -rf {} + 2>/dev/null || true
 		# Copy all agents
 		(cd "$source_dir" && tar cf - --exclude='loop-state' --exclude='custom' --exclude='draft' .) |
 			(cd "$TARGET_DIR" && tar xf -)

@@ -348,14 +348,20 @@ run_webaim_contrast() {
 	print_info "Foreground: #$fg"
 	print_info "Background: #$bg"
 
-	local response
-	response=$(curl -s \
+	local response http_code
+	response=$(curl -s -w '\n%{http_code}' \
 		--connect-timeout "$DEFAULT_TIMEOUT" \
 		--max-time "$LONG_TIMEOUT" \
 		"${WEBAIMCC_API_URL}?fcolor=${fg}&bcolor=${bg}&api" 2>>"$LOG_FILE") || {
 		print_error "WebAIM contrast API request failed"
 		return 1
 	}
+	http_code=$(printf '%s' "$response" | tail -1)
+	response=$(printf '%s' "$response" | sed '$d')
+	if [[ "$http_code" != "200" ]]; then
+		print_error "WebAIM contrast API returned HTTP $http_code"
+		return 1
+	fi
 
 	local timestamp
 	timestamp=$(date +"%Y%m%d_%H%M%S")

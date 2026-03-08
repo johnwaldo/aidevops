@@ -897,8 +897,10 @@ loop_context_guard() {
 
 	# Create receipt documenting the guard activation
 	if type loop_create_receipt &>/dev/null; then
-		loop_create_receipt "task" "context_guard" \
-			"{\"reason\": \"$reason\", \"iteration\": $iteration, \"max_iterations\": $max_iterations}"
+		local evidence
+		evidence=$(jq -n --arg reason "$reason" --argjson iter "$iteration" --argjson max "$max_iterations" \
+			'{reason: $reason, iteration: $iter, max_iterations: $max}')
+		loop_create_receipt "task" "context_guard" "$evidence"
 	fi
 
 	# Store in memory for pattern tracking
