@@ -134,11 +134,11 @@ spawn_terminal_tab() {
     osascript -e "tell application \"Terminal\" to do script \"cd '$dir' && $cmd\""
 }
 
-# iTerm
+# iTerm2
 spawn_iterm_tab() {
     local dir="${1:-$(pwd)}"
     local cmd="${2:-opencode}"
-    osascript -e "tell application \"iTerm\" to tell current window to create tab with default profile command \"cd '$dir' && $cmd\""
+    osascript -e "tell application \"iTerm2\" to tell current window to create tab with default profile command \"cd '$dir' && $cmd\""
 }
 
 # Usage

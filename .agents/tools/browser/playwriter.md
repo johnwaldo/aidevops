@@ -102,6 +102,8 @@ Add to your MCP client configuration:
 
 **Claude Desktop** (`claude_desktop_config.json`):
 
+> **Note**: If Claude Desktop runs with a restricted PATH, use the full `npx` path (e.g., `/opt/homebrew/bin/npx`).
+
 ```json
 {
   "mcpServers": {
