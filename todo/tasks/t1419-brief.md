@@ -10,7 +10,7 @@
 ## What
 
 A `contribution-watch` system that:
-1. Auto-discovers all issues/PRs authored by or commented on by `marcusquinn` across GitHub (using `gh api search/issues?q=commenter:marcusquinn` and `author:marcusquinn`)
+1. Auto-discovers all issues/PRs authored by or commented on by the authenticated GitHub user (resolved via `gh api user --jq '.login'`) across GitHub (using `gh api search/issues?q=commenter:{login}` and `author:{login}`)
 2. Tracks external repos in `repos.json` with a `"contributed": true` type (distinct from `"pulse": true`)
 3. Detects new comments on watched items since last check
 4. Surfaces items needing attention — only when someone else commented after our last comment (not a "reply guy" — skip items where we have the last word)
@@ -88,11 +88,11 @@ Architecture principle: **the automated system with privileges never processes u
 
 ## Acceptance Criteria
 
-- [ ] `contribution-watch-helper.sh seed` discovers all external issues/PRs by `marcusquinn`
+- [ ] `contribution-watch-helper.sh seed` discovers all external issues/PRs by the authenticated GitHub user (via `gh api user`)
   ```yaml
   verify:
     method: bash
-    run: "contribution-watch-helper.sh seed --dry-run 2>&1 | grep -q 'anomalyco/opencode'"
+    run: "contribution-watch-helper.sh seed --dry-run 2>&1 | grep -c '/' | xargs test 0 -lt"
   ```
 - [ ] `contribution-watch-helper.sh scan` detects new comments since last check
 - [ ] Items where we have the last word are excluded from "needs attention" output
@@ -111,7 +111,7 @@ Architecture principle: **the automated system with privileges never processes u
 - **Why not auto-respond?** Prompt injection risk. External comments are untrusted content. Auto-responding would require the privileged pulse agent to process attacker-controlled text. The safe architecture is: detect (automated) → review (human) → respond (human-supervised).
 - **Why adaptive polling?** Fixed intervals are either too frequent (wasteful for dormant items) or too slow (miss active conversations). The hot/default/dormant tiers match real conversation patterns.
 - **Reply discipline:** Not every comment warrants a response. The scanner flags items for attention; the human decides whether to reply. "Don't be a reply guy" is a design principle, not just social advice.
-- **ArtyMcLabin confusion:** Initial discovery incorrectly assumed ArtyMcLabin was the user's account. The correct GitHub username is `marcusquinn`. The seed command must use the authenticated user's login.
+- **Username resolution:** The seed command resolves the username dynamically from `gh api user --jq '.login'` — never hardcoded. This ensures it works for any aidevops user with `gh` authenticated.
 
 ## Relevant Files
 
