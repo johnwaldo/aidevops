@@ -192,11 +192,11 @@ Add Qwen3-TTS to the aidevops voice bridge:
 # Use Qwen3-TTS as TTS engine
 voice-helper.sh talk whisper-mlx qwen3-tts
 
-# With custom voice
-voice-helper.sh talk whisper-mlx qwen3-tts --voice-ref path/to/reference.wav
+# With custom voice (positional: STT_ENGINE TTS_ENGINE TEXT VOICE_REF)
+voice-helper.sh talk whisper-mlx qwen3-tts "Hello world" path/to/reference.wav
 
-# With persona
-voice-helper.sh talk whisper-mlx qwen3-tts --persona "Friendly British female, professional"
+# With persona (positional: STT_ENGINE TTS_ENGINE TEXT VOICE_REF PERSONA)
+voice-helper.sh talk whisper-mlx qwen3-tts "Hello world" "" "Friendly British female, professional"
 ```
 
 See `voice-helper.sh` for full integration details.

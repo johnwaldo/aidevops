@@ -231,7 +231,8 @@ def generate_thread_index(threads, output_file):
         subject = root.get('subject', 'No Subject')
         thread_length = root.get('thread_length', len(emails))
         
-        lines.append(f'## Thread: {subject} ({thread_length} messages)')
+        msg_word = 'message' if thread_length == 1 else 'messages'
+        lines.append(f'## Thread: {subject} ({thread_length} {msg_word})')
         lines.append(f'Thread ID: `{thread_id}`')
         lines.append('')
         

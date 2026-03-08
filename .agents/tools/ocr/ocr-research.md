@@ -67,7 +67,7 @@ There are four distinct approaches to OCR-based document extraction, each with d
 | Gemini 2.5 Flash | Google | ~$0.15 input | 1M tokens | Best cost/quality for documents |
 | Gemini 2.5 Pro | Google | ~$1.25 input | 1M tokens | Highest accuracy |
 | GPT-4o | OpenAI | ~$2.50 input | 128k | Strong general vision |
-| Claude Sonnet 4 | Anthropic | ~$3.00 input | 200k | Good structured extraction |
+| Claude 4 Sonnet | Anthropic | ~$3.00 input | 200k | Good structured extraction |
 | GLM-OCR | Local (Ollama) | Free | ~8k | Purpose-built OCR, no structured output |
 | MiniCPM-o | Local (Ollama) | Free | ~8k | Lightweight vision, 3GB VRAM |
 

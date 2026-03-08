@@ -329,8 +329,8 @@ def normalise_email_sections(body):
             in_forwarded = False
             result.append('')
 
-        # Detect signature block: line is exactly "-- " or "--"
-        if stripped == '--' or stripped == '-- ':
+        # Detect signature block: canonical delimiter is "-- " (RFC 3676) or bare "--"
+        if line.rstrip('\n\r') == '-- ' or stripped == '--':
             if in_quote_block:
                 result.append('')
                 in_quote_block = False
@@ -356,7 +356,7 @@ def normalise_email_sections(body):
                 # Check if previous line has "On ... wrote:" pattern
                 prev_wrote = False
                 if i > 0:
-                    prev = lines[i - 1].strip()
+                    prev = lines[i - 1].strip().lstrip('>').strip()
                     if re.match(r'^On\s+.+wrote\s*:\s*$', prev):
                         prev_wrote = True
                 if not prev_wrote:

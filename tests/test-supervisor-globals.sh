@@ -69,12 +69,14 @@ required_globals=(
 	"VALID_TRANSITIONS"
 )
 
-all_files="$SUPERVISOR $(echo "$REPO_DIR/.agents/scripts/supervisor/"*.sh)"
+all_files=("$SUPERVISOR")
+while IFS= read -r -d '' f; do
+	all_files+=("$f")
+done < <(find "$REPO_DIR/.agents/scripts/supervisor/" -maxdepth 1 -name "*.sh" -print0 2>/dev/null)
 for var in "${required_globals[@]}"; do
 	# Check if the variable is assigned (not just referenced) in any file
 	# Handles: VAR=, readonly VAR=, readonly -a VAR=(
-	# shellcheck disable=SC2086
-	if grep -qE "^[[:space:]]*(readonly( -a)? )?${var}=" $all_files 2>/dev/null; then
+	if grep -qE "^[[:space:]]*(readonly( -a)? )?${var}=" "${all_files[@]}" 2>/dev/null; then
 		pass "$var is defined"
 	else
 		fail "$var is NOT defined in any supervisor file"
@@ -91,8 +93,7 @@ for var in SUPERVISOR_DIR SUPERVISOR_DB SUPERVISOR_LOG PULSE_LOCK_DIR PULSE_LOCK
 	# Check if used in modules
 	if grep -rq "\$${var}\b\|\${${var}}" "$module_dir/" 2>/dev/null; then
 		# Check if defined in monolith or _common.sh
-		# shellcheck disable=SC2086
-		if ! grep -q "^[[:space:]]*\(readonly \)\{0,1\}${var}=" $all_files 2>/dev/null; then
+		if ! grep -qE "^[[:space:]]*(readonly( -a)? )?${var}=" "${all_files[@]}" 2>/dev/null; then
 			fail "$var used in modules but not defined anywhere"
 			missing_count=$((missing_count + 1))
 		fi

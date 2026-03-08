@@ -344,7 +344,7 @@ enhancor-helper.sh enhance --img-url URL \
 
 - **Website**: https://www.enhancor.ai/
 - **API Docs**: https://github.com/rohan-kulkarni-25/enhancor-api-docs
-- **Helper Script**: `.agents/scripts/enhancor-helper.sh:1`
+- **Helper Script**: `.agents/scripts/enhancor-helper.sh`
 - **Integration**: `content/production/image.md` (post-processing step)
 
 ## Examples

@@ -483,7 +483,7 @@ ${ocr_text}"
                 pipeline_type="expense_receipt"
             fi
             print_info "Running validation pipeline..."
-            if python3 "$PIPELINE_PY" validate "$raw_output_file" --type "$pipeline_type" > "$output_file" 2>/dev/null; then
+            if python3 "$PIPELINE_PY" validate "$raw_output_file" --type "$pipeline_type" > "$output_file"; then
                 print_info "Validation complete"
             else
                 # Validation ran but flagged issues (exit code 2) - output is still valid

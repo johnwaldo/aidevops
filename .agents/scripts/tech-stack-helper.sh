@@ -638,6 +638,12 @@ bq_reverse_lookup() {
 		return 0
 	fi
 
+	# Validate limit is numeric to prevent SQL injection
+	if [[ ! "$limit" =~ ^[0-9]+$ ]]; then
+		print_error "Invalid limit: $limit (must be a positive integer)"
+		return 1
+	fi
+
 	print_info "Querying HTTP Archive via BigQuery..."
 	print_info "Technology: $technology | Date: $crawl_date | Client: $client | Limit: $limit"
 
@@ -664,9 +670,10 @@ bq_reverse_lookup() {
 		local IFS=','
 		for kw in $keywords; do
 			kw=$(echo "$kw" | xargs)
-			# Sanitize: strip single quotes and backslashes to prevent SQL injection
+			# Sanitize: strip SQL-dangerous characters to prevent injection
 			kw="${kw//\'/}"
 			kw="${kw//\\/}"
+			kw="${kw//;/}"
 			if [[ -z "$kw" ]]; then
 				continue
 			fi

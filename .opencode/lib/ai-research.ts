@@ -288,6 +288,8 @@ async function buildSystemPrompt(
 
 const AUTH_FILE = `${process.env.HOME || "~"}/.local/share/opencode/auth.json`
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+const OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 
 interface OAuthAuth {
   type: "oauth"
@@ -324,7 +326,7 @@ async function readAuthFile(): Promise<AuthEntry | null> {
  */
 async function refreshOAuthToken(auth: OAuthAuth): Promise<string> {
   const response = await fetch(
-    "https://console.anthropic.com/v1/oauth/token",
+    OAUTH_TOKEN_URL,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -430,7 +432,7 @@ async function callAnthropic(
     "anthropic-version": "2023-06-01",
   }
 
-  let url = "https://api.anthropic.com/v1/messages"
+  let url = ANTHROPIC_API_URL
 
   if (auth.method === "oauth") {
     headers["authorization"] = `Bearer ${auth.token}`
