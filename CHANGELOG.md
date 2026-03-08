@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.159.0] - 2026-03-08
+
 ### Added
 
-- session time tracking in health dashboard — per-repo and cross-repo interactive vs worker hours from OpenCode SQLite DB (#3920)
+- add session time tracking to health dashboard (#3920)
+
+### Changed
+
+- Documentation: add changelog entry for session time tracking
 
 ## [2.156.0] - 2026-03-08
 
