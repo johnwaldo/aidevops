@@ -115,7 +115,8 @@ wappalyzer_detect() {
 	local global_modules
 	global_modules="$(npm root -g)"
 
-	if timeout "$WAPPALYZER_TIMEOUT" NODE_PATH="$global_modules" node "$wrapper_script" "$url" \
+	if env NODE_PATH="$global_modules" \
+		timeout "$WAPPALYZER_TIMEOUT" node "$wrapper_script" "$url" \
 		>"$temp_output" 2>&1; then
 
 		if [[ -n "$output_file" ]]; then
