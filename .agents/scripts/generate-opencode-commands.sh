@@ -14,11 +14,13 @@
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
+# shellcheck source=shared-constants.sh
 source "${SCRIPT_DIR}/shared-constants.sh"
 
 set -euo pipefail
 
-AIDEVOPS_AGENTS_DIR="${AIDEVOPS_AGENTS_DIR:-${AIDEVOPS_HOME:-$HOME/.aidevops}/agents}"
+AIDEVOPS_BASE="${AIDEVOPS_HOME:-$HOME/.aidevops}"
+AIDEVOPS_AGENTS_DIR="${AIDEVOPS_AGENTS_DIR:-${AIDEVOPS_BASE}/agents}"
 OPENCODE_COMMAND_DIR="$HOME/.config/opencode/command"
 
 echo -e "${BLUE}Generating OpenCode commands...${NC}"
@@ -1519,7 +1521,7 @@ echo -e "  ${GREEN}✓${NC} Created /recall command"
 # Each file should have frontmatter with description and agent
 # This prevents needing to manually add new commands to this script
 
-COMMANDS_DIR="${AIDEVOPS_HOME:-$HOME/.aidevops}/agents/scripts/commands"
+COMMANDS_DIR="${AIDEVOPS_AGENTS_DIR}/scripts/commands"
 
 if [[ -d "$COMMANDS_DIR" ]]; then
 	for cmd_file in "$COMMANDS_DIR"/*.md; do
