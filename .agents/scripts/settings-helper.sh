@@ -218,9 +218,15 @@ cmd_set() {
 	local jq_path
 	jq_path=$(_jq_path "$key")
 
-	# Validate the key exists in defaults
+	# Validate key format: only alphanumeric, underscores, and dots allowed
+	if [[ ! "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_.]*$ ]]; then
+		print_error "Invalid key format: $key (only alphanumeric, underscores, dots)"
+		return 1
+	fi
+
+	# Validate the key exists in defaults (use getpath with key as data, not code)
 	local default_check
-	default_check=$(_generate_defaults | jq -r "$jq_path // \"__MISSING__\"" 2>/dev/null || echo "__MISSING__")
+	default_check=$(_generate_defaults | jq -r --arg k "$key" 'getpath($k | split(".")) // "__MISSING__"' 2>/dev/null || echo "__MISSING__")
 	if [[ "$default_check" == "__MISSING__" ]]; then
 		print_error "Unknown setting: $key"
 		print_info "Run 'settings-helper.sh list' to see available settings"
@@ -229,7 +235,7 @@ cmd_set() {
 
 	# Determine value type from defaults and coerce accordingly
 	local default_type
-	default_type=$(_generate_defaults | jq -r "$jq_path | type" 2>/dev/null || echo "string")
+	default_type=$(_generate_defaults | jq -r --arg k "$key" 'getpath($k | split(".")) | type' 2>/dev/null || echo "string")
 
 	local tmp_file
 	tmp_file=$(mktemp)
@@ -246,28 +252,28 @@ cmd_set() {
 			return 1
 			;;
 		esac
-		jq --argjson v "$value" "$jq_path = \$v" "$SETTINGS_FILE" >"$tmp_file"
+		jq --arg k "$key" --argjson v "$value" 'setpath($k | split("."); $v)' "$SETTINGS_FILE" >"$tmp_file"
 		;;
 	number)
 		if ! jq -e 'tonumber' <<<"$value" >/dev/null 2>&1; then
 			print_error "Invalid number value: $value"
 			return 1
 		fi
-		jq --argjson v "$value" "$jq_path = \$v" "$SETTINGS_FILE" >"$tmp_file"
+		jq --arg k "$key" --argjson v "$value" 'setpath($k | split("."); $v)' "$SETTINGS_FILE" >"$tmp_file"
 		;;
 	array)
 		# Accept JSON array or comma-separated values
 		if [[ "$value" == "["* ]]; then
-			jq --argjson v "$value" "$jq_path = \$v" "$SETTINGS_FILE" >"$tmp_file"
+			jq --arg k "$key" --argjson v "$value" 'setpath($k | split("."); $v)' "$SETTINGS_FILE" >"$tmp_file"
 		else
 			# Convert comma-separated to JSON array
 			local json_array
 			json_array=$(echo "$value" | tr ',' '\n' | jq -R . | jq -s .)
-			jq --argjson v "$json_array" "$jq_path = \$v" "$SETTINGS_FILE" >"$tmp_file"
+			jq --arg k "$key" --argjson v "$json_array" 'setpath($k | split("."); $v)' "$SETTINGS_FILE" >"$tmp_file"
 		fi
 		;;
 	*)
-		jq --arg v "$value" "$jq_path = \$v" "$SETTINGS_FILE" >"$tmp_file"
+		jq --arg k "$key" --arg v "$value" 'setpath($k | split("."); $v)' "$SETTINGS_FILE" >"$tmp_file"
 		;;
 	esac
 

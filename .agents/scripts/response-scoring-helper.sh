@@ -359,7 +359,13 @@ readonly WEIGHTED_AVG_SQL="COALESCE((
                            ELSE 0.25
                        END), 0)
                    , 2)
-                   FROM scores s WHERE s.response_id = r.response_id
+                   FROM (
+                       SELECT s1.* FROM scores s1
+                       INNER JOIN (
+                           SELECT response_id, criterion, MAX(rowid) as max_rowid
+                           FROM scores GROUP BY response_id, criterion
+                       ) s2 ON s1.rowid = s2.max_rowid
+                   ) s WHERE s.response_id = r.response_id
                ), 0)"
 
 # Sync a scored response to the pattern tracker as a SUCCESS_PATTERN entry.

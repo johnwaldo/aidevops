@@ -3,6 +3,17 @@ import { existsSync } from "fs";
 import { join } from "path";
 
 /**
+ * Escape a string for safe interpolation into a shell command.
+ * Wraps in single quotes and escapes internal single quotes.
+ * @param {string} s - The string to escape
+ * @returns {string} Shell-safe quoted string
+ */
+function shellEscape(s) {
+  if (typeof s !== "string") return "''";
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
  * Create a memory tool (recall or store) using a shared factory pattern.
  * Deduplicates the near-identical memory_recall and memory_store definitions.
  *
@@ -41,9 +52,10 @@ function createAidevopsTool(run) {
     description:
       'Run aidevops CLI commands (status, repos, features, secret, etc.). Pass command as string e.g. "status", "repos", "features"',
     async execute(args) {
-      const cmd = `aidevops ${args.command || args}`;
+      const subcmd = String(args.command || args);
+      const cmd = `aidevops ${shellEscape(subcmd)}`;
       const result = run(cmd, 15000);
-      return result || `Command completed: ${cmd}`;
+      return result || `Command completed: aidevops ${subcmd}`;
     },
   };
 }
@@ -266,7 +278,7 @@ export function createTools(scriptsDir, run, pipelines) {
       description:
         'Recall memories from the aidevops cross-session memory system. Args: query (string), limit (string, default "5")',
       buildArgs: (args, helper) => ({
-        cmd: `bash "${helper}" recall "${args.query}" --limit ${args.limit || "5"}`,
+        cmd: `bash "${helper}" recall ${shellEscape(args.query)} --limit ${shellEscape(String(args.limit || "5"))}`,
         timeout: 10000,
       }),
     }),
@@ -283,7 +295,7 @@ export function createTools(scriptsDir, run, pipelines) {
           return { cmd: `echo "Error: content is required to store a memory" >&2; exit 1`, timeout: 1000 };
         }
         return {
-          cmd: `bash "${helper}" store "${content}" --confidence ${args.confidence || "medium"}`,
+          cmd: `bash "${helper}" store ${shellEscape(content)} --confidence ${shellEscape(String(args.confidence || "medium"))}`,
           timeout: 10000,
         };
       },

@@ -133,10 +133,9 @@ cmd_recall() {
 		auto_filter="AND COALESCE(a.auto_captured, 0) = 0"
 	fi
 
-	# Build type filter early so --recent mode can use it (GH#3916 — CodeRabbit)
+	# Build type filter clause (validated before --recent and regular paths)
 	local type_where=""
 	if [[ -n "$type_filter" ]]; then
-		# Validate type to prevent SQL injection (same validation as the non-recent path)
 		local type_pattern=" $type_filter "
 		if [[ ! " $VALID_TYPES " =~ $type_pattern ]]; then
 			log_error "Invalid type: $type_filter"
@@ -217,18 +216,8 @@ cmd_recall() {
 	set +f # Re-enable globbing
 	escaped_query="$tokenised_query"
 
-	# Build filters with validation
-	local extra_filters=""
-	if [[ -n "$type_filter" ]]; then
-		# Validate type to prevent SQL injection
-		local type_pattern=" $type_filter "
-		if [[ ! " $VALID_TYPES " =~ $type_pattern ]]; then
-			log_error "Invalid type: $type_filter"
-			log_error "Valid types: $VALID_TYPES"
-			return 1
-		fi
-		extra_filters="$extra_filters AND type = '$type_filter'"
-	fi
+	# Build filters with validation (type_where already validated above)
+	local extra_filters="$type_where"
 	if [[ -n "$max_age_days" ]]; then
 		# Validate max_age_days is a positive integer
 		if ! [[ "$max_age_days" =~ ^[0-9]+$ ]]; then
