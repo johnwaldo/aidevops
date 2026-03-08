@@ -135,6 +135,8 @@ jobs:
   sonarcloud:
     name: SonarCloud Analysis
     runs-on: ubuntu-latest
+    # Skip on fork PRs — SONAR_TOKEN secret is not available to forks
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
 
     steps:
     - name: Checkout code
@@ -142,7 +144,20 @@ jobs:
       with:
         fetch-depth: 0  # Shallow clones should be disabled for better analysis
 
+    - name: Check SONAR_TOKEN availability
+      id: check-token
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      run: |
+        if [[ -z "$SONAR_TOKEN" ]]; then
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::SONAR_TOKEN not configured — skipping SonarCloud scan"
+        else
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: SonarCloud Scan
+      if: steps.check-token.outputs.available == 'true'
       uses: SonarSource/sonarqube-scan-action@40f5b61913e891f9d316696628698051136015be
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

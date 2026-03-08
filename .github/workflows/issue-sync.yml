@@ -473,6 +473,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
+      contents: read
+      issues: write
       pull-requests: write
 
     steps:
@@ -518,8 +520,13 @@ jobs:
           if [[ -n "$LABEL" ]]; then
             # Create label if it doesn't exist (idempotent)
             gh label create "$LABEL" --repo "$REPO" --force 2>/dev/null || true
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$LABEL"
-            echo "Applied label '$LABEL' to PR #$PR_NUMBER (prefix: $PREFIX)"
+            # Note: gh pr edit may fail on fork PRs where GITHUB_TOKEN lacks write
+            # access. This is expected — fork PRs get read-only tokens for security.
+            if ! gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$LABEL" 2>/dev/null; then
+              echo "::warning::Could not apply label '$LABEL' — likely a fork PR with read-only token"
+            else
+              echo "Applied label '$LABEL' to PR #$PR_NUMBER (prefix: $PREFIX)"
+            fi
           fi
 
   check-issue-link:
@@ -531,6 +538,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
+      contents: read
+      issues: read
       pull-requests: write
 
     steps:
