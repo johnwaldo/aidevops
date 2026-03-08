@@ -473,10 +473,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
+      contents: read
+      issues: write
       pull-requests: write
 
     steps:
       - name: Apply label from PR title prefix
+        # Fork PRs get read-only GITHUB_TOKEN — labelling will fail gracefully
+        continue-on-error: true
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -531,6 +535,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
+      contents: read
+      issues: read
       pull-requests: write
 
     steps:
