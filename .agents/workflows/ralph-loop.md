@@ -276,6 +276,8 @@ When complete:
 feat: add user authentication
 fix: resolve memory leak in connection pool
 docs: update API documentation
+perf: optimize database query for user lookup
+refactor: extract auth logic into shared module
 
 # Excluded from changelog
 chore: update dependencies
@@ -579,16 +581,16 @@ For end-to-end automation from task conception to deployment, use the Full Devel
 
 ```bash
 # Start full loop
-~/.aidevops/agents/scripts/full-loop-helper.sh start "Implement feature X with tests"
+"${AIDEVOPS_HOME:-$HOME/.aidevops}"/agents/scripts/full-loop-helper.sh start "Implement feature X with tests"
 
 # Check status
-~/.aidevops/agents/scripts/full-loop-helper.sh status
+"${AIDEVOPS_HOME:-$HOME/.aidevops}"/agents/scripts/full-loop-helper.sh status
 
 # Resume after manual intervention
-~/.aidevops/agents/scripts/full-loop-helper.sh resume
+"${AIDEVOPS_HOME:-$HOME/.aidevops}"/agents/scripts/full-loop-helper.sh resume
 
 # Cancel if needed
-~/.aidevops/agents/scripts/full-loop-helper.sh cancel
+"${AIDEVOPS_HOME:-$HOME/.aidevops}"/agents/scripts/full-loop-helper.sh cancel
 ```
 
 ### Loop Phases
@@ -666,6 +668,7 @@ This is a gate between task development and preflight, not a suggestion. See `sc
 - `feat:` → Added section
 - `fix:` → Fixed section
 - `docs:` → Changed section
+- `perf:`, `refactor:` → Changed section
 - `chore:` → Excluded from changelog
 
 See `workflows/changelog.md` for details.

@@ -243,7 +243,7 @@ shellcheck -f gcc .agents/scripts/problem-script.sh
 
 # Auto-fix some issues (with shellcheck-fix if available)
 # Or manually fix based on SC codes
-```text
+```
 
 ### Secretlint False Positives
 
@@ -286,7 +286,7 @@ Preflight checks report ALL issues, including pre-existing ones. When the loop h
 git diff main --name-only
 
 # Check issues only in your changed files
-shellcheck $(git diff main --name-only -- '*.sh')
+git diff main --name-only -z -- '*.sh' | xargs -0 shellcheck
 ```
 
 ### When to Proceed Despite Issues

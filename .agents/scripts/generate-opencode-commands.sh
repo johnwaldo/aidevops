@@ -1518,7 +1518,7 @@ echo -e "  ${GREEN}✓${NC} Created /recall command"
 # Each file should have frontmatter with description and agent
 # This prevents needing to manually add new commands to this script
 
-COMMANDS_DIR="$HOME/.aidevops/agents/scripts/commands"
+COMMANDS_DIR="${AIDEVOPS_HOME:-$HOME/.aidevops}/agents/scripts/commands"
 
 if [[ -d "$COMMANDS_DIR" ]]; then
 	for cmd_file in "$COMMANDS_DIR"/*.md; do

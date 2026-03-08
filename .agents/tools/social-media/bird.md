@@ -20,7 +20,7 @@ tools:
 
 - **Purpose**: Fast X/Twitter CLI for tweeting, replying, and reading
 - **Install**: `npm i -g @steipete/bird` or `brew install steipete/tap/bird`
-- **Repo**: https://github.com/steipete/bird (434+ stars)
+- **Repo**: https://github.com/steipete/bird
 - **Auth**: Uses browser cookies (Safari, Chrome, Firefox)
 
 **Quick Commands**:
@@ -68,7 +68,7 @@ bird mentions -n 5
 npm i -g @steipete/bird
 
 # One-shot (no install)
-bunx @steipete/bird whoami
+npx @steipete/bird whoami
 ```
 
 ### Homebrew (macOS Apple Silicon)
@@ -388,9 +388,11 @@ bird bookmarks --all --json > bookmarks.json
 
 # Thread a long post
 bird tweet "1/3 Here's a thread about..."
-# Get the tweet ID from output, then:
-bird reply <tweet_id> "2/3 Continuing the thread..."
-bird reply <tweet_id_2> "3/3 Final thoughts..."
+# Get the tweet ID from output, then reply to each previous tweet:
+TWEET_1_ID="<id_from_first_tweet>"
+bird reply "$TWEET_1_ID" "2/3 Continuing the thread..."
+TWEET_2_ID="<id_from_second_tweet>"
+bird reply "$TWEET_2_ID" "3/3 Final thoughts..."
 ```
 
 ### Combining with summarize
