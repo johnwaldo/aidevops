@@ -363,6 +363,12 @@ run_webaim_contrast() {
 		return 1
 	fi
 
+	# Validate response is valid JSON before passing to jq
+	if ! printf '%s' "$response" | jq empty >/dev/null 2>&1; then
+		print_error "WebAIM contrast API returned non-JSON data"
+		return 1
+	fi
+
 	local timestamp
 	timestamp=$(date +"%Y%m%d_%H%M%S")
 	local report_file="${AUDIT_REPORTS_DIR}/webaim_contrast_${timestamp}.json"
