@@ -372,11 +372,6 @@ cmd_create() {
 				log_token "ERROR" "TTL must be a positive integer: ${ttl}"
 				return 1
 			fi
-			# Validate TTL is numeric to prevent arithmetic injection
-			if ! [[ "$ttl" =~ ^[0-9]+$ ]]; then
-				log_token "ERROR" "TTL must be a positive integer: ${ttl}"
-				return 1
-			fi
 			if ((ttl > MAX_TTL)); then
 				log_token "WARN" "TTL capped at ${MAX_TTL}s (requested ${ttl}s)"
 				ttl=$MAX_TTL
@@ -527,12 +522,19 @@ cmd_revoke() {
 	fi
 
 	# Validate token file path is within TOKEN_DIR to prevent path traversal
-	local real_path
-	real_path=$(realpath "$token_file" 2>/dev/null) || {
+	# Resolve parent directory instead of the file itself — the token file may
+	# already be deleted (only .meta remains), and realpath fails on missing files.
+	local token_dir_real token_parent_real token_base
+	token_dir_real=$(realpath "$TOKEN_DIR" 2>/dev/null) || {
+		log_token "ERROR" "Cannot resolve token directory: ${TOKEN_DIR}"
+		return 1
+	}
+	token_parent_real=$(realpath "$(dirname "$token_file")" 2>/dev/null) || {
 		log_token "ERROR" "Cannot resolve token file path: ${token_file}"
 		return 1
 	}
-	if [[ "$real_path" != "${TOKEN_DIR}/"* ]]; then
+	token_base=$(basename "$token_file")
+	if [[ "$token_parent_real" != "$token_dir_real" || "$token_base" != *.token ]]; then
 		log_token "ERROR" "Token file must be within ${TOKEN_DIR}: ${token_file}"
 		return 1
 	fi

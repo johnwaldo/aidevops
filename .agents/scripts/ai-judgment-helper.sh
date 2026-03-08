@@ -908,7 +908,7 @@ ${user_message}"
 					passed=$(awk -v s="$score" -v t="$threshold" 'BEGIN { print (s >= t) ? "true" : "false" }')
 
 					local result_json
-					result_json=$(jq -n --arg type "$eval_type" --argjson score "${score:-null}" --argjson passed "$passed" --arg details "$details" '{evaluator: $type, score: $score, passed: $passed, details: $details}')
+					result_json=$(jq -cn --arg type "$eval_type" --argjson score "${score:-null}" --argjson passed "$passed" --arg details "$details" '{evaluator: $type, score: $score, passed: $passed, details: $details}')
 
 					# Cache the result
 					cache_judgment "$cache_key" "$result_json" "" "haiku"
@@ -920,8 +920,8 @@ ${user_message}"
 	fi
 
 	# Deterministic fallback: API unavailable
-		local fallback_json
-		fallback_json=$(jq -n --arg type "$eval_type" '{evaluator: $type, score: null, passed: null, details: "API unavailable, using fallback"}')
+	local fallback_json
+	fallback_json=$(jq -cn --arg type "$eval_type" '{evaluator: $type, score: null, passed: null, details: "API unavailable, using fallback"}')
 	echo "$fallback_json"
 	return 0
 }
