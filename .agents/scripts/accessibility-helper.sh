@@ -447,9 +447,8 @@ parse_lighthouse_a11y() {
 	print_header_line "Accessibility Score"
 
 	if [[ "$score" != "N/A" ]]; then
-		local pct
-		pct=$(echo "$score * 100" | bc -l 2>/dev/null || echo "0")
-		local int_pct="${pct%.*}"
+		local int_pct
+		int_pct=$(awk -v s="$score" 'BEGIN { printf "%.0f", s * 100 }' 2>/dev/null || echo "0")
 
 		if [[ "$int_pct" -ge 90 ]]; then
 			echo -e "  Score: ${GREEN}${int_pct}%${NC} (Good)"
@@ -549,12 +548,13 @@ run_pa11y_audit() {
 		fi
 	fi
 
-	parse_pa11y_report "$report_file"
+	parse_pa11y_report "$report_file" "$standard"
 	return 0
 }
 
 parse_pa11y_report() {
 	local report_file="$1"
+	local standard="${2:-$A11Y_WCAG_LEVEL}"
 
 	check_jq || return 1
 
@@ -571,7 +571,7 @@ parse_pa11y_report() {
 	notices=$(jq '[.[] | select(.type == "notice")] | length' "$report_file" 2>/dev/null || echo "0")
 
 	echo ""
-	print_header_line "pa11y Results ($A11Y_WCAG_LEVEL)"
+	print_header_line "pa11y Results ($standard)"
 	echo "  Total issues: $total"
 
 	if [[ "$errors" -gt 0 ]]; then
@@ -629,8 +629,14 @@ check_email_a11y() {
 		return 0
 	}
 
-	# grep -c exits non-zero when count is 0; this wrapper returns "0" cleanly
-	_grep_count() { grep -ciE "$@" 2>/dev/null || true; }
+	# Count occurrences (not lines) — grep -o handles minified HTML correctly
+	_grep_count() {
+		local pattern="$1"
+		local file_path="$2"
+		local count
+		count=$({ grep -oiE "$pattern" "$file_path" 2>/dev/null || true; } | wc -l | tr -d ' ')
+		printf '%s\n' "${count:-0}"
+	}
 
 	_append "Email Accessibility Report"
 	_append "File: $file"
@@ -910,8 +916,9 @@ bulk_audit() {
 
 	local count=0
 	local failures=0
+	local url=""
 
-	while IFS= read -r url; do
+	while IFS= read -r url || [[ -n "${url:-}" ]]; do
 		[[ -z "$url" || "$url" =~ ^#.*$ ]] && continue
 
 		count=$((count + 1))

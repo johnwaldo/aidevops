@@ -225,6 +225,8 @@ run_wave_audit() {
 
 	local response
 	response=$(curl -s -w "\n%{http_code}" \
+		--connect-timeout "$DEFAULT_TIMEOUT" \
+		--max-time "$LONG_TIMEOUT" \
 		"${WAVE_API_URL}?key=${WAVE_API_KEY}&url=${encoded_url}&reporttype=${report_type}" \
 		2>>"$LOG_FILE") || {
 		print_error "WAVE API request failed"
@@ -347,7 +349,10 @@ run_webaim_contrast() {
 	print_info "Background: #$bg"
 
 	local response
-	response=$(curl -s "${WEBAIMCC_API_URL}?fcolor=${fg}&bcolor=${bg}&api" 2>>"$LOG_FILE") || {
+	response=$(curl -s \
+		--connect-timeout "$DEFAULT_TIMEOUT" \
+		--max-time "$DEFAULT_TIMEOUT" \
+		"${WEBAIMCC_API_URL}?fcolor=${fg}&bcolor=${bg}&api" 2>>"$LOG_FILE") || {
 		print_error "WebAIM contrast API request failed"
 		return 1
 	}

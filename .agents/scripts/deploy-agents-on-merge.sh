@@ -201,7 +201,8 @@ deploy_scripts_only() {
 	if command -v rsync &>/dev/null; then
 		rsync -a --delete "$source_dir/" "$target_scripts_dir/"
 	else
-		# Fallback: tar-based copy
+		# Fallback: tar-based copy (clean first to match rsync --delete behaviour)
+		find "$target_scripts_dir" -mindepth 1 -exec rm -rf -- {} +
 		(cd "$source_dir" && tar cf - .) | (cd "$target_scripts_dir" && tar xf -)
 	fi
 
@@ -262,10 +263,11 @@ deploy_all_agents() {
 		(cd "$source_dir" && tar cf - --exclude='loop-state' --exclude='custom' --exclude='draft' .) |
 			(cd "$TARGET_DIR" && tar xf -)
 
-		# Restore preserved directories
+		# Restore preserved directories (copy contents, not the dir itself)
 		for pdir in custom draft; do
 			if [[ -d "$tmp_preserve/$pdir" ]]; then
-				cp -R "$tmp_preserve/$pdir" "$TARGET_DIR/$pdir"
+				mkdir -p "$TARGET_DIR/$pdir"
+				cp -R "$tmp_preserve/$pdir/." "$TARGET_DIR/$pdir/"
 			fi
 		done
 		rm -rf "$tmp_preserve"
@@ -330,14 +332,19 @@ deploy_changed_files() {
 			# Create target directory if needed
 			local target_parent
 			target_parent=$(dirname "$target_file")
-			mkdir -p "$target_parent"
-
-			# Copy file
-			cp "$source_file" "$target_file"
+			if ! mkdir -p "$target_parent" || ! cp "$source_file" "$target_file"; then
+				failed=$((failed + 1))
+				log_warn "Failed to deploy: $rel_path"
+				continue
+			fi
 
 			# Set executable if it's a script
 			if [[ "$target_file" == *.sh ]]; then
-				chmod +x "$target_file"
+				if ! chmod +x "$target_file"; then
+					failed=$((failed + 1))
+					log_warn "Failed to chmod: $rel_path"
+					continue
+				fi
 			fi
 
 			deployed=$((deployed + 1))

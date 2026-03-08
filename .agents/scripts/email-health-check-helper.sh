@@ -761,7 +761,7 @@ check_accessibility() {
 
 	# Check for small font sizes
 	local small_fonts
-	small_fonts=$(echo "$content" | grep -Eio 'font-size:[[:space:]]*[0-9]+px' | sed 's/[^0-9]//g' | while read -r size; do
+	small_fonts=$(echo "$content" | { grep -Eio 'font-size:[[:space:]]*[0-9]+px' || true; } | sed 's/[^0-9]//g' | while read -r size; do
 		if [[ "$size" -lt 14 ]]; then
 			echo "$size"
 		fi

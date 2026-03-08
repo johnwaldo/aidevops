@@ -11,6 +11,14 @@ RUNWAY_API_VERSION="2024-11-06"
 RUNWAY_CURL_CONNECT_TIMEOUT="${RUNWAY_CURL_CONNECT_TIMEOUT:-10}"
 RUNWAY_CURL_MAX_TIME="${RUNWAY_CURL_MAX_TIME:-60}"
 
+# --- Argument validation helper ---
+_require_arg() {
+	if [[ $# -lt 2 ]] || [[ -z "${2:-}" ]]; then
+		echo "ERROR: $1 requires a value" >&2
+		return 1
+	fi
+}
+
 # --- Load credentials ---
 load_credentials() {
 	if [[ -z "${RUNWAYML_API_SECRET:-}" ]]; then
@@ -54,7 +62,10 @@ runway_api() {
 	fi
 
 	local response
-	response="$(curl "${curl_args[@]}" "${RUNWAY_API_BASE}${endpoint}")"
+	if ! response="$(curl -S "${curl_args[@]}" "${RUNWAY_API_BASE}${endpoint}")"; then
+		echo "ERROR: request to ${endpoint} failed" >&2
+		return 1
+	fi
 
 	local http_code
 	http_code="$(echo "$response" | tail -1)"
@@ -63,7 +74,11 @@ runway_api() {
 
 	if [[ "$http_code" -ge 400 ]]; then
 		echo "ERROR: HTTP $http_code" >&2
-		echo "$body" | jq . 2>/dev/null || echo "$body" >&2
+		if jq . <<<"$body" >&2 2>/dev/null; then
+			:
+		else
+			echo "$body" >&2
+		fi
 		return 1
 	fi
 
@@ -132,35 +147,51 @@ cmd_video() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--image | -i)
+			_require_arg "$1" "${2:-}" || return 1
 			image="$2"
 			shift 2
 			;;
 		--video | -v)
+			_require_arg "$1" "${2:-}" || return 1
 			video_uri="$2"
 			shift 2
 			;;
 		--prompt | -p)
+			_require_arg "$1" "${2:-}" || return 1
 			prompt="$2"
 			shift 2
 			;;
 		--model | -m)
+			_require_arg "$1" "${2:-}" || return 1
 			model="$2"
 			shift 2
 			;;
 		--ratio | -r)
+			_require_arg "$1" "${2:-}" || return 1
 			ratio="$2"
 			shift 2
 			;;
 		--duration | -d)
+			_require_arg "$1" "${2:-}" || return 1
 			duration="$2"
 			shift 2
 			;;
 		--seed | -s)
+			_require_arg "$1" "${2:-}" || return 1
 			seed="$2"
 			shift 2
 			;;
 		--audio)
-			audio="$2"
+			_require_arg "$1" "${2:-}" || return 1
+			case "$2" in
+			true | false)
+				audio="$2"
+				;;
+			*)
+				echo "ERROR: --audio must be true or false" >&2
+				return 1
+				;;
+			esac
 			shift 2
 			;;
 		--wait | -w)
@@ -226,22 +257,27 @@ cmd_image() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--prompt | -p)
+			_require_arg "$1" "${2:-}" || return 1
 			prompt="$2"
 			shift 2
 			;;
 		--model | -m)
+			_require_arg "$1" "${2:-}" || return 1
 			model="$2"
 			shift 2
 			;;
 		--ratio | -r)
+			_require_arg "$1" "${2:-}" || return 1
 			ratio="$2"
 			shift 2
 			;;
 		--seed | -s)
+			_require_arg "$1" "${2:-}" || return 1
 			seed="$2"
 			shift 2
 			;;
 		--ref)
+			_require_arg "$1" "${2:-}" || return 1
 			refs+=("$2")
 			shift 2
 			;;
@@ -321,10 +357,12 @@ cmd_tts() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--text | -t)
+			_require_arg "$1" "${2:-}" || return 1
 			text="$2"
 			shift 2
 			;;
 		--voice)
+			_require_arg "$1" "${2:-}" || return 1
 			voice="$2"
 			shift 2
 			;;
@@ -383,14 +421,17 @@ cmd_sts() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--audio | -a)
+			_require_arg "$1" "${2:-}" || return 1
 			audio_uri="$2"
 			shift 2
 			;;
 		--video | -v)
+			_require_arg "$1" "${2:-}" || return 1
 			video_uri="$2"
 			shift 2
 			;;
 		--voice)
+			_require_arg "$1" "${2:-}" || return 1
 			voice="$2"
 			shift 2
 			;;
@@ -464,10 +505,12 @@ cmd_sfx() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--prompt | -p)
+			_require_arg "$1" "${2:-}" || return 1
 			prompt="$2"
 			shift 2
 			;;
 		--duration | -d)
+			_require_arg "$1" "${2:-}" || return 1
 			duration="$2"
 			shift 2
 			;;
@@ -533,10 +576,12 @@ cmd_dub() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--audio | -a)
+			_require_arg "$1" "${2:-}" || return 1
 			audio_uri="$2"
 			shift 2
 			;;
 		--lang | -l)
+			_require_arg "$1" "${2:-}" || return 1
 			target_lang="$2"
 			shift 2
 			;;
@@ -549,6 +594,7 @@ cmd_dub() {
 			shift
 			;;
 		--speakers)
+			_require_arg "$1" "${2:-}" || return 1
 			num_speakers="$2"
 			shift 2
 			;;
@@ -614,6 +660,7 @@ cmd_isolate() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--audio | -a)
+			_require_arg "$1" "${2:-}" || return 1
 			audio_uri="$2"
 			shift 2
 			;;
@@ -749,10 +796,12 @@ cmd_usage() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--start)
+			_require_arg "$1" "${2:-}" || return 1
 			start_date="$2"
 			shift 2
 			;;
 		--end)
+			_require_arg "$1" "${2:-}" || return 1
 			end_date="$2"
 			shift 2
 			;;
