@@ -274,6 +274,10 @@ cmd_label_stuck() {
 		_sd_log_error "milestone_min and elapsed_min must be positive integers (got milestone=${milestone_min}, elapsed=${elapsed_min})"
 		return 1
 	fi
+	if ! [[ "$confidence" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+		_sd_log_error "confidence must be a number, got: ${confidence}"
+		return 1
+	fi
 
 	# Check confidence threshold
 	local above_threshold
@@ -431,7 +435,7 @@ cmd_label_clear() {
 		--arg key "$issue_key" \
 		--arg issue "$issue_number" \
 		--arg repo "$repo_slug" \
-		'del(.milestones_checked[$key]) | .labeled_issues = [(.labeled_issues // [])[] | select((.issue == $issue and .repo == $repo) | not)]') || true
+		'del(.milestones_checked[$key]) | .labeled_issues = [(.labeled_issues // [])[] | select((.issue != $issue) or (.repo != $repo))]') || true
 	if [[ -n "$new_state" ]]; then
 		_sd_write_state "$new_state" || true
 	fi
