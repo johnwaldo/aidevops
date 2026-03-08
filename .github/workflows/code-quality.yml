@@ -150,6 +150,10 @@ jobs:
       # are not exposed for security). Without the token, the scan fails with
       # "Project not found" — there is no useful degraded mode.
       if: env.SONAR_TOKEN != ''
+      # SonarCloud may fail due to project configuration issues (project not
+      # found, org mismatch, etc.). These are external service issues that
+      # should not block PRs — the scan results are informational.
+      continue-on-error: true
       uses: SonarSource/sonarqube-scan-action@40f5b61913e891f9d316696628698051136015be
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
