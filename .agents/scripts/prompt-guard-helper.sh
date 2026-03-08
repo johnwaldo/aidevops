@@ -726,12 +726,13 @@ cmd_scan_stdin() {
 		return 1
 	fi
 
-	if [[ ${#content} -ge $max_bytes ]]; then
+	local byte_count
+	byte_count=$(printf '%s' "$content" | wc -c | tr -d ' ')
+
+	if [[ $byte_count -ge $max_bytes ]]; then
 		_pg_log_warn "Input truncated to ${max_bytes} bytes — scanning partial content"
 	fi
 
-	local byte_count
-	byte_count=$(printf '%s' "$content" | wc -c | tr -d ' ')
 	_pg_log_info "Scanning stdin content ($byte_count bytes)"
 
 	local results
@@ -1646,20 +1647,32 @@ main() {
 		cmd_sanitize "$content"
 		;;
 	check-stdin)
+		local max_bytes=10485760
 		local content
-		content=$(cat)
+		content=$(head -c "$max_bytes")
 		if [[ -z "$content" ]]; then
 			_pg_log_error "No input received on stdin"
 			return 1
 		fi
+		local byte_count
+		byte_count=$(printf '%s' "$content" | wc -c | tr -d ' ')
+		if [[ $byte_count -ge $max_bytes ]]; then
+			_pg_log_warn "Input truncated to ${max_bytes} bytes"
+		fi
 		cmd_check "$content"
 		;;
 	sanitize-stdin)
+		local max_bytes=10485760
 		local content
-		content=$(cat)
+		content=$(head -c "$max_bytes")
 		if [[ -z "$content" ]]; then
 			_pg_log_error "No input received on stdin"
 			return 1
+		fi
+		local byte_count
+		byte_count=$(printf '%s' "$content" | wc -c | tr -d ' ')
+		if [[ $byte_count -ge $max_bytes ]]; then
+			_pg_log_warn "Input truncated to ${max_bytes} bytes"
 		fi
 		cmd_sanitize "$content"
 		;;

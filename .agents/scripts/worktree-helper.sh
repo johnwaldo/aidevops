@@ -190,6 +190,17 @@ branch_was_pushed() {
 	return 1
 }
 
+# Check if a branch exists on any remote (GH#3916 — CodeRabbit)
+# Used by cmd_clean to detect if a remote branch was deleted (squash merge indicator).
+# Returns 0 if the branch exists on at least one remote, 1 otherwise.
+_branch_exists_on_any_remote() {
+	local branch="$1"
+	if git for-each-ref --format='%(refname)' "refs/remotes/*/$branch" | grep -q .; then
+		return 0
+	fi
+	return 1
+}
+
 # Check if a stale remote branch exists for a branch name (t1060)
 # A "stale remote" means refs/remotes/origin/$branch exists but no local branch does.
 # This typically happens when a branch was merged via PR (remote deleted) but the
@@ -490,7 +501,7 @@ cmd_list() {
 					local merged_marker=""
 					local default_branch
 					default_branch=$(get_default_branch)
-					if [[ -n "$worktree_branch" ]] && git branch --merged "$default_branch" 2>/dev/null | grep -q "^\s*$worktree_branch$"; then
+					if [[ -n "$worktree_branch" ]] && (git branch --merged "$default_branch" 2>/dev/null | grep -Fqx "  $worktree_branch" || git branch --merged "$default_branch" 2>/dev/null | grep -Fqx "* $worktree_branch"); then
 						merged_marker=" ${YELLOW}(merged)${NC}"
 					fi
 

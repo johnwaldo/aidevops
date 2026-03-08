@@ -721,7 +721,11 @@ async function dispatchToRunner(prompt, context) {
     );
     return stdout.trim();
   } catch (error) {
-    console.error("Runner dispatch failed", { error });
+    console.error("Runner dispatch failed", {
+      message: error?.message,
+      code: error?.code,
+      signal: error?.signal,
+    });
     return "Runner dispatch failed. Please try again later or contact an administrator.";
   }
 }

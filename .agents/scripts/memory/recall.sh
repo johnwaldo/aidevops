@@ -133,10 +133,23 @@ cmd_recall() {
 		auto_filter="AND COALESCE(a.auto_captured, 0) = 0"
 	fi
 
+	# Build type filter early so --recent mode can use it (GH#3916 — CodeRabbit)
+	local type_where=""
+	if [[ -n "$type_filter" ]]; then
+		# Validate type to prevent SQL injection (same validation as the non-recent path)
+		local type_pattern=" $type_filter "
+		if [[ ! " $VALID_TYPES " =~ $type_pattern ]]; then
+			log_error "Invalid type: $type_filter"
+			log_error "Valid types: $VALID_TYPES"
+			return 1
+		fi
+		type_where="AND l.type = '$type_filter'"
+	fi
+
 	# Handle --recent mode (no query required)
 	if [[ "$recent_mode" == true ]]; then
 		local results
-		results=$(db -json "$MEMORY_DB" "SELECT l.id, l.content, l.type, l.tags, l.confidence, l.created_at, COALESCE(a.last_accessed_at, '') as last_accessed_at, COALESCE(a.access_count, 0) as access_count, COALESCE(a.auto_captured, 0) as auto_captured FROM learnings l LEFT JOIN learning_access a ON l.id = a.id $entity_join WHERE 1=1 $entity_where $auto_filter ORDER BY l.created_at DESC LIMIT $limit;")
+		results=$(db -json "$MEMORY_DB" "SELECT l.id, l.content, l.type, l.tags, l.confidence, l.created_at, COALESCE(a.last_accessed_at, '') as last_accessed_at, COALESCE(a.access_count, 0) as access_count, COALESCE(a.auto_captured, 0) as auto_captured FROM learnings l LEFT JOIN learning_access a ON l.id = a.id $entity_join WHERE 1=1 $entity_where $auto_filter $type_where ORDER BY l.created_at DESC LIMIT $limit;")
 		if [[ "$format" == "json" ]]; then
 			echo "$results"
 		else

@@ -193,9 +193,9 @@ _cs_prefilter() {
 
 	local keyword
 	for keyword in "${_CS_PREFILTER_KEYWORDS[@]}"; do
-		# Keywords containing regex metacharacters (.*+?|) use regex matching;
+		# Keywords containing regex metacharacters (.*+?|()^$) use regex matching;
 		# plain keywords use faster literal substring matching.
-		if [[ "$keyword" =~ [.*+?\|] ]]; then
+		if [[ "$keyword" =~ [.*+?\|()^$] ]]; then
 			if [[ "$lower_content" =~ $keyword ]]; then
 				return 0
 			fi

@@ -266,7 +266,7 @@ export function createTools(scriptsDir, run, pipelines) {
       description:
         'Recall memories from the aidevops cross-session memory system. Args: query (string), limit (string, default "5")',
       buildArgs: (args, helper) => ({
-        cmd: `bash "${helper}" recall "${args.query}" --limit ${args.limit || "5"} 2>/dev/null`,
+        cmd: `bash "${helper}" recall "${args.query}" --limit ${args.limit || "5"}`,
         timeout: 10000,
       }),
     }),
