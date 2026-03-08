@@ -152,14 +152,8 @@ tech-stack-helper.sh techs example.com --category cms
 ### Lighthouse Scores
 
 ```bash
-# Get Lighthouse scores
+# Get Lighthouse scores (runs both desktop and mobile by default)
 tech-stack-helper.sh lighthouse example.com
-
-# Desktop only
-tech-stack-helper.sh lighthouse example.com --strategy desktop
-
-# Mobile only
-tech-stack-helper.sh lighthouse example.com --strategy mobile
 ```
 
 ### Comparison
@@ -185,7 +179,7 @@ tech-stack-helper.sh scan example.com --json
 #   "url": "example.com",
 #   "report_url": "https://crft.studio/lookup/gallery/example",
 #   "technologies": [
-#     {"name": "React", "category": "JavaScript frameworks", "description": "..."}
+#     {"name": "React", "category": "ui-libs", "version": "18.2", "confidence": 0.9}
 #   ],
 #   "lighthouse": {
 #     "desktop": {"performance": 98, "accessibility": 100, "best_practices": 100, "seo": 100},

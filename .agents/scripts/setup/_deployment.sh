@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Agent deployment functions for setup.sh
 
 # Deploy aidevops agents to ~/.aidevops/agents/

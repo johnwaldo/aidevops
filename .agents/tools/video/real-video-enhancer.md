@@ -354,8 +354,8 @@ Models are downloaded automatically on first use to `~/.cache/real-video-enhance
 # List available models
 real-video-enhancer-helper.sh models list
 
-# Download specific model
-real-video-enhancer-helper.sh models download rife-4.6
+# Download specific model (not yet implemented — models auto-download on first use)
+# real-video-enhancer-helper.sh models download rife-4.6
 
 # Clear model cache (re-download on next use)
 real-video-enhancer-helper.sh models clear

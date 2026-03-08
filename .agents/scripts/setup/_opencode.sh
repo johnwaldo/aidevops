@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # OpenCode configuration functions for setup.sh
 
 # Update OpenCode config with new settings

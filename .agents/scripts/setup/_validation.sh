@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Validation functions for setup.sh
 
 # Sanitize plugin namespace for safe use in paths

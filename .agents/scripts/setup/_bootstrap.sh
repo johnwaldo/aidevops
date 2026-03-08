@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Bootstrap and entry point functions for setup.sh
 
 # Bootstrap: Clone or update repo if running remotely (via curl)

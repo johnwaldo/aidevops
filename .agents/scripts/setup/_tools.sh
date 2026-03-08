@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Tool setup functions for setup.sh
 
 # Setup git CLIs (gh, glab)

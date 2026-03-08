@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Migration functions for setup.sh
 
 # Remove deprecated agent paths that have been moved

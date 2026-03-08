@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Shell environment functions for setup.sh
 
 # Detect the current running shell (not $SHELL which is the login default)

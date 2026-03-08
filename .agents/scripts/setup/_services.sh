@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Service setup functions for setup.sh
 
 # Setup SSH key

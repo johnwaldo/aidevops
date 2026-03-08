@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Installation functions for setup.sh
 
 # Check system requirements

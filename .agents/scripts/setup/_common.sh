@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Common helper functions for setup.sh
 # Sourced by all setup modules
 

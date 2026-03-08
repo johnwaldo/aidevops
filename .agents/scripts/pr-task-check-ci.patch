@@ -25,6 +25,7 @@ index b4a1f41b..8db3a441 100644
 +        PR_NUMBER: ${{ github.event.pull_request.number }}
 +        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 +      run: |
++        set -euo pipefail
 +        echo "PR Task ID Validation"
 +        echo "====================="
 +        echo "PR #${PR_NUMBER}: ${PR_TITLE}"
