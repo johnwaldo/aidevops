@@ -348,12 +348,15 @@ ${suggested_actions}
 ---
 *This is an advisory notification only. No automated action has been taken. The worker continues running. The \`${STUCK_LABEL}\` label will be automatically removed if the task completes successfully.*"
 
+	local comment_failed=0
 	gh issue comment "$issue_number" --repo "$repo_slug" \
 		--body "$comment_body" || {
 		_sd_log_warn "failed to comment on issue #$issue_number"
+		comment_failed=1
 	}
 
-	# Record milestone and labeled issue in state
+	# Record milestone and labeled issue in state (regardless of comment success,
+	# since the label was applied — skipping state would cause re-labeling).
 	_sd_record_milestone "$issue_number" "$milestone_min" "$repo_slug" || true
 
 	local state
@@ -369,7 +372,7 @@ ${suggested_actions}
 	fi
 
 	_sd_log_warn "labeled issue #$issue_number as stuck (confidence: $confidence, milestone: ${milestone_min}min)"
-	return 0
+	return "$comment_failed"
 }
 
 # Remove stuck-detection label from a GitHub issue on task success.
