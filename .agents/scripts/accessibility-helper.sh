@@ -410,11 +410,12 @@ run_lighthouse_a11y() {
 	local report_file="${A11Y_REPORTS_DIR}/lighthouse_a11y_${timestamp}.json"
 
 	local chrome_flags="--headless --no-sandbox --disable-gpu"
+	# Lighthouse --preset only accepts: desktop, perf, experimental.
+	# Mobile is the default (no preset flag needed).
 	local preset_flag="--preset=desktop"
 	local screen_emulation="--screenEmulation.disabled"
 
 	if [[ "$strategy" == "mobile" ]]; then
-		# Mobile is Lighthouse's default — no --preset flag needed
 		preset_flag=""
 		screen_emulation=""
 	fi
@@ -426,7 +427,7 @@ run_lighthouse_a11y() {
 		--chrome-flags="$chrome_flags" \
 		${preset_flag:+"$preset_flag"} \
 		${screen_emulation:+"$screen_emulation"} \
-		--quiet 2>>"$LOG_FILE"; then
+		--quiet 2>/dev/null; then
 
 		print_success "Report saved: $report_file"
 		parse_lighthouse_a11y "$report_file"
@@ -450,7 +451,7 @@ parse_lighthouse_a11y() {
 	if [[ "$score" != "N/A" ]]; then
 		local pct
 		pct=$(awk -v s="$score" 'BEGIN { printf "%.0f", s * 100 }')
-		local int_pct="$pct"
+		local int_pct="${pct%.*}"
 
 		if [[ "$int_pct" -ge 90 ]]; then
 			echo -e "  Score: ${GREEN}${int_pct}%${NC} (Good)"
