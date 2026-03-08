@@ -412,12 +412,10 @@ run_lighthouse_a11y() {
 	local chrome_flags="--headless --no-sandbox --disable-gpu"
 	# Lighthouse --preset only accepts: desktop, perf, experimental.
 	# Mobile is the default (no preset flag needed).
-	local preset_flag="--preset=desktop"
-	local screen_emulation="--screenEmulation.disabled"
-
-	if [[ "$strategy" == "mobile" ]]; then
-		preset_flag=""
-		screen_emulation=""
+	local lighthouse_args=()
+	if [[ "$strategy" == "desktop" ]]; then
+		lighthouse_args+=(--preset=desktop)
+		lighthouse_args+=(--screenEmulation.disabled)
 	fi
 
 	if lighthouse "$url" \
@@ -425,9 +423,8 @@ run_lighthouse_a11y() {
 		--output=json \
 		--output-path="$report_file" \
 		--chrome-flags="$chrome_flags" \
-		${preset_flag:+"$preset_flag"} \
-		${screen_emulation:+"$screen_emulation"} \
-		--quiet 2>/dev/null; then
+		"${lighthouse_args[@]}" \
+		--quiet; then
 
 		print_success "Report saved: $report_file"
 		parse_lighthouse_a11y "$report_file"
