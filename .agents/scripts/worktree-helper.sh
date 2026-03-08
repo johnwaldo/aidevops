@@ -193,12 +193,26 @@ branch_was_pushed() {
 	return 1
 }
 
+# Check if a branch exists on any remote
+# Returns 0 if found on at least one remote, 1 if not found on any
+_branch_exists_on_any_remote() {
+	local branch="$1"
+	local remote
+	for remote in $(git remote 2>/dev/null); do
+		if git show-ref --verify --quiet "refs/remotes/${remote}/$branch" 2>/dev/null; then
+			return 0
+		fi
+	done
+	return 1
+}
+
 # Check if a stale remote branch exists for a branch name (t1060)
 # A "stale remote" means refs/remotes/<remote>/$branch exists but no local branch does.
 # This typically happens when a branch was merged via PR (remote deleted) but the
 # local remote-tracking ref wasn't pruned, or when re-using a branch name.
 # Returns 0 if stale remote exists, 1 otherwise.
-# Outputs: "merged" if the remote branch is merged into default, "unmerged" otherwise.
+# Outputs: "remote|merged" or "remote|unmerged" — includes the actual remote name
+# so callers can act on the correct remote instead of assuming origin.
 check_stale_remote_branch() {
 	local branch="$1"
 
@@ -225,9 +239,9 @@ check_stale_remote_branch() {
 	local default_branch
 	default_branch=$(get_default_branch)
 	if git branch -r --merged "$default_branch" 2>/dev/null | grep -q "${found_remote}/$branch$"; then
-		echo "merged"
+		echo "${found_remote}|merged"
 	else
-		echo "unmerged"
+		echo "${found_remote}|unmerged"
 	fi
 	return 0
 }
@@ -237,11 +251,12 @@ check_stale_remote_branch() {
 _delete_stale_remote_ref() {
 	local branch="$1"
 	local message="$2"
+	local remote="${3:-origin}"
 
 	echo -e "${BLUE}${message}${NC}"
-	git push origin --delete "$branch" 2>/dev/null || true
-	git fetch --prune origin 2>/dev/null || true
-	echo -e "${GREEN}Deleted origin/$branch${NC}"
+	git push "$remote" --delete "$branch" 2>/dev/null || true
+	git fetch --prune "$remote" 2>/dev/null || true
+	echo -e "${GREEN}Deleted ${remote}/$branch${NC}"
 }
 
 # Handle stale remote branch before creating a new local branch (t1060)
@@ -250,15 +265,19 @@ _delete_stale_remote_ref() {
 # Returns 0 to proceed with branch creation, 1 to abort.
 handle_stale_remote_branch() {
 	local branch="$1"
-	local stale_status
+	local stale_result
 
-	stale_status=$(check_stale_remote_branch "$branch") || return 0
+	stale_result=$(check_stale_remote_branch "$branch") || return 0
+
+	# Parse "remote|status" format from check_stale_remote_branch
+	local stale_remote="${stale_result%%|*}"
+	local stale_status="${stale_result##*|}"
 
 	local remote_commit
-	remote_commit=$(git rev-parse --short "refs/remotes/origin/$branch" 2>/dev/null || echo "unknown")
+	remote_commit=$(git rev-parse --short "refs/remotes/${stale_remote}/$branch" 2>/dev/null || echo "unknown")
 
 	if [[ "$stale_status" == "merged" ]]; then
-		echo -e "${YELLOW}Stale remote branch detected: origin/$branch (already merged)${NC}"
+		echo -e "${YELLOW}Stale remote branch detected: ${stale_remote}/$branch (already merged)${NC}"
 		echo -e "  Last commit: $remote_commit"
 
 		if [[ -t 0 ]]; then
@@ -272,7 +291,7 @@ handle_stale_remote_branch() {
 			choice="${choice:-1}"
 			case "$choice" in
 			1)
-				_delete_stale_remote_ref "$branch" "Deleting stale remote ref..."
+				_delete_stale_remote_ref "$branch" "Deleting stale remote ref..." "$stale_remote"
 				;;
 			2)
 				echo -e "${YELLOW}Proceeding without deleting stale remote${NC}"
@@ -288,11 +307,11 @@ handle_stale_remote_branch() {
 			esac
 		else
 			# Headless: auto-delete merged stale refs
-			_delete_stale_remote_ref "$branch" "Headless mode: auto-deleting merged stale remote ref..."
+			_delete_stale_remote_ref "$branch" "Headless mode: auto-deleting merged stale remote ref..." "$stale_remote"
 		fi
 	else
 		# Unmerged stale remote
-		echo -e "${RED}Stale remote branch detected: origin/$branch (NOT merged)${NC}"
+		echo -e "${RED}Stale remote branch detected: ${stale_remote}/$branch (NOT merged)${NC}"
 		echo -e "  Last commit: $remote_commit"
 
 		if [[ -t 0 ]]; then
@@ -306,7 +325,7 @@ handle_stale_remote_branch() {
 			choice="${choice:-3}"
 			case "$choice" in
 			1)
-				_delete_stale_remote_ref "$branch" "Deleting stale remote ref..."
+				_delete_stale_remote_ref "$branch" "Deleting stale remote ref..." "$stale_remote"
 				;;
 			2)
 				echo -e "${YELLOW}Proceeding without deleting stale remote${NC}"
@@ -714,7 +733,11 @@ cmd_clean() {
 	default_branch=$(get_default_branch)
 
 	# Fetch to get current remote branch state (detects deleted branches)
-	git fetch --prune origin 2>/dev/null || true
+	# Prune all remotes, not just origin (consistent with branch_was_pushed)
+	local fetch_remote
+	for fetch_remote in $(git remote 2>/dev/null); do
+		git fetch --prune "$fetch_remote" 2>/dev/null || true
+	done
 
 	# Build a lookup of merged PR branches for squash-merge detection.
 	# gh pr list only returns squash-merged PRs that git branch --merged misses.
@@ -740,8 +763,8 @@ cmd_clean() {
 					merge_type="merged"
 				# Check 2: Remote branch deleted (indicates squash merge or PR closed)
 				# ONLY check this if the branch was previously pushed - unpushed branches should NOT be flagged
-				elif branch_was_pushed "$worktree_branch" &&
-					! git show-ref --verify --quiet "refs/remotes/origin/$worktree_branch" 2>/dev/null; then
+				# Check all remotes, not just origin (consistent with branch_was_pushed)
+				elif branch_was_pushed "$worktree_branch" && ! _branch_exists_on_any_remote "$worktree_branch"; then
 					is_merged=true
 					merge_type="remote deleted"
 				# Check 3: Squash-merge detection via GitHub PR state
@@ -831,8 +854,8 @@ cmd_clean() {
 					elif git branch --merged "$default_branch" 2>/dev/null | grep -q "^\s*$worktree_branch$"; then
 						should_remove=true
 					# Check 2: Remote branch deleted - ONLY if branch was previously pushed
-					elif branch_was_pushed "$worktree_branch" &&
-						! git show-ref --verify --quiet "refs/remotes/origin/$worktree_branch" 2>/dev/null; then
+					# Check all remotes, not just origin (consistent with branch_was_pushed)
+					elif branch_was_pushed "$worktree_branch" && ! _branch_exists_on_any_remote "$worktree_branch"; then
 						should_remove=true
 					# Check 3: Squash-merged PR
 					elif [[ -n "$merged_pr_branches" ]] && echo "$merged_pr_branches" | grep -qx "$worktree_branch"; then

@@ -158,7 +158,7 @@ cmd_enhance() {
 	local poll_interval="${DEFAULT_POLL_INTERVAL}"
 	local timeout="${DEFAULT_TIMEOUT}"
 	local output_file=""
-	local extra_params=""
+	local extra_params="{}"
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -224,7 +224,7 @@ cmd_enhance() {
 			;;
 		--area-*)
 			local area="${1#--area-}"
-			extra_params="${extra_params}, \"${area}\": true"
+			extra_params=$(echo "$extra_params" | jq --arg a "$area" '. + {($a): true}')
 			shift
 			;;
 		--*)
@@ -279,7 +279,7 @@ cmd_enhance() {
 	if [[ -n "${mask_image_url}" ]]; then
 		body=$(echo "${body}" | jq --arg v "${mask_image_url}" '. + {mask_image_url: $v}')
 	fi
-	if [[ -n "${extra_params}" ]]; then
+	if [[ "${extra_params}" != "{}" ]]; then
 		body=$(echo "${body}" | jq --argjson extra "${extra_params}" '. + $extra')
 	fi
 
