@@ -348,15 +348,15 @@ next_task_id() {
 	trap 'rm -f "$claim_stderr"' RETURN
 	claim_output=$("$claim_script" "${claim_args[@]}" 2>"$claim_stderr") || claim_rc=$?
 
-	# Exit code 1 = hard error
-	if [[ $claim_rc -eq 1 ]]; then
-		log_error "claim-task-id.sh failed"
+	# Exit codes: 0 = online success, 2 = offline fallback; anything else is a hard error
+	if [[ $claim_rc -ne 0 && $claim_rc -ne 2 ]]; then
+		log_error "claim-task-id.sh failed (exit code: $claim_rc)"
 		# Show captured stderr for diagnostics
 		if [[ -s "$claim_stderr" ]]; then
 			cat "$claim_stderr" >&2
 		fi
 		rm -f "$claim_stderr"
-		return 1
+		return "$claim_rc"
 	fi
 	rm -f "$claim_stderr"
 

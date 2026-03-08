@@ -149,13 +149,22 @@ cmd_add() {
 	tmp_file=$(mktemp)
 	# shellcheck disable=SC2064
 	trap "rm -f '$tmp_file'" EXIT
-	jq --arg name "$name" \
+	if ! jq --arg name "$name" \
 		--arg addr "$address" \
 		--arg trans "$transport" \
 		--arg cont "$container" \
 		--arg usr "$user" \
 		'.hosts[$name] = {address: $addr, transport: $trans, container: $cont, user: $usr, added: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))}' \
-		"$REMOTE_HOSTS_FILE" >"$tmp_file" && mv "$tmp_file" "$REMOTE_HOSTS_FILE"
+		"$REMOTE_HOSTS_FILE" >"$tmp_file"; then
+		_log_error "Failed to update $REMOTE_HOSTS_FILE"
+		rm -f "$tmp_file"
+		return 1
+	fi
+	if ! mv "$tmp_file" "$REMOTE_HOSTS_FILE"; then
+		_log_error "Failed to replace $REMOTE_HOSTS_FILE"
+		rm -f "$tmp_file"
+		return 1
+	fi
 
 	_log_success "Added remote host: $name ($address via $transport)"
 	return 0
@@ -186,7 +195,16 @@ cmd_remove() {
 	tmp_file=$(mktemp)
 	# shellcheck disable=SC2064
 	trap "rm -f '$tmp_file'" EXIT
-	jq --arg name "$name" 'del(.hosts[$name])' "$REMOTE_HOSTS_FILE" >"$tmp_file" && mv "$tmp_file" "$REMOTE_HOSTS_FILE"
+	if ! jq --arg name "$name" 'del(.hosts[$name])' "$REMOTE_HOSTS_FILE" >"$tmp_file"; then
+		_log_error "Failed to update $REMOTE_HOSTS_FILE"
+		rm -f "$tmp_file"
+		return 1
+	fi
+	if ! mv "$tmp_file" "$REMOTE_HOSTS_FILE"; then
+		_log_error "Failed to replace $REMOTE_HOSTS_FILE"
+		rm -f "$tmp_file"
+		return 1
+	fi
 
 	_log_success "Removed remote host: $name"
 	return 0
@@ -642,10 +660,20 @@ WRAPPER_EOF
 	local remote_pid=""
 	if [[ "$container_name" != "auto" && "$container_name" != "none" && -n "$container_name" ]]; then
 		# Dispatch inside a container on the remote host
+		# Copy scripts into the container first (host paths are not visible inside)
 		_log_info "Dispatching inside container: $container_name"
+		if ! "${ssh_cmd[@]}" "docker cp '${remote_wrapper}' '${container_name}:${remote_wrapper}'" 2>/dev/null; then
+			_log_error "Failed to copy wrapper script into container: $container_name"
+			return 1
+		fi
+		if ! "${ssh_cmd[@]}" "docker cp '${remote_script}' '${container_name}:${remote_script}'" 2>/dev/null; then
+			_log_error "Failed to copy dispatch script into container: $container_name"
+			return 1
+		fi
+		# Run inside the container and capture the container-side PID
 		remote_pid=$("${ssh_cmd[@]}" "
-			nohup docker exec -d '${container_name}' bash '${remote_wrapper}' &
-			echo \$!
+			docker exec -d '${container_name}' bash '${remote_wrapper}'
+			docker exec '${container_name}' bash -c 'pgrep -f \"${remote_wrapper}\" | tail -1'
 		" 2>/dev/null)
 	else
 		# Dispatch directly on the remote host
