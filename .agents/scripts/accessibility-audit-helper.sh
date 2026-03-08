@@ -338,7 +338,7 @@ run_webaim_contrast() {
 	print_info "Background: #$bg"
 
 	local response
-	response=$(curl -s "${WEBAIMCC_API_URL}?fcolor=${fg}&bcolor=${bg}&api" 2>/dev/null) || {
+	response=$(curl -s "${WEBAIMCC_API_URL}?fcolor=${fg}&bcolor=${bg}&api" 2>>"$LOG_FILE") || {
 		print_error "WebAIM contrast API request failed"
 		return 1
 	}
