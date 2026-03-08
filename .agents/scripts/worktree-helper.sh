@@ -183,8 +183,8 @@ branch_was_pushed() {
 	if git config "branch.$branch.remote" &>/dev/null; then
 		return 0
 	fi
-	# Has remote tracking branch
-	if git show-ref --verify --quiet "refs/remotes/origin/$branch" 2>/dev/null; then
+	# Has remote tracking branch on any remote (not just origin)
+	if git for-each-ref --format='%(refname)' "refs/remotes/*/$branch" | grep -q .; then
 		return 0
 	fi
 	return 1
