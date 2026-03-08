@@ -72,8 +72,11 @@ parse_args() {
 		arg="$1"
 		case "$arg" in
 		--pr)
-			val="$2"
-			PR_NUMBER="$val"
+			if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+				log_error "Missing value for --pr"
+				return 1
+			fi
+			PR_NUMBER="$2"
 			shift 2
 			;;
 		--verified)
@@ -87,8 +90,11 @@ parse_args() {
 			fi
 			;;
 		--repo-path)
-			val="$2"
-			REPO_PATH="$val"
+			if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+				log_error "Missing value for --repo-path"
+				return 1
+			fi
+			REPO_PATH="$2"
 			shift 2
 			;;
 		--no-push)

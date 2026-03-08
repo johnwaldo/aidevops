@@ -178,12 +178,12 @@ cb_write_state() {
 
 	# Atomic write via temp file + mv
 	local tmp_file="${state_file}.tmp.$$"
-	if ! printf '%s\n' "$state_json" >"$tmp_file" 2>/dev/null; then
+	if ! printf '%s\n' "$state_json" >"$tmp_file"; then
 		_cb_log_warn "failed to write temp state file: $tmp_file"
 		rm -f "$tmp_file" 2>/dev/null || true
 		return 1
 	fi
-	if ! mv -f "$tmp_file" "$state_file" 2>/dev/null; then
+	if ! mv -f "$tmp_file" "$state_file"; then
 		_cb_log_warn "failed to move temp state to: $state_file"
 		rm -f "$tmp_file" 2>/dev/null || true
 		return 1

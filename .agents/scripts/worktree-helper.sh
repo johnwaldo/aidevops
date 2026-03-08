@@ -704,6 +704,10 @@ cmd_clean() {
 	local default_branch
 	default_branch=$(get_default_branch)
 
+	# Identify the main worktree path (the one with the actual .git directory)
+	local main_worktree
+	main_worktree="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+
 	# Fetch to get current remote branch state (detects deleted branches)
 	git fetch --prune origin 2>/dev/null || true
 
@@ -720,13 +724,13 @@ cmd_clean() {
 		elif [[ "$line" =~ ^branch\ refs/heads/(.+)$ ]]; then
 			worktree_branch="${BASH_REMATCH[1]}"
 		elif [[ -z "$line" ]]; then
-			# End of entry, check if merged (skip default branch)
-			if [[ -n "$worktree_branch" ]] && [[ "$worktree_branch" != "$default_branch" ]]; then
+			# End of entry, check if merged (skip default branch and main worktree)
+			if [[ -n "$worktree_branch" ]] && [[ "$worktree_branch" != "$default_branch" ]] && [[ "$worktree_path" != "$main_worktree" ]]; then
 				local is_merged=false
 				local merge_type=""
 
 				# Check 1: Traditional merge detection
-				if git branch --merged "$default_branch" 2>/dev/null | grep -q "^\s*$worktree_branch$"; then
+				if git branch --merged "$default_branch" 2>/dev/null | grep -Fqx "  $worktree_branch" || git branch --merged "$default_branch" 2>/dev/null | grep -Fqx "* $worktree_branch"; then
 					is_merged=true
 					merge_type="merged"
 				# Check 2: Remote branch deleted (indicates squash merge or PR closed)
@@ -806,7 +810,7 @@ cmd_clean() {
 			elif [[ "$line" =~ ^branch\ refs/heads/(.+)$ ]]; then
 				worktree_branch="${BASH_REMATCH[1]}"
 			elif [[ -z "$line" ]]; then
-				if [[ -n "$worktree_branch" ]] && [[ "$worktree_branch" != "$default_branch" ]]; then
+				if [[ -n "$worktree_branch" ]] && [[ "$worktree_branch" != "$default_branch" ]] && [[ "$worktree_path" != "$main_worktree" ]]; then
 					local should_remove=false
 					local use_force=false
 
@@ -819,7 +823,7 @@ cmd_clean() {
 						echo -e "${RED}Skipping $worktree_branch - owned by active session PID $rm_owner_pid${NC}"
 						should_remove=false
 					# Check 1: Traditional merge
-					elif git branch --merged "$default_branch" 2>/dev/null | grep -q "^\s*$worktree_branch$"; then
+					elif git branch --merged "$default_branch" 2>/dev/null | grep -Fqx "  $worktree_branch" || git branch --merged "$default_branch" 2>/dev/null | grep -Fqx "* $worktree_branch"; then
 						should_remove=true
 					# Check 2: Remote branch deleted - ONLY if branch was previously pushed
 					# Check all remotes, not just origin (consistent with branch_was_pushed)

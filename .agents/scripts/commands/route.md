@@ -14,8 +14,8 @@ Task: $ARGUMENTS
 1. First, check pattern history from cross-session memory:
 
 ```bash
-~/.aidevops/agents/scripts/memory-helper.sh recall --type SUCCESS_PATTERN --limit 10
-~/.aidevops/agents/scripts/memory-helper.sh recall --type FAILURE_PATTERN --limit 10
+~/.aidevops/agents/scripts/memory-helper.sh recall --recent --type SUCCESS_PATTERN --limit 10
+~/.aidevops/agents/scripts/memory-helper.sh recall --recent --type FAILURE_PATTERN --limit 10
 ```
 
 2. Read `tools/context/model-routing.md` for the routing rules and tier definitions.

@@ -71,6 +71,12 @@ check_existing_subtasks() {
 		return 0
 	fi
 
+	# Validate task_id format to prevent regex injection (must be tNNN or tNNN.N)
+	if [[ ! "$task_id" =~ ^t[0-9]+(\.[0-9]+)*$ ]]; then
+		echo "false"
+		return 0
+	fi
+
 	local parent_pattern="^- \\[[ x-]\\] ${task_id} "
 	local child_pattern="^  - \\[[ x-]\\] ${task_id}\\."
 

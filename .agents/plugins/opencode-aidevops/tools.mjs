@@ -283,7 +283,7 @@ export function createTools(scriptsDir, run, pipelines) {
           return { cmd: `echo "Error: content is required to store a memory" >&2; exit 1`, timeout: 1000 };
         }
         return {
-          cmd: `bash "${helper}" store "${content}" --confidence ${args.confidence || "medium"} 2>/dev/null`,
+          cmd: `bash "${helper}" store "${content}" --confidence ${args.confidence || "medium"}`,
           timeout: 10000,
         };
       },
