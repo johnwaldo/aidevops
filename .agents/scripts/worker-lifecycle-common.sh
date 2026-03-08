@@ -15,6 +15,7 @@
 #   _sanitize_markdown()      Strip @ mentions and backticks from markdown
 #   _validate_int()           Validate and sanitize integer config values
 #   _compute_struggle_ratio() Compute messages/commits ratio for a worker
+#   _format_duration()        Format seconds into human-readable duration
 #
 # Usage: source worker-lifecycle-common.sh
 #

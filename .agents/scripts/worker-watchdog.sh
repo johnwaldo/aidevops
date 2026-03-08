@@ -34,6 +34,7 @@
 #   WORKER_MAX_RUNTIME           Hard ceiling in seconds (default: 10800 = 3h)
 #   WORKER_DRY_RUN               Set to "true" to log but not kill (default: false)
 #   WORKER_WATCHDOG_NOTIFY       Set to "false" to disable macOS notifications
+#   WORKER_PROCESS_PATTERN       CLI name to match (default: opencode)
 
 set -euo pipefail
 
@@ -58,6 +59,7 @@ WORKER_PROGRESS_TIMEOUT="${WORKER_PROGRESS_TIMEOUT:-600}"   # 10 min no log outp
 WORKER_MAX_RUNTIME="${WORKER_MAX_RUNTIME:-10800}"           # 3 hour hard ceiling
 WORKER_DRY_RUN="${WORKER_DRY_RUN:-false}"
 WORKER_WATCHDOG_NOTIFY="${WORKER_WATCHDOG_NOTIFY:-true}"
+WORKER_PROCESS_PATTERN="${WORKER_PROCESS_PATTERN:-opencode}" # CLI name to match (update if CLI changes)
 
 # Validate numeric config
 WORKER_IDLE_TIMEOUT=$(_validate_int WORKER_IDLE_TIMEOUT "$WORKER_IDLE_TIMEOUT" 300 60)
@@ -113,30 +115,29 @@ notify() {
 #######################################
 # Find all headless worker processes
 #
-# Workers are identified by: opencode processes running with /full-loop
-# in their command line (headless dispatch pattern).
+# Workers are identified by: processes matching WORKER_PROCESS_PATTERN
+# running with /full-loop in their command line (headless dispatch pattern).
 #
 # Output: one line per worker: "PID|ELAPSED_SECS|COMMAND"
 #######################################
 find_workers() {
-	# Match opencode processes with /full-loop (headless workers)
-	# Exclude grep itself and this script
-	local workers=""
+	# Match worker processes with /full-loop (headless workers)
+	# Build grep pattern: bracket-trick on first char excludes grep from results
+	local pattern_char="${WORKER_PROCESS_PATTERN:0:1}"
+	local pattern_rest="${WORKER_PROCESS_PATTERN:1}"
+	local grep_pattern="[${pattern_char}]${pattern_rest}"
 	local line pid cmd elapsed_seconds
 
 	while IFS= read -r line; do
 		[[ -z "$line" ]] && continue
-		# Skip grep/watchdog processes
-		[[ "$line" == *"grep"* ]] && continue
+		# Skip watchdog processes
 		[[ "$line" == *"worker-watchdog"* ]] && continue
 
-		# Extract PID (first field)
-		pid=$(echo "$line" | awk '{print $1}')
+		# Extract PID (first field) and command (rest of line)
+		pid="${line%%[[:space:]]*}"
+		cmd="${line#*[[:space:]]}"
 		[[ -z "$pid" ]] && continue
 		[[ "$pid" =~ ^[0-9]+$ ]] || continue
-
-		# Get full command
-		cmd=$(ps -p "$pid" -o command= 2>/dev/null) || continue
 		[[ -z "$cmd" ]] && continue
 
 		# Get elapsed time
@@ -144,7 +145,7 @@ find_workers() {
 
 		# Output: PID|ELAPSED|COMMAND
 		echo "${pid}|${elapsed_seconds}|${cmd}"
-	done < <(ps axo pid,command 2>/dev/null | grep '[o]pencode' | grep '/full-loop' || true)
+	done < <(ps axo pid,command 2>/dev/null | grep "$grep_pattern" | grep '/full-loop' || true)
 
 	return 0
 }
@@ -737,6 +738,7 @@ Environment variables:
   WORKER_MAX_RUNTIME           Hard runtime ceiling (default: 10800s = 3h)
   WORKER_DRY_RUN               Log but don't kill (default: false)
   WORKER_WATCHDOG_NOTIFY       macOS notifications (default: true)
+  WORKER_PROCESS_PATTERN       CLI name to match (default: opencode)
 HELP
 	return 0
 }
