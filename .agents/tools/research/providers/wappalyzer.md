@@ -53,66 +53,32 @@ wappalyzer-helper.sh detect https://example.com
 ### Basic Detection
 
 ```bash
-# Analyze a URL and output JSON
-wappalyzer https://example.com --format=json
+# Analyze a URL via helper script (recommended)
+wappalyzer-helper.sh detect https://example.com
 
-# Pretty-printed output
-wappalyzer https://example.com --format=json --pretty
+# Output JSON to file
+wappalyzer-helper.sh detect https://example.com --output results.json
 
-# Increase timeout for slow sites
-wappalyzer https://example.com --max-wait=10000
-```
-
-### Advanced Options
-
-```bash
-# Custom user agent
-wappalyzer https://example.com --user-agent="Custom Bot 1.0"
-
-# Recursive crawling (analyze multiple pages)
-wappalyzer https://example.com --recursive --max-depth=3 --max-urls=10
-
-# Debug mode
-wappalyzer https://example.com --debug
-
-# Probe additional endpoints
-wappalyzer https://example.com --probe
+# Compare two URLs
+wappalyzer-helper.sh compare https://example.com https://competitor.com
 ```
 
 ### Programmatic Usage
 
+The wrapper script `wappalyzer-detect.mjs` (in `.agents/scripts/`) uses `@ryntab/wappalyzer-node`:
+
 ```javascript
-const Wappalyzer = require('wappalyzer');
+import { scan } from '@ryntab/wappalyzer-node';
 
-const options = {
-  debug: false,
-  delay: 500,
-  headers: {},
-  maxDepth: 3,
-  maxUrls: 10,
-  maxWait: 5000,
-  recursive: false,
-  probe: true,
-  pretty: false,
-  userAgent: 'Wappalyzer',
-};
+const url = process.argv[2] || 'https://example.com';
+const results = await scan(url, { target: 'fetch' });
+console.log(JSON.stringify(results, null, 2));
+```
 
-const wappalyzer = new Wappalyzer(options);
+For direct Node.js integration, use the wrapper:
 
-(async function() {
-  try {
-    await wappalyzer.init();
-    
-    const site = await wappalyzer.open('https://example.com');
-    const results = await site.analyze();
-    
-    console.log(JSON.stringify(results, null, 2));
-    
-    await wappalyzer.destroy();
-  } catch (error) {
-    console.error(error);
-  }
-})();
+```bash
+node .agents/scripts/wappalyzer-detect.mjs https://example.com
 ```
 
 ## Output Format
@@ -196,41 +162,17 @@ For integration with tech-stack-helper.sh, map Wappalyzer output to the common s
 
 ## Integration with tech-stack-helper.sh
 
-The tech-stack-helper.sh orchestrator calls this provider via:
+The tech-stack-helper.sh orchestrator calls this provider via `wappalyzer-helper.sh`:
 
 ```bash
-# Single-site detection
-wappalyzer-detect() {
-  local url="$1"
-  local output_file="${2:-/dev/stdout}"
-  
-  # Run Wappalyzer with JSON output
-  wappalyzer "$url" --format=json --pretty > "$output_file" 2>/dev/null
-  
-  return $?
-}
+# Single-site detection (uses wappalyzer-detect.mjs internally)
+wappalyzer-helper.sh detect https://example.com
 
-# Parse and normalize to common schema
-wappalyzer-normalize() {
-  local input_file="$1"
-  
-  jq '{
-    provider: "wappalyzer",
-    url: (.urls | keys[0]),
-    timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
-    technologies: [
-      (.urls | to_entries[0].value.technologies[] | {
-        name: .name,
-        slug: .slug,
-        version: .version // null,
-        category: (.categories[0].name // "Unknown"),
-        confidence: .confidence,
-        source: "wappalyzer"
-      })
-    ]
-  }' "$input_file"
-}
+# The helper normalizes output to the common schema automatically
+wappalyzer-helper.sh detect https://example.com --output results.json
 ```
+
+The helper script handles detection, normalization, and error handling internally. See `.agents/scripts/wappalyzer-helper.sh` for the full implementation.
 
 ## Troubleshooting
 
@@ -251,17 +193,18 @@ export CHROME_BIN=/path/to/chrome
 
 ### Timeout Errors
 
-Increase `--max-wait` for slow sites:
+If detection times out on slow sites, the wrapper script has built-in timeout handling. For manual runs:
 
 ```bash
-wappalyzer https://slow-site.com --max-wait=15000
+# The helper handles timeouts internally
+wappalyzer-helper.sh detect https://slow-site.com
 ```
 
 ### Detection Accuracy
 
-- **Probe mode** (`--probe`): Checks additional endpoints like `/robots.txt`, `/sitemap.xml`
-- **Recursive mode** (`--recursive`): Analyzes multiple pages for better coverage
-- **Confidence threshold**: Filter results by confidence score (e.g., `confidence >= 75`)
+- The `@ryntab/wappalyzer-node` fork probes additional endpoints automatically
+- Filter results by confidence score (e.g., `confidence >= 75`) in post-processing
+- Multiple page analysis improves coverage
 
 ### Rate Limiting
 
@@ -269,7 +212,7 @@ For bulk analysis, add delays between requests:
 
 ```bash
 for url in $(cat urls.txt); do
-  wappalyzer "$url" --format=json > "results/${url//\//_}.json"
+  wappalyzer-helper.sh detect "$url" --output "results/$(echo "$url" | tr '/' '_').json"
   sleep 2
 done
 ```
