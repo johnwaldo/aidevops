@@ -44,7 +44,10 @@ readonly DEFAULT_CURRENCY="GBP"
 
 # Ensure workspace exists
 ensure_workspace() {
-	mkdir -p "$QF_WORKSPACE" 2>/dev/null || true
+	if ! mkdir -p "$QF_WORKSPACE" 2>/dev/null; then
+		print_error "Failed to create workspace: ${QF_WORKSPACE}"
+		return 1
+	fi
 	return 0
 }
 
@@ -112,17 +115,24 @@ generate_supplier_instructions() {
 		return 0
 	fi
 
+	# Serialize supplier name to valid JSON to prevent malformed payloads
+	local supplier_name_json
+	supplier_name_json="$(SUPPLIER_NAME="$supplier_name" python3 -c 'import json, os; print(json.dumps(os.environ["SUPPLIER_NAME"]))')" || {
+		print_error "Failed to serialize supplier name to JSON"
+		return 1
+	}
+
 	echo "  1. Search for supplier:"
-	echo "     quickfile_supplier_search({ \"searchTerm\": \"${supplier_name}\" })"
+	echo "     quickfile_supplier_search({ \"searchTerm\": ${supplier_name_json} })"
 	echo ""
 	echo "  2. If found: use the returned SupplierId"
 	echo "     If NOT found:"
 	if [[ "$auto_create" == "true" ]]; then
 		echo "     quickfile_supplier_create({"
-		echo "       \"companyName\": \"${supplier_name}\""
+		echo "       \"companyName\": ${supplier_name_json}"
 		echo "     })"
 	else
-		echo "     Ask user whether to create supplier \"${supplier_name}\" or map to existing"
+		echo "     Ask user whether to create supplier ${supplier_name_json} or map to existing"
 	fi
 	return 0
 }
@@ -211,30 +221,19 @@ else:
         'vatPercentage': '20'
     })
 
-# Output the MCP call
-print('  quickfile_purchase_create({')
-if supplier_id:
-    print(f'    \"supplierId\": \"{supplier_id}\",')
-else:
-    print(f'    \"supplierId\": \"<from supplier lookup>\",')
+# Build the request object and serialize via json.dumps for safe output
+request = {
+    'supplierId': supplier_id or '<from supplier lookup>',
+    'issueDate': inv_date,
+    'currency': currency,
+    'lines': lines,
+}
 if inv_ref:
-    print(f'    \"supplierRef\": \"{inv_ref}\",')
-print(f'    \"issueDate\": \"{inv_date}\",')
+    request['supplierRef'] = inv_ref
 if due_date:
-    print(f'    \"dueDate\": \"{due_date}\",')
-print(f'    \"currency\": \"{currency}\",')
-print(f'    \"lines\": [')
-for i, line in enumerate(lines):
-    comma = ',' if i < len(lines) - 1 else ''
-    print(f'      {{')
-    print(f'        \"description\": \"{line[\"description\"]}\",')
-    print(f'        \"quantity\": {line[\"quantity\"]},')
-    print(f'        \"unitCost\": {line[\"unitCost\"]},')
-    print(f'        \"nominalCode\": \"{line[\"nominalCode\"]}\",')
-    print(f'        \"vatPercentage\": \"{line[\"vatPercentage\"]}\"')
-    print(f'      }}{comma}')
-print(f'    ]')
-print(f'  }})')
+    request['dueDate'] = due_date
+
+print(f'  quickfile_purchase_create({json.dumps(request, indent=4, ensure_ascii=False)})')
 print()
 print(f'  Summary: {supplier} | {inv_date} | {currency} {total:.2f} (net {subtotal:.2f} + VAT {vat:.2f})')
 " 2>/dev/null || {
@@ -450,6 +449,9 @@ cmd_batch_record() {
 	if [[ "$dry_run" == "true" ]]; then
 		print_info "[DRY RUN - no changes were made]"
 	fi
+	if [[ "$failed" -gt 0 ]]; then
+		return 1
+	fi
 	return 0
 }
 
@@ -598,33 +600,39 @@ parse_args() {
 			shift
 			;;
 		--nominal)
-			nominal_override="${2:-}"
-			shift 2 || {
-				print_error "Missing value for --nominal"
+			local nominal_val="${2:-}"
+			if [[ -z "$nominal_val" ]] || [[ "$nominal_val" == -* ]]; then
+				print_error "--nominal requires a non-empty value (got: '${nominal_val}')"
 				return 1
-			}
+			fi
+			nominal_override="$nominal_val"
+			shift 2
 			;;
 		--supplier-id)
-			supplier_id="${2:-}"
-			shift 2 || {
-				print_error "Missing value for --supplier-id"
+			local sid_val="${2:-}"
+			if [[ -z "$sid_val" ]] || [[ "$sid_val" == -* ]]; then
+				print_error "--supplier-id requires a non-empty value (got: '${sid_val}')"
 				return 1
-			}
+			fi
+			supplier_id="$sid_val"
+			shift 2
 			;;
 		--auto-supplier)
 			auto_supplier="true"
 			shift
 			;;
 		--currency)
-			currency_override="${2:-}"
-			shift 2 || {
-				print_error "Missing value for --currency"
+			local currency_val="${2:-}"
+			if [[ -z "$currency_val" ]] || [[ "$currency_val" == -* ]]; then
+				print_error "--currency requires a non-empty value (got: '${currency_val}')"
 				return 1
-			}
+			fi
+			currency_override="$currency_val"
+			shift 2
 			;;
 		*)
-			print_warning "Unknown option: $1"
-			shift
+			print_error "Unknown option: $1"
+			return 1
 			;;
 		esac
 	done
