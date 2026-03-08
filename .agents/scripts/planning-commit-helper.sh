@@ -345,6 +345,7 @@ next_task_id() {
 	local claim_rc=0
 	local claim_stderr
 	claim_stderr=$(mktemp)
+	trap 'rm -f "$claim_stderr"' RETURN
 	claim_output=$("$claim_script" "${claim_args[@]}" 2>"$claim_stderr") || claim_rc=$?
 
 	# Exit code 1 = hard error

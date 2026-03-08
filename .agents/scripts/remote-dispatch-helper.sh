@@ -480,7 +480,7 @@ cmd_dispatch() {
 	local remote_log_file="${remote_work_dir}/worker.log"
 
 	_log_info "Creating remote workspace: $remote_work_dir"
-	if ! "${ssh_cmd[@]}" "mkdir -m 700 -p '${remote_work_dir}'" 2>/dev/null; then
+	if ! "${ssh_cmd[@]}" "mkdir -p '${REMOTE_WORK_BASE}' '${remote_work_dir}' && chmod 700 '${REMOTE_WORK_BASE}' '${remote_work_dir}'" 2>/dev/null; then
 		_log_error "Failed to create remote workspace"
 		return 1
 	fi
@@ -670,6 +670,7 @@ WRAPPER_EOF
     "host": "${host}",
     "address": "${address}",
     "transport": "${transport}",
+    "user": "${user}",
     "container": "${container_name}",
     "remote_pid": "${remote_pid}",
     "remote_work_dir": "${remote_work_dir}",
@@ -719,6 +720,10 @@ cmd_logs() {
 			shift
 			;;
 		--tail)
+			if [[ ! "${2:-}" =~ ^[0-9]+$ ]]; then
+				_log_error "--tail requires a non-negative integer"
+				return 1
+			fi
 			tail_lines="$2"
 			shift 2
 			;;
@@ -736,8 +741,9 @@ cmd_logs() {
 
 	if [[ -f "$meta_file" ]]; then
 		remote_log_file=$(jq -r '.remote_log_file' "$meta_file" || echo "$remote_log_file")
-		address=$(jq -r '.address' "$meta_file" || echo "")
-		transport=$(jq -r '.transport' "$meta_file" || echo "ssh")
+		address=$(jq -r '.address // empty' "$meta_file" || echo "")
+		transport=$(jq -r '.transport // "ssh"' "$meta_file" || echo "ssh")
+		user=$(jq -r '.user // empty' "$meta_file" || echo "")
 	fi
 
 	# Resolve host if address not from metadata
@@ -811,16 +817,16 @@ cmd_status() {
 		return 1
 	fi
 
-	local remote_pid address transport remote_log_file container dispatched_at
+	local remote_pid address transport user remote_log_file container dispatched_at
 	remote_pid=$(jq -r '.remote_pid' "$meta_file")
 	address=$(jq -r '.address' "$meta_file")
 	transport=$(jq -r '.transport' "$meta_file")
+	user=$(jq -r '.user // empty' "$meta_file" || echo "")
 	remote_log_file=$(jq -r '.remote_log_file' "$meta_file")
 	container=$(jq -r '.container' "$meta_file")
 	dispatched_at=$(jq -r '.dispatched_at' "$meta_file")
 
 	# Build SSH command
-	local user=""
 	local -a ssh_cmd=()
 	while IFS= read -r line; do
 		ssh_cmd+=("$line")
@@ -908,18 +914,19 @@ cmd_cleanup() {
 
 	# Read metadata
 	local meta_file="${REMOTE_LOG_DIR}/${task_id}-remote.json"
-	local remote_pid="" address="" transport="" remote_work_dir=""
+	local remote_pid="" address="" transport="" user="" remote_work_dir=""
 
 	if [[ -f "$meta_file" ]]; then
 		remote_pid=$(jq -r '.remote_pid' "$meta_file")
 		address=$(jq -r '.address' "$meta_file")
 		transport=$(jq -r '.transport' "$meta_file")
+		user=$(jq -r '.user // empty' "$meta_file" || echo "")
 		remote_work_dir=$(jq -r '.remote_work_dir' "$meta_file")
 	else
 		# Resolve from host config
 		local host_info
 		host_info=$(_resolve_host "$host")
-		IFS='|' read -r address transport _ _ <<<"$host_info"
+		IFS='|' read -r address transport _ user <<<"$host_info"
 		remote_work_dir="${REMOTE_WORK_BASE}/${task_id}"
 	fi
 
@@ -927,7 +934,7 @@ cmd_cleanup() {
 	local -a ssh_cmd=()
 	while IFS= read -r line; do
 		ssh_cmd+=("$line")
-	done < <(_build_ssh_cmd "$address" "$transport" "")
+	done < <(_build_ssh_cmd "$address" "$transport" "$user")
 
 	# Kill remote process if still running
 	if [[ -n "$remote_pid" ]]; then
@@ -1013,10 +1020,10 @@ main() {
 	add) cmd_add "$@" ;;
 	remove) cmd_remove "$@" ;;
 	check) cmd_check "$@" ;;
-	dispatch) cmd_dispatch "$@" ;;
+	dispatch | dispatch-container) cmd_dispatch "$@" ;;
 	logs) cmd_logs "$@" ;;
 	status) cmd_status "$@" ;;
-	cleanup) cmd_cleanup "$@" ;;
+	cleanup | cleanup-container) cmd_cleanup "$@" ;;
 	help | --help | -h) cmd_help ;;
 	*)
 		_log_error "Unknown command: $command"

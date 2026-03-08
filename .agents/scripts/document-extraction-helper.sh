@@ -517,6 +517,15 @@ resolve_llm_backend() {
 	local anthropic_model="${DOCEXTRACT_ANTHROPIC_MODEL:-claude-sonnet-4-6}"
 	local ollama_model="${DOCEXTRACT_OLLAMA_MODEL:-llama3.2}"
 
+	# Basic model name sanity check (no spaces, no shell metacharacters)
+	local model_var
+	for model_var in "$gemini_model" "$openai_model" "$anthropic_model" "$ollama_model"; do
+		if [[ "$model_var" =~ [[:space:]\;\|\&\$] ]]; then
+			print_error "Invalid model identifier '${model_var}': contains disallowed characters"
+			return 1
+		fi
+	done
+
 	case "$privacy" in
 	local)
 		if command -v ollama &>/dev/null; then

@@ -157,8 +157,8 @@ EOF
 
 	# Check for superseded entries that may be obsolete
 	local superseded_count
-	superseded_count=$(db "$MEMORY_DB" "SELECT COUNT(*) FROM learning_relations WHERE relation_type = 'updates';")
-	if [[ "$superseded_count" -gt 0 ]]; then
+	superseded_count=$(db "$MEMORY_DB" "SELECT COUNT(*) FROM learning_relations WHERE relation_type = 'updates';") || log_warn "Failed to query superseded count"
+	if [[ "${superseded_count:-0}" -gt 0 ]]; then
 		log_info "$superseded_count memories have been superseded by newer versions"
 	fi
 

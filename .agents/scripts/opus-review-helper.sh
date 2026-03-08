@@ -54,7 +54,7 @@ _ensure_state_dir() {
 _get_last_run() {
 	local val
 	if [[ -f "$STATE_FILE" ]]; then
-		val="$(cat "$STATE_FILE")" || val="0"
+		val="$(<"$STATE_FILE")"
 	else
 		val="0"
 	fi
