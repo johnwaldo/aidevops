@@ -93,17 +93,26 @@ CREATE TABLE IF NOT EXISTS learning_relations (
 
 CREATE TABLE IF NOT EXISTS memory_consolidations (
     id TEXT PRIMARY KEY,
-    source_memory_ids TEXT NOT NULL,
-    insight_memory_id TEXT DEFAULT NULL,
-    insight_summary TEXT NOT NULL,
-    model_used TEXT DEFAULT 'haiku',
+    source_ids TEXT NOT NULL,
+    insight TEXT NOT NULL,
+    connections TEXT NOT NULL DEFAULT '[]',
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
-CREATE INDEX IF NOT EXISTS idx_consolidations_created ON memory_consolidations(created_at);
+CREATE INDEX IF NOT EXISTS idx_consolidations_created ON memory_consolidations(created_at DESC);
 EOF
 
 	echo "$test_dir"
 	return 0
+}
+
+#######################################
+# Generate a memory ID matching production format: mem_YYYYMMDDHHMMSS_hex
+#######################################
+generate_mem_id() {
+	local index="$1"
+	local ts
+	ts=$(date -u +"%Y%m%d%H%M%S")
+	printf 'mem_%s_%04x' "$ts" "$index"
 }
 
 #######################################
@@ -116,7 +125,7 @@ seed_memories() {
 	local i
 	for i in $(seq 1 "$count"); do
 		local mem_id
-		mem_id="mem_test_$(printf '%03d' "$i")"
+		mem_id=$(generate_mem_id "$i")
 		local content="Test memory content number $i with enough characters to pass the length filter for consolidation testing"
 		sqlite3 "$test_db" "INSERT INTO learnings (id, session_id, content, type, tags, confidence, created_at, event_date, project_path, source) VALUES ('$mem_id', 'test-session', '$content', 'WORKING_SOLUTION', 'test', 'medium', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), '', 'test');"
 	done
@@ -144,10 +153,10 @@ test_table_creation() {
 	# Verify schema has expected columns
 	local col_count
 	col_count=$(sqlite3 "$test_db" "SELECT COUNT(*) FROM pragma_table_info('memory_consolidations');")
-	if [[ "$col_count" == "6" ]]; then
-		pass "memory_consolidations has 6 columns"
+	if [[ "$col_count" == "5" ]]; then
+		pass "memory_consolidations has 5 columns"
 	else
-		fail "memory_consolidations has 6 columns" "got $col_count"
+		fail "memory_consolidations has 5 columns" "got $col_count"
 	fi
 	TESTS_RUN=$((TESTS_RUN + 1))
 
@@ -235,7 +244,10 @@ test_consolidation_tracking() {
 	seed_memories "$test_db" 5
 
 	# Simulate a consolidation run by inserting a record that covers all 5 memories
-	sqlite3 "$test_db" "INSERT INTO memory_consolidations (id, source_memory_ids, insight_memory_id, insight_summary, model_used) VALUES ('cons_test_001', 'mem_test_001,mem_test_002,mem_test_003,mem_test_004,mem_test_005', NULL, 'Test consolidation', 'haiku');"
+	# Build source_ids JSON array from the seeded memory IDs
+	local source_ids_json
+	source_ids_json=$(sqlite3 "$test_db" "SELECT json_group_array(id) FROM learnings;")
+	sqlite3 "$test_db" "INSERT INTO memory_consolidations (id, source_ids, insight, connections) VALUES ('cons_test_001', '$source_ids_json', 'Test consolidation insight', '[]');"
 
 	# Now check unconsolidated count — should be 0 since all are tracked
 	local unconsolidated
@@ -248,7 +260,7 @@ AND length(l.content) >= 20
 AND l.id NOT IN (
     SELECT DISTINCT value
     FROM memory_consolidations mc,
-         json_each('["' || replace(mc.source_memory_ids, ',', '","') || '"]')
+         json_each(mc.source_ids)
 );
 EOF
 	)
@@ -348,13 +360,12 @@ EOF
 	sqlite3 "$test_db" <<'EOF'
 CREATE TABLE IF NOT EXISTS memory_consolidations (
     id TEXT PRIMARY KEY,
-    source_memory_ids TEXT NOT NULL,
-    insight_memory_id TEXT DEFAULT NULL,
-    insight_summary TEXT NOT NULL,
-    model_used TEXT DEFAULT 'haiku',
+    source_ids TEXT NOT NULL,
+    insight TEXT NOT NULL,
+    connections TEXT NOT NULL DEFAULT '[]',
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
-CREATE INDEX IF NOT EXISTS idx_consolidations_created ON memory_consolidations(created_at);
+CREATE INDEX IF NOT EXISTS idx_consolidations_created ON memory_consolidations(created_at DESC);
 EOF
 
 	local after
@@ -474,10 +485,10 @@ test_integration_llm_call() {
 			pass "integration: $derives_count derives relation(s) created"
 		else
 			# It's valid for the LLM to find no patterns — the consolidation record
-			# with NULL insight_memory_id is the "no patterns found" case
-			local null_insights
-			null_insights=$(sqlite3 "$test_db" "SELECT COUNT(*) FROM memory_consolidations WHERE insight_memory_id IS NULL;")
-			if [[ "$null_insights" -gt 0 ]]; then
+			# with empty connections is the "no patterns found" case
+			local empty_connections
+			empty_connections=$(sqlite3 "$test_db" "SELECT COUNT(*) FROM memory_consolidations WHERE connections = '[]';")
+			if [[ "$empty_connections" -gt 0 ]]; then
 				pass "integration: LLM found no patterns (valid outcome)"
 			else
 				fail "integration: derives relations created" "got 0"

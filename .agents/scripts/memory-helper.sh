@@ -359,7 +359,7 @@ main() {
 			--quiet | -q) insights_args+=("--quiet") ;;
 			esac
 		done
-		"$audit_script" "${insights_args[@]}"
+		AIDEVOPS_MEMORY_DIR="$MEMORY_DIR" "$audit_script" "${insights_args[@]}"
 		;;
 	export) cmd_export "$@" ;;
 	graduate)
@@ -370,7 +370,7 @@ main() {
 			log_error "Graduate helper not found: $graduate_script"
 			return 1
 		fi
-		"$graduate_script" "$@"
+		AIDEVOPS_MEMORY_DIR="$MEMORY_DIR" "$graduate_script" "$@"
 		;;
 	namespaces)
 		# Support subcommands: namespaces [list|prune|migrate]

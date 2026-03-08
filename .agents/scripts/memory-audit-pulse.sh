@@ -364,6 +364,15 @@ Only include memory IDs that actually appear in the MEMORIES above."
 		return 0
 	fi
 
+	# Validate source_ids is a non-empty JSON array before persisting.
+	# An empty or malformed source_ids would record the consolidation but leave
+	# the same memories eligible forever (they'd never appear in the exclusion query).
+	if [[ -z "$source_ids" || "$source_ids" == "null" || "$source_ids" == "[]" ]]; then
+		[[ "$quiet" != "true" ]] && log_warn "Consolidate: LLM returned empty source_ids, skipping record"
+		echo "0"
+		return 0
+	fi
+
 	# Store the consolidation using printf to safely handle special characters.
 	# The insight/connections/source_ids come from LLM output — single-quote
 	# escaping alone is insufficient for arbitrary text. Use a heredoc with
@@ -736,7 +745,7 @@ cmd_status() {
 		local total
 		total=$(db "$MEMORY_DB" "SELECT COUNT(*) FROM learnings;" 2>/dev/null || echo "0")
 		local consolidations
-		consolidations=$(db "$MEMORY_DB" "SELECT COUNT(*) FROM memory_consolidations;" || echo "0")
+		consolidations=$(db "$MEMORY_DB" "SELECT COUNT(*) FROM memory_consolidations;" 2>/dev/null || echo "0")
 		local db_size
 		db_size=$(du -h "$MEMORY_DB" | cut -f1)
 		log_info "Memory DB: $total memories, $consolidations consolidations, $db_size"
