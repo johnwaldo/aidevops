@@ -722,12 +722,12 @@ _scan_single_pr() {
 		(if .state == "APPROVED" then
 			($body | test(
 				"\\bshould\\b|\\bconsider\\b|\\binstead\\b|\\bsuggest|\\brecommend|" +
-				"\\bwarning\\b|\\bcaution\\b|\\bavoid\\b|\\bdon.t\\b|\\bdo not\\b|" +
+				"\\bwarning\\b|\\bcaution\\b|\\bavoid\\b|\\b(don ?'?t|do not)\\b|" +
 				"\\bvulnerab|\\binsecure|\\binjection\\b|\\bxss\\b|\\bcsrf\\b|" +
 				"\\bnit:|\\btodo:|\\bfixme|\\bhardcoded|\\bdeprecated|" +
 				"\\brace.condition|\\bdeadlock|\\bleak|\\boverflow|" +
 				"\\bworkaround\\b|\\bhack\\b|" +
-				"```(suggestion|diff)"; "i"))
+				"```\\s*(suggestion|diff)"; "i"))
 		 else true
 		 end) |
 		select(.) |
