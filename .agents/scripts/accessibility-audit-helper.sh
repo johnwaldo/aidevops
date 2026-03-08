@@ -429,7 +429,7 @@ run_lighthouse_a11y() {
 		--chrome-flags="$chrome_flags" \
 		--form-factor="$form_factor" \
 		${screen_emulation:+"$screen_emulation"} \
-		--quiet 2>/dev/null; then
+		--quiet 2>>"$LOG_FILE"; then
 
 		print_success "Report saved: $report_file"
 		parse_lighthouse_a11y "$report_file"
