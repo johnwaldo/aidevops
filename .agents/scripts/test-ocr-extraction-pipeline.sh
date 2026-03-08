@@ -693,7 +693,7 @@ create_large_invoice() {
 		local amount=$((i * 10))
 		subtotal=$((subtotal + amount))
 		local vat_amt
-		vat_amt=$(echo "$amount * 0.2" | bc 2>/dev/null || echo "$((amount / 5))")
+		vat_amt=$(echo "$amount * 0.2" | bc || echo "$((amount / 5))")
 		if [[ -n "$items" ]]; then
 			items="${items},"
 		fi
