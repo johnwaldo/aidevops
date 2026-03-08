@@ -17,46 +17,62 @@
     "context7": {
       "type": "remote",
       "url": "https://mcp.context7.com/mcp",
-      "description": "Context7 MCP server for accessing latest documentation of development tools and frameworks"
+      "description": "Context7 MCP server for accessing latest documentation of development tools and frameworks",
+      "enabled": false
     },
     "augment-context-engine": {
       "command": "auggie",
-      "args": ["--mcp"],
-      "description": "Augment Context Engine for semantic codebase search"
+      "args": [
+        "--mcp"
+      ],
+      "description": "Augment Context Engine for semantic codebase search",
+      "enabled": false
     },
     "claude-code-mcp": {
       "command": "npx",
-      "args": ["-y", "@steipete/claude-code-mcp@latest"],
-      "description": "Claude Code one-shot execution MCP server"
+      "args": [
+        "-y",
+        "@steipete/claude-code-mcp@latest"
+      ],
+      "description": "Claude Code one-shot execution MCP server",
+      "enabled": false
     },
     "sentry": {
       "type": "remote",
       "url": "https://mcp.sentry.dev/mcp",
-      "description": "Sentry error tracking MCP (requires OAuth)"
+      "description": "Sentry error tracking MCP (requires OAuth)",
+      "enabled": false
     },
     "socket": {
       "type": "remote",
       "url": "https://mcp.socket.dev/",
-      "description": "Socket.dev dependency security scanning MCP"
+      "description": "Socket.dev dependency security scanning MCP",
+      "enabled": false
     },
     "gh_grep": {
       "type": "remote",
       "url": "https://mcp.grep.app",
-      "description": "GitHub code search via grep.app"
+      "description": "GitHub code search via grep.app",
+      "enabled": false
     },
     "google-analytics-mcp": {
       "command": "pipx",
-      "args": ["run", "analytics-mcp"],
+      "args": [
+        "run",
+        "analytics-mcp"
+      ],
       "env": {
         "GOOGLE_APPLICATION_CREDENTIALS": "YOUR_CREDENTIALS_JSON_PATH_HERE",
         "GOOGLE_PROJECT_ID": "YOUR_GCP_PROJECT_ID_HERE"
       },
-      "description": "Google Analytics MCP server for GA4 reporting (requires pipx and Google Cloud ADC)"
+      "description": "Google Analytics MCP server for GA4 reporting (requires pipx and Google Cloud ADC)",
+      "enabled": false
     },
     "cloudflare-api": {
       "type": "remote",
       "url": "https://mcp.cloudflare.com/mcp",
-      "description": "Cloudflare Code Mode MCP — Workers, D1, KV, R2, Pages, AI Gateway (OAuth on first connect)"
+      "description": "Cloudflare Code Mode MCP \u2014 Workers, D1, KV, R2, Pages, AI Gateway (OAuth on first connect)",
+      "enabled": false
     }
   }
 }

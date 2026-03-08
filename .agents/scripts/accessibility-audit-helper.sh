@@ -131,7 +131,7 @@ run_axe_audit() {
 	if axe "$url" \
 		--tags "$tags" \
 		--save "$report_file" \
-		--chrome-flags="--headless --no-sandbox --disable-gpu" 2>/dev/null; then
+		--chrome-flags="--headless --no-sandbox --disable-gpu" 2>>"$LOG_FILE"; then
 		axe_exit=0
 	else
 		axe_exit=$?
@@ -215,7 +215,7 @@ run_wave_audit() {
 	local response
 	response=$(curl -s -w "\n%{http_code}" \
 		"${WAVE_API_URL}?key=${WAVE_API_KEY}&url=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$url', safe=''))" 2>/dev/null || echo "$url")&reporttype=${report_type}" \
-		2>/dev/null) || {
+		2>>"$LOG_FILE") || {
 		print_error "WAVE API request failed"
 		return 1
 	}

@@ -187,12 +187,12 @@ extract_command() {
 		local value
 		value=$(python3 -c "
 import json, sys
-with open('$template_file') as f:
+with open(sys.argv[1]) as f:
     data = json.load(f)
-val = data.get('$key', None)
+val = data.get(sys.argv[2], None)
 if isinstance(val, str) and val.startswith('claude mcp'):
     print(val)
-" || true)
+" "$template_file" "$key" || true)
 		if [[ -n "$value" ]]; then
 			echo "$value"
 			return 0
@@ -210,7 +210,7 @@ generate_command_from_mcpservers() {
 	python3 -c "
 import json, sys
 
-with open('$template_file') as f:
+with open(sys.argv[1]) as f:
     data = json.load(f)
 
 servers = data.get('mcpServers', {})
@@ -243,7 +243,7 @@ for name, config in servers.items():
         print(f'claude mcp add-json {name} ' + \"'\" + json.dumps(entry, separators=(',', ':')) + \"'\")
     # Only generate for the first server entry
     break
-" || true
+" "$template_file" || true
 	return 0
 }
 

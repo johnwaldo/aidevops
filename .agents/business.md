@@ -15,6 +15,8 @@ subagents:
   - sales
   - marketing
   - legal
+  - general
+  - explore
 ---
 
 # Business - Company Orchestration Agent

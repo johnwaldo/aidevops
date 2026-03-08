@@ -96,7 +96,7 @@ parse_args() {
                 ;;
             --help|-h)
                 head -25 "$0" | tail -20
-                return 0
+                exit 0
                 ;;
             *)
                 log_error "Unknown option: $1"
