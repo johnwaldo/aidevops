@@ -56,11 +56,11 @@ wappalyzer-helper.sh detect https://example.com
 # Analyze a URL via helper script (recommended)
 wappalyzer-helper.sh detect https://example.com
 
-# Output JSON to file
-wappalyzer-helper.sh detect https://example.com --output results.json
+# Output JSON to file (use shell redirection)
+wappalyzer-helper.sh detect https://example.com > results.json
 
-# Compare two URLs
-wappalyzer-helper.sh compare https://example.com https://competitor.com
+# Use cached results (7-day TTL)
+wappalyzer-helper.sh detect-cached https://example.com
 ```
 
 ### Programmatic Usage
@@ -83,7 +83,9 @@ node .agents/scripts/wappalyzer-detect.mjs https://example.com
 
 ## Output Format
 
-Wappalyzer returns a structured JSON object:
+### Raw Library Output (Reference)
+
+The underlying `@ryntab/wappalyzer-node` library returns a nested JSON structure. The helper script (`wappalyzer-helper.sh detect`) transforms this to the common schema shown in the next section. This raw format is documented for reference when using the library directly:
 
 ```json
 {
@@ -168,8 +170,8 @@ The tech-stack-helper.sh orchestrator calls this provider via `wappalyzer-helper
 # Single-site detection (uses wappalyzer-detect.mjs internally)
 wappalyzer-helper.sh detect https://example.com
 
-# The helper normalizes output to the common schema automatically
-wappalyzer-helper.sh detect https://example.com --output results.json
+# Save normalized output to file (use shell redirection)
+wappalyzer-helper.sh detect https://example.com > results.json
 ```
 
 The helper script handles detection, normalization, and error handling internally. See `.agents/scripts/wappalyzer-helper.sh` for the full implementation.
@@ -202,7 +204,7 @@ wappalyzer-helper.sh detect https://slow-site.com
 
 ### Detection Accuracy
 
-- The `@ryntab/wappalyzer-node` fork probes additional endpoints automatically
+- The `@ryntab/wappalyzer-node` fork analyzes the provided URL and optionally uses Puppeteer-based page loading to detect assets the page itself triggers
 - Filter results by confidence score (e.g., `confidence >= 75`) in post-processing
 - Multiple page analysis improves coverage
 
@@ -212,7 +214,7 @@ For bulk analysis, add delays between requests:
 
 ```bash
 for url in $(cat urls.txt); do
-  wappalyzer-helper.sh detect "$url" --output "results/$(echo "$url" | tr '/' '_').json"
+  wappalyzer-helper.sh detect "$url" > "results/$(echo -n "$url" | shasum -a 256 | cut -d' ' -f1).json"
   sleep 2
 done
 ```
