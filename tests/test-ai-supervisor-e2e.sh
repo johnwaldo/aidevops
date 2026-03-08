@@ -60,21 +60,27 @@ done
 
 # Test helpers
 pass() {
+	local msg="$1"
 	PASS=$((PASS + 1))
 	TOTAL=$((TOTAL + 1))
-	echo "  PASS: $1"
+	echo "  PASS: $msg"
+	return 0
 }
 
 fail() {
+	local msg="$1"
 	FAIL=$((FAIL + 1))
 	TOTAL=$((TOTAL + 1))
-	echo "  FAIL: $1"
+	echo "  FAIL: $msg"
+	return 0
 }
 
 skip() {
+	local msg="$1"
 	SKIP=$((SKIP + 1))
 	TOTAL=$((TOTAL + 1))
-	echo "  SKIP: $1"
+	echo "  SKIP: $msg"
+	return 0
 }
 
 # Temp directory for test artifacts
