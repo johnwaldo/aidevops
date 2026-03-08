@@ -246,41 +246,42 @@ cmd_enhance() {
 
 	load_api_key || return 1
 
-	# Build request body
-	local body="{\"img_url\": \"${img_url}\""
+	# Build request body safely using jq to prevent JSON injection
+	local body
+	body=$(jq -n \
+		--arg img_url "${img_url}" \
+		--arg model_version "${model_version}" \
+		--arg enhancement_mode "${enhancement_mode}" \
+		--arg enhancement_type "${enhancement_type}" \
+		--argjson skin_refinement_level "${skin_refinement_level}" \
+		--argjson mask_expand "${mask_expand}" \
+		'{
+			img_url: $img_url,
+			model_version: $model_version,
+			enhancementMode: $enhancement_mode,
+			enhancementType: $enhancement_type,
+			skin_refinement_level: $skin_refinement_level,
+			mask_expand: $mask_expand
+		}')
 
 	if [[ -n "${webhook_url}" ]]; then
-		body="${body}, \"webhookUrl\": \"${webhook_url}\""
+		body=$(echo "${body}" | jq --arg v "${webhook_url}" '. + {webhookUrl: $v}')
 	fi
-
-	body="${body}, \"model_version\": \"${model_version}\""
-	body="${body}, \"enhancementMode\": \"${enhancement_mode}\""
-	body="${body}, \"enhancementType\": \"${enhancement_type}\""
-	body="${body}, \"skin_refinement_level\": ${skin_refinement_level}"
-
 	if [[ -n "${skin_realism_level}" ]]; then
-		body="${body}, \"skin_realism_Level\": ${skin_realism_level}"
+		body=$(echo "${body}" | jq --argjson v "${skin_realism_level}" '. + {skin_realism_Level: $v}')
 	fi
-
 	if [[ -n "${portrait_depth}" ]]; then
-		body="${body}, \"portrait_depth\": ${portrait_depth}"
+		body=$(echo "${body}" | jq --argjson v "${portrait_depth}" '. + {portrait_depth: $v}')
 	fi
-
 	if [[ -n "${output_resolution}" ]]; then
-		body="${body}, \"output_resolution\": ${output_resolution}"
+		body=$(echo "${body}" | jq --argjson v "${output_resolution}" '. + {output_resolution: $v}')
 	fi
-
 	if [[ -n "${mask_image_url}" ]]; then
-		body="${body}, \"mask_image_url\": \"${mask_image_url}\""
+		body=$(echo "${body}" | jq --arg v "${mask_image_url}" '. + {mask_image_url: $v}')
 	fi
-
-	body="${body}, \"mask_expand\": ${mask_expand}"
-
 	if [[ -n "${extra_params}" ]]; then
-		body="${body}${extra_params}"
+		body=$(echo "${body}" | jq --argjson extra "${extra_params}" '. + $extra')
 	fi
-
-	body="${body}}"
 
 	print_info "Submitting skin enhancement request..."
 
@@ -373,13 +374,13 @@ cmd_upscale() {
 
 	load_api_key || return 1
 
-	local body="{\"img_url\": \"${img_url}\", \"mode\": \"${mode}\""
-
+	# Build request body safely using jq to prevent JSON injection
+	local body
+	body=$(jq -n --arg img_url "${img_url}" --arg mode "${mode}" \
+		'{img_url: $img_url, mode: $mode}')
 	if [[ -n "${webhook_url}" ]]; then
-		body="${body}, \"webhookUrl\": \"${webhook_url}\""
+		body=$(echo "${body}" | jq --arg v "${webhook_url}" '. + {webhookUrl: $v}')
 	fi
-
-	body="${body}}"
 
 	print_info "Submitting upscale request (${mode} mode)..."
 
@@ -466,13 +467,12 @@ cmd_upscale_general() {
 
 	load_api_key || return 1
 
-	local body="{\"img_url\": \"${img_url}\""
-
+	# Build request body safely using jq to prevent JSON injection
+	local body
+	body=$(jq -n --arg img_url "${img_url}" '{img_url: $img_url}')
 	if [[ -n "${webhook_url}" ]]; then
-		body="${body}, \"webhookUrl\": \"${webhook_url}\""
+		body=$(echo "${body}" | jq --arg v "${webhook_url}" '. + {webhookUrl: $v}')
 	fi
-
-	body="${body}}"
 
 	print_info "Submitting general upscale request..."
 
@@ -559,13 +559,12 @@ cmd_detailed() {
 
 	load_api_key || return 1
 
-	local body="{\"img_url\": \"${img_url}\""
-
+	# Build request body safely using jq to prevent JSON injection
+	local body
+	body=$(jq -n --arg img_url "${img_url}" '{img_url: $img_url}')
 	if [[ -n "${webhook_url}" ]]; then
-		body="${body}, \"webhookUrl\": \"${webhook_url}\""
+		body=$(echo "${body}" | jq --arg v "${webhook_url}" '. + {webhookUrl: $v}')
 	fi
-
-	body="${body}}"
 
 	print_info "Submitting detailed enhancement request..."
 
@@ -677,19 +676,21 @@ cmd_generate() {
 
 	load_api_key || return 1
 
-	local body="{\"model\": \"${model}\", \"prompt\": \"${prompt}\""
-
+	# Build request body safely using jq to prevent JSON injection
+	# Prompts routinely contain quotes — jq handles escaping correctly
+	local body
+	body=$(jq -n \
+		--arg model "${model}" \
+		--arg prompt "${prompt}" \
+		--arg generation_mode "${generation_mode}" \
+		--arg image_size "${image_size}" \
+		'{model: $model, prompt: $prompt, generation_mode: $generation_mode, image_size: $image_size}')
 	if [[ -n "${img_url}" ]]; then
-		body="${body}, \"img_url\": \"${img_url}\""
+		body=$(echo "${body}" | jq --arg v "${img_url}" '. + {img_url: $v}')
 	fi
-
 	if [[ -n "${webhook_url}" ]]; then
-		body="${body}, \"webhookUrl\": \"${webhook_url}\""
+		body=$(echo "${body}" | jq --arg v "${webhook_url}" '. + {webhookUrl: $v}')
 	fi
-
-	body="${body}, \"generation_mode\": \"${generation_mode}\""
-	body="${body}, \"image_size\": \"${image_size}\""
-	body="${body}}"
 
 	print_info "Submitting generation request (${model})..."
 
@@ -767,8 +768,12 @@ cmd_status() {
 
 	load_api_key || return 1
 
+	# Build request body safely using jq to prevent JSON injection
+	local body
+	body=$(jq -n --arg id "${request_id}" '{request_id: $id}')
+
 	local response
-	response=$(api_request POST "${api_path}/status" -d "{\"request_id\": \"${request_id}\"}")
+	response=$(api_request POST "${api_path}/status" -d "${body}")
 
 	echo "${response}" | jq . 2>/dev/null || echo "${response}"
 }

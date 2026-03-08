@@ -387,12 +387,13 @@ cmd_collect() {
 	while [[ "$has_more" == "true" && $page -lt $CODACY_MAX_PAGES ]]; do
 		page=$((page + 1))
 
-		# Build request body with cursor-based pagination
+		# Build request body with cursor-based pagination (jq for safe escaping)
 		local request_body
 		if [[ -n "$cursor" ]]; then
-			request_body="{\"limit\": ${CODACY_PAGE_SIZE}, \"cursor\": \"${cursor}\"}"
+			request_body=$(jq -nc --argjson limit "$CODACY_PAGE_SIZE" --arg cursor "$cursor" \
+				'{limit: $limit, cursor: $cursor}')
 		else
-			request_body="{\"limit\": ${CODACY_PAGE_SIZE}}"
+			request_body=$(jq -nc --argjson limit "$CODACY_PAGE_SIZE" '{limit: $limit}')
 		fi
 
 		local endpoint="/analysis/organizations/gh/${org}/repositories/${repo_name}/issues/search"
@@ -597,7 +598,12 @@ cmd_query() {
 				log_error "Missing value for --limit"
 				return 1
 			}
-			limit="$2"
+			if [[ "$2" =~ ^[0-9]+$ ]] && [[ "$2" -gt 0 && "$2" -le 10000 ]]; then
+				limit="$2"
+			else
+				log_error "Invalid limit value: $2 (must be a positive integer, max 10000)"
+				return 1
+			fi
 			shift 2
 			;;
 		*)

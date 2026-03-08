@@ -183,15 +183,18 @@ branch_was_pushed() {
 	if git config "branch.$branch.remote" &>/dev/null; then
 		return 0
 	fi
-	# Has remote tracking branch
-	if git show-ref --verify --quiet "refs/remotes/origin/$branch" 2>/dev/null; then
-		return 0
-	fi
+	# Has remote tracking branch on any remote (not just origin)
+	local remote
+	for remote in $(git remote 2>/dev/null); do
+		if git show-ref --verify --quiet "refs/remotes/${remote}/$branch" 2>/dev/null; then
+			return 0
+		fi
+	done
 	return 1
 }
 
 # Check if a stale remote branch exists for a branch name (t1060)
-# A "stale remote" means refs/remotes/origin/$branch exists but no local branch does.
+# A "stale remote" means refs/remotes/<remote>/$branch exists but no local branch does.
 # This typically happens when a branch was merged via PR (remote deleted) but the
 # local remote-tracking ref wasn't pruned, or when re-using a branch name.
 # Returns 0 if stale remote exists, 1 otherwise.
@@ -204,14 +207,24 @@ check_stale_remote_branch() {
 		return 1
 	fi
 
-	if ! git show-ref --verify --quiet "refs/remotes/origin/$branch" 2>/dev/null; then
+	# Check all remotes, not just origin (supports fork workflows)
+	local remote
+	local found_remote=""
+	for remote in $(git remote 2>/dev/null); do
+		if git show-ref --verify --quiet "refs/remotes/${remote}/$branch" 2>/dev/null; then
+			found_remote="$remote"
+			break
+		fi
+	done
+
+	if [[ -z "$found_remote" ]]; then
 		return 1
 	fi
 
 	# Remote ref exists without a local branch — check if it's merged
 	local default_branch
 	default_branch=$(get_default_branch)
-	if git branch -r --merged "$default_branch" 2>/dev/null | grep -q "origin/$branch$"; then
+	if git branch -r --merged "$default_branch" 2>/dev/null | grep -q "${found_remote}/$branch$"; then
 		echo "merged"
 	else
 		echo "unmerged"
