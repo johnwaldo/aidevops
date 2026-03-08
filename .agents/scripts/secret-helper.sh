@@ -72,8 +72,9 @@ resolve_credential_files() {
 	return 0
 }
 
-# Get a secret value from gopass (NEVER print to stdout in agent context)
-# This function is only used internally for subprocess injection
+# Get a secret value from gopass.
+# Used by cmd_get (direct output) and build_secret_env (subprocess injection).
+# Callers are responsible for deciding whether to expose the value to stdout.
 get_secret_value() {
 	local name="$1"
 	if has_gopass; then
