@@ -670,10 +670,10 @@ WRAPPER_EOF
 			_log_error "Failed to copy dispatch script into container: $container_name"
 			return 1
 		fi
-		# Run inside the container and capture the container-side PID
+		# Run without -d so nohup/& properly backgrounds and captures the docker exec PID
 		remote_pid=$("${ssh_cmd[@]}" "
-			docker exec -d '${container_name}' bash '${remote_wrapper}'
-			docker exec '${container_name}' bash -c 'pgrep -f \"${remote_wrapper}\" | tail -1'
+			nohup docker exec '${container_name}' bash '${remote_wrapper}' >> '${remote_log_file}' 2>&1 &
+			echo \$!
 		" 2>/dev/null)
 	else
 		# Dispatch directly on the remote host
