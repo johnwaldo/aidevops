@@ -41,9 +41,28 @@ MAX_WORKERS=$(cat ~/.aidevops/logs/pulse-max-workers 2>/dev/null || echo 4)
 # Count running workers (only .opencode binaries, not node launchers)
 WORKER_COUNT=$(ps axo command | grep '/full-loop' | grep '\.opencode' | grep -v grep | wc -l | tr -d ' ')
 AVAILABLE=$((MAX_WORKERS - WORKER_COUNT))
+
+# Priority-class allocations (t1423) — read from pre-fetched state
+# The "Priority-Class Worker Allocations" section in the pre-fetched state
+# shows PRODUCT_MIN and TOOLING_MAX. Read these values:
+PRODUCT_MIN=$(grep '^PRODUCT_MIN=' ~/.aidevops/logs/pulse-priority-allocations 2>/dev/null | cut -d= -f2 || echo 0)
+TOOLING_MAX=$(grep '^TOOLING_MAX=' ~/.aidevops/logs/pulse-priority-allocations 2>/dev/null | cut -d= -f2 || echo "$MAX_WORKERS")
 ```
 
 If `AVAILABLE <= 0`: you can still merge ready PRs, but don't dispatch new workers.
+
+### Priority-class enforcement (t1423)
+
+Worker slots are partitioned between **product** repos (`"priority": "product"` in repos.json) and **tooling** repos (`"priority": "tooling"`). Product repos get a guaranteed minimum share (default 60%) to prevent tooling hygiene from starving user-facing work.
+
+**Before dispatching each worker, apply this check:**
+
+1. Determine the target repo's priority class (from the pre-fetched state repo header or repos.json).
+2. Count running workers per class: scan the Active Workers section — match each worker's `--dir` path to a repo in repos.json to determine its class.
+3. **If dispatching a tooling worker:** check whether product-class workers are using fewer than `PRODUCT_MIN` slots. If `product_active < PRODUCT_MIN` AND product repos have pending work (open issues or failing PRs), the remaining product slots are **reserved** — skip the tooling dispatch and look for product work instead.
+4. **If dispatching a product worker:** always proceed — product has no ceiling (only a floor).
+5. **Exemptions:** Merges (priority 1) and CI-fix dispatches (priority 2) are exempt from class checks — they always proceed regardless of class.
+6. **Soft reservation:** When product repos have no pending work (no open issues, no failing-CI PRs, no orphaned PRs), their reserved slots become available for tooling. The reservation protects product work when it exists, not when it doesn't.
 
 ## Step 2: Use Pre-Fetched State
 
@@ -115,13 +134,56 @@ Then skip to the next PR. The next pulse cycle will retry the permission check �
 
 **For maintainer PRs (admin/maintain/write permission):**
 
-- **Green CI + at least one review posted + no blocking reviews** → merge: `gh pr merge <number> --repo <slug> --squash`. If the PR resolves an issue, the issue should be closed with a comment linking to the merged PR.
-  - **CRITICAL (t2839):** Before merging, always verify at least one review exists using `gh pr view <number> --repo <slug> --json reviews --jq '.reviews | length'`. This is the mandatory gate — no PR merges with zero reviews.
-  - If `review-bot-gate-helper.sh check <number> <slug>` is available, use it as an additional bot-activity signal. `PASS` confirms bots have reviewed but does NOT replace the formal review-count check above.
-  - `WAITING` only means "no known bot activity" — it does NOT mean zero reviews. When `WAITING` is returned, check the formal review count (the `gh pr view` command above). If count > 0, proceed to merge.
-  - `SKIP` means the PR has a `skip-review-gate` label — it bypasses the bot gate only, NOT the review count requirement.
-  - Skip the PR when the formal review count is 0, regardless of bot gate status.
-- **Green CI + zero reviews** → skip this cycle, but run `review-bot-gate-helper.sh request-retry <number> <slug>` to self-heal rate-limited bots. The helper checks whether bots posted rate-limit notices instead of real reviews and requests a retry if so (idempotent — safe to call every cycle). The next pulse will find the real review and merge normally. The formal review count gate still applies — this is recovery, not bypass.
+- **Green CI + review gate passed + no blocking reviews** → merge: `gh pr merge <number> --repo <slug> --squash`. If the PR resolves an issue, the issue should be closed with a comment linking to the merged PR.
+  - **Workflow file merge guard (t3934):** Before merging, check if the PR modifies `.github/workflows/` files. PRs that modify workflow files require the `workflow` scope on the GitHub OAuth token — without it, `gh pr merge` fails with a GraphQL error. Use the deterministic helper:
+
+    ```bash
+    source ~/.aidevops/agents/scripts/pulse-wrapper.sh || true
+    check_workflow_merge_guard <number> <slug>
+    wf_guard=$?
+    if [[ $wf_guard -eq 1 ]]; then
+      # Blocked — comment posted, skip merge this cycle
+      continue
+    fi
+    # wf_guard 0 or 2 = safe to proceed (no workflow files, has scope, or API error — fail open)
+    ```
+
+    If blocked, the comment tells the user to run `gh auth refresh -s workflow`. Once the scope is added, the next pulse cycle merges normally. If the PR already has a `needs-workflow-scope` label, skip the check — the comment was already posted.
+  - **Review gate (t2839, GH#3932):** Run `review-bot-gate-helper.sh check <number> <slug>` first, then check formal review count with `gh pr view <number> --repo <slug> --json reviews --jq '.reviews | length'`.
+  - **Merge conditions (any one is sufficient):**
+    1. Formal review count > 0 (at least one bot or human submitted a review) — merge.
+    2. Bot gate returns `PASS` (a bot posted a real review comment, even if GitHub didn't record it as a formal review) — merge.
+    3. Bot gate returns `PASS_RATE_LIMITED` (bots posted rate-limit notices proving they're configured, and the PR exceeded the grace period) — merge. This is the designed escape valve for systemic rate limiting (GH#3932). The rate-limit grace period (default 4h) provides sufficient time for bots to recover; if they haven't reviewed after 4h, the PR has been adequately delayed.
+    4. Bot gate returns `SKIP` (PR has `skip-review-gate` label) — merge (label is an explicit human override).
+  - **Do NOT merge when:** formal review count is 0 AND bot gate returns `WAITING` (bots haven't posted anything yet, or rate-limit grace period hasn't elapsed). Skip this PR and let `request-retry` handle recovery (see below).
+  - **Rationale for PASS_RATE_LIMITED (GH#3932):** The previous rule ("skip when formal review count is 0, regardless of bot gate status") created a deadlock: CodeRabbit rate-limits prevented formal reviews, and the hard review-count gate prevented merging, so PRs accumulated indefinitely. The PASS_RATE_LIMITED status was designed specifically for this scenario but was being overridden by the review-count gate. Now the two checks work together: the bot gate determines whether the PR has been adequately reviewed OR has waited long enough, and the formal review count is one input to that determination, not an independent hard gate.
+  - **Unresolved review suggestions check (pre-merge):** Before merging, check for unresolved inline review comments from bots. This prevents merging PRs where actionable feedback was posted but never addressed — the root cause of quality-debt backfill issues.
+
+    ```bash
+    # Fetch inline review comments from known bots that have suggestions
+    UNRESOLVED=$(gh api "repos/<slug>/pulls/<number>/comments" \
+      --jq '[.[] | select(
+        (.user.login | test("coderabbit|gemini-code-assist|copilot|augment"; "i")) and
+        (.body | test("```suggestion"; "i"))
+      )] | length')
+
+    if [[ "$UNRESOLVED" -gt 0 ]]; then
+      # Don't block — dispatch a worker to address the feedback before merging
+      echo "PR #<number> has $UNRESOLVED unresolved bot suggestion(s) — dispatching fix worker"
+      # Label the PR so the next cycle knows a fix is in progress
+      gh api --silent "repos/<slug>/issues/<number>/labels" \
+        -X POST -f 'labels[]=needs-review-fixes' 2>/dev/null || true
+      # Dispatch a worker to address the suggestions (counts against worker slots)
+      opencode run --dir <path> --title "PR #<number>: address review suggestions" \
+        "/full-loop Address unresolved review bot suggestions on PR #<number> (<pr_url>). Read the inline review comments, apply valid suggestions, dismiss invalid ones with a reply explaining why." &
+      sleep 2
+      # Skip merge this cycle — the fix worker will push, and the next pulse merges
+      continue
+    fi
+    ```
+
+    **Judgment call, not a hard block.** Not every bot suggestion is valid — bots hallucinate. The fix worker reads each suggestion, applies valid ones, and dismisses invalid ones with a reply. The goal is to prevent the pattern where feedback is silently ignored and becomes a quality-debt issue post-merge. If the PR already has the `needs-review-fixes` label (fix worker already dispatched), skip the check — the worker is handling it. If the PR has `skip-review-suggestions` label, bypass this check entirely (for cases where all suggestions were reviewed and intentionally declined).
+- **Green CI + bot gate returns WAITING** → skip this cycle, but run `review-bot-gate-helper.sh request-retry <number> <slug>` to self-heal rate-limited bots. The helper checks whether bots posted rate-limit notices instead of real reviews and requests a retry if so (idempotent — safe to call every cycle). The next pulse will either find a real review (merge via condition 1/2) or the grace period will elapse (merge via condition 3 PASS_RATE_LIMITED).
 - **Failing CI or changes requested** → before dispatching a fix worker, check whether this is a systemic failure (see "CI failure pattern detection" below). If systemic, skip the per-PR dispatch — the workflow-level issue covers it. If per-PR, dispatch a worker to fix it (counts against worker slots).
 
 **For all PRs (regardless of author):**
@@ -129,6 +191,34 @@ Then skip to the next PR. The next pulse cycle will retry the permission check �
 - **Open 6+ hours with no recent commits** → something is stuck. Comment on the PR, consider closing it and re-filing the issue.
 - **Two PRs targeting the same issue** → flag the duplicate by commenting on the newer one
 - **Recently closed without merge** → a worker failed. Look for patterns. If the same failure repeats, file an improvement issue.
+
+### PR salvage — recovering closed-unmerged work
+
+The pre-fetched state includes a "PR Salvage" section listing closed-unmerged PRs that still have branches with recoverable code. These represent **knowledge loss risk** — code that was written, reviewed, and possibly review-addressed but never landed on main.
+
+**How to act on salvageable PRs:**
+
+For each salvageable PR in the pre-fetched state:
+
+1. **Check the linked issue** — is it still open? If so, the work is still wanted.
+2. **Check the risk level:**
+   - **HIGH** (>500 lines with branch, or >100 lines without): Act immediately this cycle.
+   - **MEDIUM**: Act if worker slots are available after higher-priority work.
+   - **LOW** (<50 lines): Note for next cycle or skip.
+3. **Determine the best recovery action:**
+   - **Branch exists + review addressed + CI was passing (or only infra failures)** → reopen the PR: `gh pr reopen <number> --repo <slug>`. Then merge if CI is green, or dispatch a worker to rebase and fix conflicts.
+   - **Branch exists + needs work** → dispatch a worker to rebase the branch onto main and address outstanding review feedback. Use the existing PR number in the dispatch prompt so the worker pushes to the same branch.
+   - **Branch deleted** → the diff is still available via `gh pr diff <number> --repo <slug>`. Dispatch a worker to recreate the changes on a fresh branch. Include the PR URL in the dispatch prompt for context.
+4. **Comment on the PR** explaining the recovery action taken (audit trail).
+5. **Comment on the linked issue** if one exists, noting the recovery.
+
+**Guard rails:**
+
+- Do NOT reopen PRs that were intentionally declined (check for maintainer "declined" comments).
+- Do NOT reopen PRs that have been superseded by a merged PR covering the same work.
+- Do NOT reopen PRs from external contributors without maintainer approval — flag with `needs-maintainer-review` label instead.
+- Salvage recovery counts against worker slots like any other dispatch.
+- Priority: salvage HIGH-risk PRs at priority 2.5 (between "fix failing CI" and "dispatch new issues") — recovering near-complete work is higher-value than starting fresh.
 
 ### CI failure pattern detection (GH#2973)
 
@@ -196,14 +286,88 @@ Issues and PRs from non-maintainers (check `authorAssociation`: `NONE`, `FIRST_T
 
 - **Destructive behaviour reports** (aidevops deletes files, overwrites configs, breaks the user's setup) → valid bug, dispatch a fix. The fix should be "stop being destructive" (add a config toggle, preserve user files), not "add integration with their tool".
 - **Feature requests for third-party integrations** (add support for tool X, test against framework Y, bundle library Z) → label `needs-maintainer-review`, do NOT dispatch a worker. Comment acknowledging the request and explaining it needs maintainer decision on scope.
-- **PRs that add dependencies, integrations, or change architecture** → do NOT merge autonomously. Label `needs-maintainer-review`. These require explicit maintainer approval regardless of CI status.
+- **PRs that add dependencies, integrations, or change architecture** → do NOT merge autonomously. Label `needs-maintainer-review` (in addition to `external-contributor`). These require explicit maintainer approval regardless of CI status. The maintainer can comment `approved` or `declined: <reason>` — see "Comment-based approval" below.
 - **Bug fixes and documentation PRs** → normal review process, can be merged if CI passes and changes are scoped correctly.
 
 The principle: fix our bugs, but don't commit to supporting external tools without maintainer sign-off. Compatibility is best-effort, not guaranteed.
 
+### Comment-based approval for needs-maintainer-review items (t1421)
+
+Issues and PRs with the `needs-maintainer-review` label can be approved or declined by the maintainer commenting on the item instead of manually editing labels. This covers `simplification-debt` issues from `/code-simplifier`, external feature requests, and external contributor PRs. The pulse scans these comments each cycle.
+
+**How to scan:** For each open issue or PR with `needs-maintainer-review` in the pre-fetched state, fetch comments and check for approval/decline keywords from the repo maintainer:
+
+```bash
+# Get the maintainer for this repo
+MAINTAINER=$(jq -r '.initialized_repos[] | select(.slug == "<slug>") | .maintainer // empty' ~/.config/aidevops/repos.json)
+if [[ -z "$MAINTAINER" ]]; then
+  MAINTAINER=$(echo "<slug>" | cut -d/ -f1)
+fi
+
+# Fetch comments and check for maintainer approval/decline
+# Works for both issues and PRs (GitHub's issues API handles both)
+COMMENT_DATA=$(gh api "repos/<slug>/issues/<number>/comments" \
+  --jq "[.[] | select(.user.login == \"$MAINTAINER\")] | last | {body: .body, id: .id}")
+COMMENT_BODY=$(echo "$COMMENT_DATA" | jq -r '.body // empty' | tr '[:upper:]' '[:lower:]' | xargs)
+```
+
+**Three outcomes:**
+
+1. **Comment starts with `approved`** (case-insensitive) — the maintainer approves:
+
+For **issues** (simplification-debt, feature requests):
+
+```bash
+gh issue edit <number> --repo <slug> \
+  --remove-label "needs-maintainer-review" \
+  --add-label "auto-dispatch"
+gh issue comment <number> --repo <slug> \
+  --body "Maintainer approved via comment. Removed \`needs-maintainer-review\`, added \`auto-dispatch\`. Issue is now in the dispatch queue."
+```
+
+For **PRs** (external contributor PRs):
+
+```bash
+gh issue edit <number> --repo <slug> \
+  --remove-label "needs-maintainer-review"
+gh pr comment <number> --repo <slug> \
+  --body "Maintainer approved via comment. Removed \`needs-maintainer-review\`. PR is now eligible for merge (CI permitting)."
+```
+
+The PR then follows the normal merge flow — if CI is green and reviews pass, the pulse merges it this cycle or the next.
+
+2. **Comment starts with `declined`** (case-insensitive) — the maintainer rejects:
+
+For **issues**:
+
+```bash
+REASON=$(echo "$COMMENT_BODY" | sed -E 's/^declined:?\s*//')
+gh issue close <number> --repo <slug> \
+  -c "Closed per maintainer decision. Reason: ${REASON:-no reason given}"
+```
+
+For **PRs**:
+
+```bash
+REASON=$(echo "$COMMENT_BODY" | sed -E 's/^declined:?\s*//')
+gh pr close <number> --repo <slug> \
+  -c "Closed per maintainer decision. Reason: ${REASON:-no reason given}"
+```
+
+3. **No matching comment from maintainer** — skip, check again next cycle.
+
+**How to distinguish issues from PRs:** Check the pre-fetched state — PRs have a `headRefName` field, issues don't. Alternatively, use `gh api repos/<slug>/issues/<number> --jq '.pull_request // empty'` — non-empty means it's a PR.
+
+**Guard rails:**
+
+- Only process comments from the repo maintainer (from `repos.json` or slug owner). Ignore comments from bots, other contributors, or the agent itself.
+- Only check the maintainer's **most recent** comment — earlier comments may have been superseded.
+- This is additive — direct label manipulation still works. If the maintainer has already removed `needs-maintainer-review` via labels, the item won't appear in this scan.
+- Keep this lightweight — one API call per `needs-maintainer-review` item per cycle. These items are low-volume by design.
+
 ### Kill stuck workers
 
-Check `ps axo pid,etime,command | grep '/full-loop' | grep '\.opencode'`. Any worker running 3+ hours with no open PR is likely stuck. Kill it: `kill <pid>`. Comment on the issue explaining why. This frees a slot. If the worker has recent commits or an open PR with activity, leave it alone — it's making progress.
+Check `ps axo pid,etime,command | grep '/full-loop' | grep '\.opencode'`. Any worker running 3+ hours with no open PR is likely stuck. Kill it: `kill <pid>`. Comment on the issue with the full audit-quality fields (model, branch, reason, diagnosis, next action — see "Audit-quality state in issue and PR comments" below). This frees a slot. If the worker has recent commits or an open PR with activity, leave it alone — it's making progress.
 
 ### Struggle-ratio check (t1367)
 
@@ -220,6 +384,78 @@ The "Active Workers" section in the pre-fetched state includes a `struggle_ratio
 **Configuration** (env vars in pulse-wrapper.sh):
 - `STRUGGLE_RATIO_THRESHOLD` — ratio above which to flag (default: 30)
 - `STRUGGLE_MIN_ELAPSED_MINUTES` — minimum runtime before flagging (default: 30)
+
+### Model escalation after repeated failures (t1416)
+
+When a worker fails on an issue (killed for thrashing, PR closed without merge, or 0 commits after timeout), the supervisor must track the failure count and escalate the model tier after 2 failed attempts. Blindly re-dispatching at the same tier wastes compute — the t748 incident burned 7 workers over 30+ hours on a task that required codebase archaeology beyond sonnet's capability.
+
+**How to count failures:** Read the issue comments. Each kill/re-dispatch comment from the supervisor counts as one failure. Count comments matching patterns like "Worker killed", "Worker (PID", "Re-opening for dispatch", "Re-dispatching". If the count is >= 2, escalate.
+
+**Escalation tiers:**
+
+| Failures | Action |
+|----------|--------|
+| 0-1 | Dispatch at default tier (bundle default or sonnet) |
+| 2 | Escalate to opus: add `--model anthropic/claude-opus-4-6` to the dispatch command |
+| 3+ | Escalate to opus AND simplify scope — add a comment on the issue summarising what previous workers attempted and where they got stuck, so the next worker doesn't repeat the same analysis |
+
+**Override the no-model dispatch rule:** The default dispatch rule says "Do NOT add `--model`". This escalation rule overrides it — when failure count >= 2, you MUST add `--model anthropic/claude-opus-4-6`. The cost of one opus dispatch (~3x sonnet) is far less than the cost of 5+ failed sonnet dispatches. Do NOT post a separate escalation comment — the dispatch comment's "Attempt" field captures escalation context (e.g., "Attempt: 3 of 3 (escalated to opus after 2 failed sonnet attempts)").
+
+**This is a judgment call, not a hard threshold.** If the first failure was clearly a transient issue (OOM, network timeout, CI flake) rather than a capability gap, resetting the counter is appropriate. But if the worker thrashed with high struggle ratio and 0 commits, that's a capability signal — escalate.
+
+### Audit-quality state in issue and PR comments (t1416)
+
+Every comment the supervisor posts on an issue or PR must be **sufficient for a human or future agent to audit and understand the work without reading logs**. The issue timeline and PR comments are the primary audit trail — if the information isn't there, it's invisible.
+
+**Required fields in dispatch comments:**
+
+When dispatching a worker, comment on the issue with:
+
+```bash
+gh issue comment <number> --repo <slug> --body "Dispatching worker.
+- **Model**: <tier and full model ID, e.g., sonnet (anthropic/claude-sonnet-4-6)>
+- **Branch**: <branch name, e.g., fix/t748-ai-migration>
+- **Scope**: <1-line description of what the worker should do>
+- **Attempt**: <N of M, e.g., 1 of 1, or 3 of 3 (escalated to opus)>
+- **Direction**: <any specific guidance, e.g., 'focus on migration chain from PR #213'>"
+```
+
+**Required fields in kill/failure comments:**
+
+When killing a worker or closing a failed PR, comment with:
+
+```bash
+gh issue comment <number> --repo <slug> --body "Worker killed after <duration> with <N> commits (struggle_ratio: <ratio>).
+- **Model**: <tier used>
+- **Branch**: <branch name>
+- **Reason**: <why it was killed — thrashing, timeout, CI loop, etc.>
+- **Diagnosis**: <1-line hypothesis of what went wrong>
+- **Next action**: <re-dispatch at same tier / escalate to opus / needs manual review>"
+```
+
+**Required fields in merge/completion comments:**
+
+When merging a PR or closing an issue as done:
+
+```bash
+gh issue comment <number> --repo <slug> --body "Completed via PR #<N>.
+- **Model**: <tier that succeeded>
+- **Attempts**: <total attempts including failures>
+- **Duration**: <wall-clock from first dispatch to merge>"
+```
+
+**Why this matters:** Without these fields, auditing a task requires reading pulse logs, cross-referencing `ps` output timestamps, and guessing which model was used. The t748 incident had 7 kill comments that all said "Worker killed after Xh with 0 commits" but none recorded the model tier, making it impossible to determine whether escalation was attempted. Issue comments are the state dashboard — they must be self-contained.
+
+### Self-improvement on information gaps (t1416)
+
+When the supervisor encounters a situation where it cannot determine what happened (missing model tier, unclear failure reason, no branch name in comments, ambiguous state labels), this is an **information gap**. Information gaps cause audit failures and prevent effective re-dispatch.
+
+**Response:** File a self-improvement issue in the aidevops repo describing:
+1. What information was missing
+2. Where it should have been recorded
+3. What went wrong because it was missing (e.g., "could not determine if model was escalated, re-dispatched at same tier 5 more times")
+
+This is a one-time observation — don't file duplicate issues for the same gap. Check existing issues first: `gh issue list --repo <aidevops-slug> --search "information gap" --state open`.
 
 ### Task decomposition before dispatch (t1408.2)
 
@@ -313,7 +549,7 @@ sleep 2
 **Dispatch rules:**
 - ALWAYS use `opencode run` — NEVER `claude` or `claude -p`
 - Background with `&`, sleep 2 between dispatches
-- Do NOT add `--model` — let `/full-loop` use its default. Bundle presets (t1364.6) handle per-project model defaults automatically.
+- Do NOT add `--model` for first attempts — let `/full-loop` use its default. Bundle presets (t1364.6) handle per-project model defaults automatically. **Exception:** when escalating after 2+ failed attempts on the same issue, add `--model anthropic/claude-opus-4-6` (see "Model escalation after repeated failures" above).
 - Use `--dir <path>` from repos.json
 - Route non-code tasks with `--agent`: SEO, Content, Marketing, Business, Research (see AGENTS.md "Agent Routing")
 - **Bundle-aware agent routing (t1364.6):** Before dispatching, check if the target repo has a bundle with `agent_routing` overrides. Run `bundle-helper.sh get agent_routing <repo-path>` — if the task domain (code, seo, content, marketing) has a non-default agent, use `--agent <name>`. Example: a content-site bundle routes `marketing` tasks to the Marketing agent instead of Build+. Explicit `--agent` flags in the issue body always override bundle defaults.
@@ -407,10 +643,11 @@ batch-strategy-helper.sh validate --tasks "$TASKS_JSON"
 2. PRs with failing CI or review feedback → fix (uses a slot, but closer to done than new issues)
 3. Issues labelled `priority:high` or `bug`
 4. Active mission features (keeps multi-day projects moving — see Step 3.5)
-5. Product repos (`"priority": "product"` in repos.json) over tooling
+5. Product repos (`"priority": "product"` in repos.json) over tooling — **enforced by priority-class reservations (t1423)**. Product repos have `PRODUCT_MIN` reserved slots; tooling cannot consume them when product work is pending. See "Priority-class enforcement" in Step 1.
 6. Smaller/simpler tasks over large ones (faster throughput)
 7. `quality-debt` issues (unactioned review feedback from merged PRs)
-8. Oldest issues
+8. `simplification-debt` issues (human-approved simplification opportunities)
+9. Oldest issues
 
 ### Quality-debt concurrency cap (30%)
 
@@ -428,6 +665,85 @@ QUALITY_DEBT_MAX=$(( MAX_WORKERS * 30 / 100 ))
 ```
 
 If `QUALITY_DEBT_CURRENT >= QUALITY_DEBT_MAX`, do not dispatch more quality-debt issues this cycle.
+
+### Quality-debt PR blast radius cap (t1422)
+
+Quality-debt PRs that touch many files conflict with every other PR in flight. When multiple large-batch quality-debt PRs are created concurrently, they cascade into merge conflicts — each merge moves main, invalidating the next PR's base. This was observed in March 2026: 19 of 30 open PRs were conflicting, with individual PRs touching up to 69 files.
+
+**Rule: quality-debt PRs must touch at most 5 files.** This is a hard cap enforced by the worker (see `full-loop.md` "Quality-debt blast radius cap"). The pulse enforces it at dispatch time by scoping issue descriptions:
+
+1. **Per-file issues preferred.** When creating quality-debt issues (via `quality-feedback-helper.sh`, code-simplifier, or manual filing), create one issue per file or per tightly-coupled file group (max 5 files). An issue titled "Fix shellcheck violations in dispatch.sh" will produce a 1-file PR that conflicts with nothing. An issue titled "Fix shellcheck violations across 20 scripts" will produce a 20-file PR that conflicts with everything.
+
+2. **File-level dedup before dispatch.** Before dispatching a quality-debt worker, check whether any open PR already touches the same files. If overlap exists, skip the issue this cycle — the existing PR must merge first.
+
+   ```bash
+   # Get files that would be touched by this issue (from issue body or title)
+   # Then check open PRs for overlap
+   OPEN_PR_FILES=$(gh pr list --repo <slug> --state open --json number,files \
+     --jq '[.[].files[].path] | unique | .[]')
+
+   # If the issue mentions specific files, check for overlap
+   # This is a judgment call — read the issue body for file paths
+   # If overlap is found, skip: "Skipping quality-debt #NNN — files overlap with open PR #MMM"
+   ```
+
+3. **Serial merge for quality-debt.** Do not dispatch a second quality-debt worker for the same repo while a quality-debt PR is open and mergeable. Wait for the first to merge, then dispatch the next. This prevents the conflict cascade at the source. Feature PRs are unaffected — they touch different files by nature.
+
+   ```bash
+   # Check for open quality-debt PRs in this repo
+   OPEN_DEBT_PRS=$(gh pr list --repo <slug> --state open \
+     --json number,title,labels \
+     --jq '[.[] | select(.labels[]?.name == "quality-debt" or (.title | test("quality.debt|fix:.*batch|fix:.*harden"; "i")))] | length' \
+     || echo 0)
+
+   # If there's already an open quality-debt PR, skip dispatching more
+   if [[ "$OPEN_DEBT_PRS" -gt 0 ]]; then
+     echo "Skipping quality-debt dispatch — $OPEN_DEBT_PRS quality-debt PR(s) already open for <slug>"
+     # Focus on merging the existing PR instead
+   fi
+   ```
+
+**Why 5 files?** A 5-file PR has a ~10% chance of conflicting with another random 5-file PR in a 200-file repo. A 50-file PR has a ~95% chance. The conflict probability scales quadratically with file count — small PRs are exponentially safer.
+
+### Stale quality-debt PR cleanup
+
+When the pulse detects quality-debt PRs that have been `CONFLICTING` for 24+ hours, close them with a comment explaining they'll be superseded by smaller, atomic PRs:
+
+```bash
+# For each conflicting quality-debt PR older than 24 hours:
+gh pr close <number> --repo <slug> \
+  -c "Closing — this PR has merge conflicts and touches too many files (blast radius issue, see t1422). The underlying fixes will be re-created as smaller PRs (max 5 files each) to prevent conflict cascades."
+```
+
+After closing, ensure the corresponding issues are relabelled `status:available` so they re-enter the dispatch queue. The next dispatch cycle will create properly-scoped PRs.
+
+### Simplification-debt concurrency cap (10%)
+
+Issues labelled `simplification-debt` (created by `/code-simplifier` analysis, approved by a human) represent maintainability improvements that preserve all functionality and knowledge. These are the lowest-priority automated work -- post-deployment nice-to-haves.
+
+**Rule: simplification-debt issues may consume at most 10% of available worker slots** (minimum 1, but only when no higher-priority work exists). These issues share the combined debt cap with quality-debt -- total debt work (quality-debt + simplification-debt) should not exceed 30% of slots.
+
+```bash
+# Count active simplification-debt workers
+SIMPLIFICATION_DEBT_ACTIVE=$(gh issue list --repo <slug> --label "simplification-debt" --label "status:in-progress" --state open --json number --jq 'length' || echo 0)
+SIMPLIFICATION_DEBT_QUEUED=$(gh issue list --repo <slug> --label "simplification-debt" --label "status:queued" --state open --json number --jq 'length' || echo 0)
+SIMPLIFICATION_DEBT_CURRENT=$((SIMPLIFICATION_DEBT_ACTIVE + SIMPLIFICATION_DEBT_QUEUED))
+SIMPLIFICATION_DEBT_MAX=$(( MAX_WORKERS * 10 / 100 ))
+[[ "$SIMPLIFICATION_DEBT_MAX" -lt 1 ]] && SIMPLIFICATION_DEBT_MAX=1
+
+# Combined debt cap -- quality-debt + simplification-debt together
+# Recalculate quality-debt here so this snippet is self-contained
+QUALITY_DEBT_ACTIVE=$(gh issue list --repo <slug> --label "quality-debt" --label "status:in-progress" --state open --json number --jq 'length' || echo 0)
+QUALITY_DEBT_QUEUED=$(gh issue list --repo <slug> --label "quality-debt" --label "status:queued" --state open --json number --jq 'length' || echo 0)
+QUALITY_DEBT_CURRENT=$((QUALITY_DEBT_ACTIVE + QUALITY_DEBT_QUEUED))
+TOTAL_DEBT_CURRENT=$((QUALITY_DEBT_CURRENT + SIMPLIFICATION_DEBT_CURRENT))
+TOTAL_DEBT_MAX=$(( MAX_WORKERS * 30 / 100 ))
+[[ "$TOTAL_DEBT_MAX" -lt 1 ]] && TOTAL_DEBT_MAX=1
+```
+
+If `SIMPLIFICATION_DEBT_CURRENT >= SIMPLIFICATION_DEBT_MAX` or `TOTAL_DEBT_CURRENT >= TOTAL_DEBT_MAX`, do not dispatch more simplification-debt issues this cycle.
+
+**Codacy maintainability signal:** When Codacy reports a maintainability grade drop (B or below) for a repo, simplification-debt issues for that repo get a temporary priority boost -- treat them as priority 7 (same as quality-debt) until the grade recovers. Check the daily quality sweep comment on the persistent quality-review issue for Codacy grade data.
 
 **Label lifecycle** (for your awareness — workers manage their own transitions): `available` → `queued` (you dispatch) → `in-progress` (worker starts) → `in-review` (PR opened) → `done` (PR merged)
 
@@ -498,6 +814,61 @@ gh issue comment <issue_number> --repo <slug> --body "Re-opened for dispatch —
 - NEVER flag a PR that has the `persistent` label
 - NEVER flag a PR that has passing CI and approved reviews — it should be merged, not flagged (handle it in the PRs section above instead)
 - If uncertain whether a PR is truly orphaned, skip it — the next pulse is 2 minutes away
+
+### Repo Hygiene Triage (t1417)
+
+After processing PRs, issues, and orphaned PRs, check the **"Repo Hygiene"** section in the pre-fetched state. This section contains non-deterministic cleanup candidates that the shell layer could not handle automatically — they require your judgment.
+
+The shell layer already handled deterministic cleanup before you started:
+- Worktrees for merged/closed PRs → removed by `worktree-helper.sh clean --auto --force-merged`
+- Stashes whose content is already in HEAD → dropped by `stash-audit-helper.sh auto-clean`
+
+What remains in the hygiene section needs intelligence:
+
+**Orphan worktrees** (0 commits ahead of main, no PR, no active worker):
+
+These are typically branches created by workers that crashed or were killed before producing any commits. However, they could also be:
+- A user's manual experiment they intend to return to
+- A worker that was just dispatched and hasn't committed yet (check Active Workers)
+- A branch with uncommitted work that would be lost if removed
+
+**Assessment approach:**
+1. Cross-reference with Active Workers — if a worker is running on this branch, skip it
+2. Check if the worktree has uncommitted files (noted in the hygiene data as "N uncommitted files") — if dirty, flag but do NOT recommend removal
+3. If the worktree is clean (0 commits, 0 uncommitted files, no PR, no worker) AND the branch name matches a known task pattern (feature/tNNN, bugfix/*, etc.), it's likely a crashed worker — comment on the associated issue if one exists, noting the orphan branch
+4. If uncertain, skip — the next pulse is 2 minutes away
+
+**Do NOT auto-remove orphan worktrees.** Only flag them. The user or a future pulse with more context can decide. Post a comment on the repo's health issue if one exists, listing the orphan worktrees found.
+
+**Stale PRs** (failing CI, no progress):
+
+For each open PR in the pre-fetched state, check:
+- Has CI been failing for 7+ days? (Compare `updatedAt` with current time — if no commits pushed in 7 days and CI is FAIL, it's stale)
+- Is there an active worker? (Check Active Workers section)
+- Is there a `needs-review-fixes` label? (A fix worker may be dispatched)
+
+If a PR has been failing CI for 7+ days with no new commits and no active worker:
+1. Close the PR with a comment explaining why:
+
+```bash
+gh pr close <number> --repo <slug> --comment "Closing — CI has been failing for 7+ days with no new commits or active worker. The linked issue will be relabelled for re-dispatch. If this work is still viable, reopen the PR and push fixes."
+```
+
+2. Relabel the linked issue to `status:available` for re-dispatch
+3. Log the closure in your output
+
+**Uncommitted changes on main:**
+
+If the hygiene data shows uncommitted files on a repo's main branch, this is unusual — main should always be clean. Possible causes:
+- A stash pop that failed (conflict left working tree dirty)
+- Manual edits the user forgot to commit
+- A script that modified files without committing
+
+**Do NOT commit or discard these changes.** Flag them in your output so the user is aware. Example: "aidevops: 2 uncommitted files on main (loop-common.sh, worktree-helper.sh) — likely from a failed stash pop. Manual resolution needed."
+
+**Remaining stashes:**
+
+If the hygiene data shows stashes remaining after auto-clean, these contain changes NOT in HEAD (the safe ones were already dropped). Note the count in your output but take no action — stash management beyond safe-to-drop requires user judgment.
 
 ## Step 3.5: Mission Awareness
 
@@ -689,10 +1060,10 @@ Output a brief summary of what you did (past tense), then exit.
 3. **NEVER close an issue without a comment.** The comment must explain why and link to the PR(s) or evidence. Silent closes are audit failures.
 4. **NEVER use `claude` CLI.** Always `opencode run`.
 5. **NEVER include private repo names** in public issue titles/bodies/comments.
-6. **NEVER exceed MAX_WORKERS.** Count before dispatching.
+6. **NEVER exceed MAX_WORKERS or violate priority-class reservations.** Count before dispatching. Check class allocations (Step 1) — tooling workers must not consume product-reserved slots when product work is pending.
 7. **Do your job completely, then exit.** Don't loop or re-analyze — one pass through all repos, act on everything, exit.
 8. **NEVER create "pulse summary" or "supervisor log" issues.** The pulse runs every 2 minutes — creating an issue per cycle produces hundreds of spam issues per day. Your output text IS the log (it's captured by the wrapper to `~/.aidevops/logs/pulse.log`). The audit trail lives in PR/issue comments on the items you acted on, not in separate summary issues.
 9. **NEVER create an issue if one already exists for the same task ID.** Before `gh issue create`, check `gh issue list --repo <slug> --search "tNNN" --state all` to see if an issue with that task ID prefix already exists. If it does (open or closed), use the existing one — don't create a duplicate. This applies to both issue-sync-helper and manual issue creation.
 10. **NEVER ask the user anything.** You are headless. Decide and act.
-11. **NEVER close or modify issues with the `supervisor` label.** These are health dashboard issues managed by `pulse-wrapper.sh` — one per runner per repo. The wrapper handles dedup (closing old ones when creating new ones). If you close them, the wrapper creates replacements on the next cycle, producing churn. Similarly, NEVER create new `[Supervisor:*]` issues — the wrapper creates and updates them automatically. Your job is to act on task/PR issues, not manage supervisor infrastructure.
+11. **NEVER close or modify issues with the `supervisor` or `contributor` label.** These are health dashboard issues managed by `pulse-wrapper.sh` — one per runner per repo. Maintainers get `[Supervisor:user]` issues (pinned); non-maintainers get `[Contributor:user]` issues (not pinned). The wrapper handles dedup (closing old ones when creating new ones). If you close them, the wrapper creates replacements on the next cycle, producing churn. Similarly, NEVER create new `[Supervisor:*]` or `[Contributor:*]` issues — the wrapper creates and updates them automatically. Your job is to act on task/PR issues, not manage health dashboard infrastructure.
 12. **NEVER auto-merge PRs from external contributors or when the permission check fails.** Check author permission via `gh api -i repos/<slug>/collaborators/<author>/permission` before ANY merge — use `-i` to capture the HTTP status code. Only HTTP 200 with `admin`, `maintain`, or `write` permission = maintainer. HTTP 200 with `read`/`none`, or HTTP 404 = external contributor — call `check_external_contributor_pr` from `pulse-wrapper.sh`. Any other HTTP status (403/429/5xx) or network failure = fail closed — call `check_permission_failure_pr` from `pulse-wrapper.sh`. NEVER write inline idempotency checks — always use the helper functions. See "External contributor gate" in Step 3.

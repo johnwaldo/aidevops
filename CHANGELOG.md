@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.170.1] - 2026-03-09
+
+### Changed
+
+- Documentation: add changelog entry for screen time fallback fix
+
+### Fixed
+
+- screen time shows 0h when launchd job lacks Knowledge DB access (#3997)
+- add top-level permissions to code-review-monitoring workflow (GH#3848) (#3850)
+- validate $limit as positive integer to prevent SQL injection in quality-sweep-helper.sh (#3968)
+
+## [2.168.1] - 2026-03-09
+
+### Added
+
+- add contribution-watch to monitor external issues/PRs for new comments (#3933) (#3943)
+
+### Changed
+
+- Documentation: add changelog entry for profile README review fixes
+
+### Fixed
+
+- address Gemini code review feedback on profile README generation (#3963)
+- move SONAR_TOKEN to job-level env so if: conditions evaluate correctly (#3958)
+
+## [2.168.0] - 2026-03-09
+
+### Added
+
+- generate rich profile READMEs with badges, repos, and contributions (#3962)
+
+### Changed
+
+- Documentation: add changelog entry for rich profile README feature
+
+## [2.167.2] - 2026-03-09
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [2.167.1] - 2026-03-09
+
+### Fixed
+
+- improve worker session classification to reduce inflated interactive counts (#3957)
+- security hardening — path traversal, injection, jq filter bug (batch 3) (#3877)
+- HIGH quality-debt batch — logic bugs, exit codes, path typo, arg guards (#3947)
+
+## [2.167.0] - 2026-03-09
+
+### Added
+
+- auto-create profile README for new users on setup (#3954)
+- add cache savings column to AI model usage table (#3953)
+
+## [2.166.0] - 2026-03-09
+
+### Added
+
+- add top apps by screen time percentage table to profile README (#3952)
+
+## [2.159.0] - 2026-03-08
+
+### Added
+
+- add session time tracking to health dashboard (#3920)
+
+### Changed
+
+- Documentation: add changelog entry for session time tracking
+
+## [2.156.0] - 2026-03-08
+
+### Added
+
+- add hygiene layer — stash cleanup, orphan worktree detection, stale PR triage (#3895)
+
 ## [2.154.5] - 2026-03-08
 
 ### Fixed
@@ -164,7 +245,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.151.2] - 2026-03-05
 
@@ -457,7 +537,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.134.1] - 2026-02-27
 
@@ -1350,13 +1429,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.20] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.19] - 2026-02-15
 
@@ -1364,13 +1441,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.18] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.17] - 2026-02-15
 
@@ -1378,13 +1453,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.16] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.15] - 2026-02-15
 
@@ -1392,13 +1465,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.14] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.13] - 2026-02-15
 
@@ -1406,13 +1477,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.12] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.11] - 2026-02-15
 
@@ -1420,13 +1489,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.10] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.9] - 2026-02-15
 
@@ -1434,13 +1501,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.8] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.7] - 2026-02-15
 
@@ -1448,13 +1513,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.6] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.5] - 2026-02-15
 
@@ -1462,20 +1525,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Version bump and maintenance updates
 
-
 ## [2.115.4] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
 
-
 ## [2.115.3] - 2026-02-15
 
 ### Changed
 
 - Version bump and maintenance updates
-
 
 ## [2.115.2] - 2026-02-15
 

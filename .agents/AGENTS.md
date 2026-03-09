@@ -18,6 +18,8 @@ New to aidevops? Type `/onboarding`.
 
 ## Pre-Edit Git Check
 
+> **Skip this section if you don't have Edit/Write/Bash tools** (e.g., Plan+ agent). Instead, proceed directly to responding to the user.
+
 Rules: `prompts/build.txt`. Details: `workflows/pre-edit.md`.
 
 Subagent write restrictions: on `main`/`master`, subagents may ONLY write to `README.md`, `TODO.md`, `todo/PLANS.md`, `todo/tasks/*`. All other writes → proposed edits in a worktree.
@@ -55,7 +57,7 @@ Every agent session — interactive, worker, or supervisor — should improve th
 
 **Route to the correct repo.** Not every improvement belongs in the current project. Before creating a self-improvement task, determine whether the problem is project-specific or framework-level:
 
-- **Framework-level** — route to the aidevops repo. Indicators: the observation references files under `~/.aidevops/`, framework scripts (`ai-actions.sh`, `ai-lifecycle.sh`, `supervisor/`, `dispatch.sh`, `pre-edit-check.sh`, helper scripts), agent prompt behaviour, supervisor/pulse logic, or cross-repo orchestration. Use `claim-task-id.sh --repo-path <aidevops-repo-path> --title "description"` (resolve the slug from `~/.config/aidevops/repos.json`). Only run `gh issue create --repo <aidevops-slug>` if `claim-task-id.sh` was invoked with `--no-issue` or its output did not include a `ref=GH#` (or `ref=GL#` for GitLab) token — otherwise the issue already exists and a second `gh issue create` would produce a duplicate. The fix belongs in the framework, not in the project that happened to trigger it.
+- **Framework-level** — route to the aidevops repo. Indicators: the observation references files under `~/.aidevops/`, framework scripts (`ai-actions.sh`, `ai-lifecycle.sh`, `supervisor/`, `dispatch.sh`, `pre-edit-check.sh`, helper scripts), agent prompt behaviour, supervisor/pulse logic, or cross-repo orchestration. Follow the "Cross-repo task creation" workflow below (claim ID → commit → issue), targeting the aidevops repo path. The fix belongs in the framework, not in the project that happened to trigger it.
 - **Project-specific** — route to the current repo. Indicators: the observation is about this project's CI, code patterns, dependencies, or domain logic.
 
 If uncertain, ask: "Would this fix apply to every repo the framework manages, or only this one?" Framework-wide problems go to aidevops; project-specific problems stay local. Never create framework tasks in a project repo — they become invisible to framework maintainers and pollute the project's task namespace.
@@ -68,6 +70,7 @@ If uncertain, ask: "Would this fix apply to every repo the framework manages, or
 - Identifying missing automation (e.g., a manual step that could be a `gh` command)
 - Flagging stale tasks that are blocked but not marked as such
 - Running the session miner pulse (`scripts/session-miner-pulse.sh`) to extract learning from past sessions
+- **Filing issues for information gaps (t1416):** When you cannot determine what happened on a task because comments lack model tier, branch name, failure diagnosis, or other audit-critical fields, file a self-improvement issue. Information gaps cause cascading waste — without knowing what was tried, the next attempt repeats the same failure. The issue/PR comment timeline is the primary audit trail; if the information isn't there, it's invisible.
 
 **Intelligence over determinism:** The harness gives you goals, tools, and boundaries — not scripts for every scenario. Deterministic rules are for things with exactly one correct answer (CLI syntax, file paths, security). Everything else — prioritisation, triage, stuck detection, what to work on — is a judgment call. If a rule says "if X then Y" but there are cases where X is true and Y is wrong, it's guidance not a rule. Use the cheapest model that can handle the decision (haiku for triage, sonnet for implementation, opus for strategy) — but never use a regex where a model call would handle outliers better. See `prompts/build.txt` "Intelligence Over Determinism" for the full principle.
 
@@ -156,6 +159,14 @@ Planning files go direct to main. Code changes need worktree + PR. Workers NEVER
 
 **Cross-repo awareness**: The supervisor manages tasks across all repos in `~/.config/aidevops/repos.json` where `pulse: true`. Each repo entry has a `slug` field (`owner/repo`) — ALWAYS use this for `gh` commands, never guess org names. Use `gh issue list --repo <slug>` and `gh pr list --repo <slug>` for each pulse-enabled repo to get the full picture. Repos with `"local_only": true` have no GitHub remote — skip `gh` operations on them. Repo paths may be nested (e.g., `~/Git/cloudron/netbird-app`), not just `~/Git/<name>`.
 
+**Repo registration**: When you create or clone a new repo (via `gh repo create`, `git clone`, `git init`, etc.), add it to `~/.config/aidevops/repos.json` immediately. Every repo the user works with should be registered — unregistered repos are invisible to cross-repo tools (pulse, health dashboard, session time, contributor stats). Set fields based on the repo's purpose:
+- `pulse: true` — repos with active development, tasks, and issues (most repos)
+- `pulse: false` — repos that exist but don't need task management (profile READMEs, forks for reference, archived projects)
+- `contributed: true` — external repos where we've authored or commented on issues/PRs. No merge/dispatch/TODO powers — only monitors for new comments needing reply. Managed by `contribution-watch-helper.sh`.
+- `local_only: true` — repos with no remote (skip all `gh` operations)
+- `priority` — `"tooling"` (infrastructure/tools), `"product"` (user-facing), `"profile"` (GitHub profile, docs-only)
+- `maintainer` — GitHub username of the repo maintainer. Used by code-simplifier for issue assignment and other maintainer-gated workflows. Auto-detected from `gh api user` on registration; falls back to slug owner if missing.
+
 **Cross-repo task creation**: When a session creates a task in a *different* repo (e.g., adding an aidevops TODO while working in another project), follow the full workflow — not just the TODO edit:
 
 1. **Claim the ID atomically**: Run `claim-task-id.sh --repo-path <target-repo> --title "description"`. This allocates the next ID via CAS on the counter branch and optionally creates the GitHub issue. NEVER grep TODO.md to guess the next ID — concurrent sessions will collide.
@@ -219,6 +230,7 @@ Key capabilities (details in `reference/orchestration.md`, `reference/services.m
 - **Bundle presets**: Project-type-aware defaults for model tiers, quality gates, and agent routing. Auto-detected from marker files or explicit in repos.json. See `bundles/` and `scripts/bundle-helper.sh`.
 - **Memory**: cross-session SQLite FTS5 (`/remember`, `/recall`)
 - **Orchestration**: supervisor dispatch, pulse scheduler, auto-pickup, cross-repo issue/PR/TODO visibility
+- **Contribution watch**: monitors external issues/PRs for new comments needing reply. `contribution-watch-helper.sh seed|scan|status|install|uninstall`. Prompt-injection-safe — automated scans are deterministic (no LLM), comment bodies only shown in interactive sessions after `prompt-guard-helper.sh scan`.
 - **Skills**: `aidevops skills`, `/skills`
 - **Auto-update**: GitHub poll + daily skill/repo sync
 - **Browser**: Playwright, dev-browser (persistent login)

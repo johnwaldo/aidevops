@@ -47,7 +47,7 @@ check_opencode_prompt_drift() {
 			local_hash=$(echo "$output" | cut -d'|' -f2)
 			upstream_hash=$(echo "$output" | cut -d'|' -f3)
 			print_warning "OpenCode upstream prompt has changed (${local_hash} → ${upstream_hash})"
-			print_info "  Review: https://github.com/anomalyco/opencode/compare/${local_hash}...${upstream_hash}"
+			print_info "  Review: https://github.com/opencode-ai/opencode/compare/${local_hash}...${upstream_hash}"
 			print_info "  Update .agents/prompts/build.txt if needed"
 		elif [[ "$exit_code" -eq 0 ]]; then
 			print_success "OpenCode prompt in sync with upstream"
@@ -374,7 +374,7 @@ install_beads_binary() {
 
 	local tmp_dir
 	tmp_dir=$(mktemp -d)
-	# shellcheck disable=SC2064
+	# shellcheck disable=SC2064  # Intentional: $tmp_dir must expand at trap definition time, not execution time
 	trap "rm -rf '$tmp_dir'" RETURN
 
 	if ! curl -fsSL "$download_url" -o "$tmp_dir/$tarball_name" 2>/dev/null; then

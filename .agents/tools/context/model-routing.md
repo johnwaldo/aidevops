@@ -32,14 +32,14 @@ model: haiku
 | `flash` | gemini-2.5-flash-preview-05-20 | Lowest (~0.20x) | Large context reads, summarization, bulk processing |
 | `haiku` | claude-haiku-4-5-20251001 | Low (~0.25x) | Triage, classification, simple transforms, formatting |
 | `sonnet` | claude-sonnet-4-6 | Medium | Code implementation, review, most development tasks |
-| `pro` | gemini-2.5-pro-preview-06-05 | Medium-High | Large codebase analysis, complex reasoning with big context |
+| `pro` | gemini-2.5-pro | Medium-High | Large codebase analysis, complex reasoning with big context |
 | `opus` | claude-opus-4-6 | Highest | Architecture decisions, complex multi-step reasoning, novel problems |
 
 ## Model ID Convention
 
 **Always use fully-qualified model IDs** — the exact string accepted by the provider API. Short-form names like `claude-sonnet-4` or `claude-opus-4` cause `ProviderModelNotFoundError` at dispatch time. The canonical model ID for each tier is defined in the subagent frontmatter (`models/*.md`) and must match what the provider API accepts.
 
-When referencing models in docs, scripts, or dispatch commands, use the full ID from the subagent frontmatter (e.g., `claude-sonnet-4-6`, not `claude-sonnet-4`). For provider-prefixed contexts (CLI `--model` flags, fallback chains), use `anthropic/claude-sonnet-4-6` or `google/gemini-2.5-pro-preview-06-05`.
+When referencing models in docs, scripts, or dispatch commands, use the full ID from the subagent frontmatter (e.g., `claude-sonnet-4-6`, not `claude-sonnet-4`). For provider-prefixed contexts (CLI `--model` flags, fallback chains), use `anthropic/claude-sonnet-4-6` or `google/gemini-2.5-pro`.
 
 **Tier names vs model IDs**: Tier names (`haiku`, `sonnet`, `opus`) are abstract routing labels. They are resolved to concrete model IDs at dispatch time by reading the corresponding subagent frontmatter. Never pass a tier name where a model ID is expected.
 
@@ -143,7 +143,7 @@ Concrete model subagents are defined across these paths (`tools/ai-assistants/mo
 | `flash` | `models/flash.md` | gemini-2.5-flash-preview-05-20 | gpt-4.1-mini |
 | `haiku` | `models/haiku.md` | claude-haiku-4-5-20251001 | gemini-2.5-flash-preview-05-20 |
 | `sonnet` | `models/sonnet.md` | claude-sonnet-4-6 | gpt-4.1 |
-| `pro` | `models/pro.md` | gemini-2.5-pro-preview-06-05 | claude-sonnet-4-6 |
+| `pro` | `models/pro.md` | gemini-2.5-pro | claude-sonnet-4-6 |
 | `opus` | `models/opus.md` | claude-opus-4-6 | o3 |
 
 Cross-provider reviewers: `models/gemini-reviewer.md`, `models/gpt-reviewer.md`
@@ -194,7 +194,7 @@ Each tier defines a primary model and a fallback from a different provider. When
 | `flash` | gemini-2.5-flash-preview-05-20 | gpt-4.1-mini | No Google key |
 | `haiku` | claude-haiku-4-5-20251001 | gemini-2.5-flash-preview-05-20 | No Anthropic key |
 | `sonnet` | claude-sonnet-4-6 | gpt-4.1 | No Anthropic key |
-| `pro` | gemini-2.5-pro-preview-06-05 | claude-sonnet-4-6 | No Google key |
+| `pro` | gemini-2.5-pro | claude-sonnet-4-6 | No Google key |
 | `opus` | claude-opus-4-6 | o3 | No Anthropic key |
 
 The supervisor resolves fallbacks automatically during headless dispatch. For interactive sessions, the orchestrating agent should run `compare-models-helper.sh discover` to check availability before selecting a model.
@@ -373,6 +373,18 @@ bundle-helper.sh list
 - **cron-dispatch.sh**: Reads bundle `model_defaults.implementation` when no explicit model is configured for a cron job
 - **pulse.md**: Supervisor uses bundle `agent_routing` to select the right agent for non-code tasks
 - **linters-local.sh**: Reads bundle `skip_gates` to skip irrelevant quality checks (e.g., ShellCheck on a pure web-app)
+
+## Failure-Based Escalation (t1416)
+
+When a worker fails on a task (killed for thrashing, 0 commits, PR closed without merge), the supervisor escalates to a higher model tier. This is cost-effective: one opus dispatch (~3x sonnet) costs far less than 5+ failed sonnet dispatches.
+
+**Escalation rule:** After 2 failed worker attempts on the same issue, escalate from the current tier to the next tier up. In practice this means sonnet -> opus for most tasks (sonnet is the default dispatch tier).
+
+**How to escalate:** Add `--model anthropic/claude-opus-4-6` to the `opencode run` dispatch command. This overrides the default "do not add --model" rule in pulse.md.
+
+**Recording:** Every dispatch and kill comment on the issue MUST include the model tier used. Without this, it's impossible to audit whether escalation was attempted. See pulse.md "Audit-quality state in issue and PR comments" (t1416).
+
+**Cost justification:** The t748 incident dispatched 7 sonnet workers over 30+ hours, all thrashing. A single opus dispatch would have cost ~3x one sonnet attempt but saved 6 failed attempts. The break-even point is 1 failed re-dispatch — escalation after 2 failures is always cheaper than a 3rd attempt at the same tier.
 
 ## Tier Drift Detection (t1191)
 

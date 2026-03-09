@@ -42,8 +42,13 @@ set -euo pipefail
 #######################################
 export PATH="/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:${PATH}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
+# Use ${BASH_SOURCE[0]:-$0} for shell portability — BASH_SOURCE is undefined
+# in zsh, which is the MCP shell environment. This fallback ensures SCRIPT_DIR
+# resolves correctly whether the script is executed directly (bash) or sourced
+# from zsh. See GH#3931.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)" || return 2>/dev/null || exit
 source "${SCRIPT_DIR}/shared-constants.sh"
+source "${SCRIPT_DIR}/worker-lifecycle-common.sh"
 
 #######################################
 # Configuration
@@ -58,6 +63,7 @@ RAM_RESERVE_MB="${RAM_RESERVE_MB:-8192}"                  # 8 GB reserved for OS
 MAX_WORKERS_CAP="${MAX_WORKERS_CAP:-8}"                   # Hard ceiling regardless of RAM
 QUALITY_SWEEP_INTERVAL="${QUALITY_SWEEP_INTERVAL:-86400}" # 24 hours between sweeps
 DAILY_PR_CAP="${DAILY_PR_CAP:-5}"                         # Max PRs created per repo per day (GH#3821)
+PRODUCT_RESERVATION_PCT="${PRODUCT_RESERVATION_PCT:-60}"  # % of worker slots reserved for product repos (t1423)
 
 # Process guard limits (t1398)
 CHILD_RSS_LIMIT_KB="${CHILD_RSS_LIMIT_KB:-2097152}"           # 2 GB default — kill child if RSS exceeds this
@@ -66,29 +72,7 @@ SHELLCHECK_RSS_LIMIT_KB="${SHELLCHECK_RSS_LIMIT_KB:-1048576}" # 1 GB — ShellCh
 SHELLCHECK_RUNTIME_LIMIT="${SHELLCHECK_RUNTIME_LIMIT:-300}"   # 5 min — ShellCheck-specific
 SESSION_COUNT_WARN="${SESSION_COUNT_WARN:-5}"                 # Warn when >N concurrent sessions detected
 
-# Validate numeric configuration — prevent command injection via $(( )) expansion.
-# Bash arithmetic evaluates variable contents as expressions, so unsanitised strings
-# like "a[$(cmd)]" would execute arbitrary commands.
-_validate_int() {
-	local name="$1" value="$2" default="$3" min="${4:-0}"
-	if ! [[ "$value" =~ ^[0-9]+$ ]]; then
-		echo "[pulse-wrapper] Invalid ${name}: ${value} — using default ${default}" >&2
-		printf '%s' "$default"
-		return 0
-	fi
-	# Canonicalize to base-10: strip leading zeros to prevent bash octal interpretation
-	# e.g., "08" (invalid octal) or "01024" (octal 532) become "8" and "1024"
-	local canonical
-	canonical=$(printf '%d' "$((10#$value))")
-	# Enforce minimum to prevent divide-by-zero for divisor-backed settings
-	if ((canonical < min)); then
-		echo "[pulse-wrapper] ${name}=${canonical} below minimum ${min} — using default ${default}" >&2
-		printf '%s' "$default"
-		return 0
-	fi
-	printf '%s' "$canonical"
-	return 0
-}
+# Validate numeric configuration (uses _validate_int from worker-lifecycle-common.sh)
 PULSE_STALE_THRESHOLD=$(_validate_int PULSE_STALE_THRESHOLD "$PULSE_STALE_THRESHOLD" 3600)
 PULSE_IDLE_TIMEOUT=$(_validate_int PULSE_IDLE_TIMEOUT "$PULSE_IDLE_TIMEOUT" 300 60)
 PULSE_IDLE_CPU_THRESHOLD=$(_validate_int PULSE_IDLE_CPU_THRESHOLD "$PULSE_IDLE_CPU_THRESHOLD" 5)
@@ -99,38 +83,14 @@ RAM_RESERVE_MB=$(_validate_int RAM_RESERVE_MB "$RAM_RESERVE_MB" 8192)
 MAX_WORKERS_CAP=$(_validate_int MAX_WORKERS_CAP "$MAX_WORKERS_CAP" 8)
 QUALITY_SWEEP_INTERVAL=$(_validate_int QUALITY_SWEEP_INTERVAL "$QUALITY_SWEEP_INTERVAL" 86400)
 DAILY_PR_CAP=$(_validate_int DAILY_PR_CAP "$DAILY_PR_CAP" 5 1)
+PRODUCT_RESERVATION_PCT=$(_validate_int PRODUCT_RESERVATION_PCT "$PRODUCT_RESERVATION_PCT" 60 0)
 CHILD_RSS_LIMIT_KB=$(_validate_int CHILD_RSS_LIMIT_KB "$CHILD_RSS_LIMIT_KB" 2097152 1)
 CHILD_RUNTIME_LIMIT=$(_validate_int CHILD_RUNTIME_LIMIT "$CHILD_RUNTIME_LIMIT" 1800 1)
 SHELLCHECK_RSS_LIMIT_KB=$(_validate_int SHELLCHECK_RSS_LIMIT_KB "$SHELLCHECK_RSS_LIMIT_KB" 1048576 1)
 SHELLCHECK_RUNTIME_LIMIT=$(_validate_int SHELLCHECK_RUNTIME_LIMIT "$SHELLCHECK_RUNTIME_LIMIT" 300 1)
 SESSION_COUNT_WARN=$(_validate_int SESSION_COUNT_WARN "$SESSION_COUNT_WARN" 5 1)
 
-# Sanitise untrusted strings before embedding in GitHub markdown comments.
-# Strips @ mentions (prevents unwanted notifications) and backtick sequences
-# (prevents markdown injection). Used for API response data that gets posted
-# as issue/PR comments.
-_sanitize_markdown() {
-	local input="$1"
-	# Remove @ mentions to prevent notification spam
-	input="${input//@/}"
-	# Remove backtick sequences that could break markdown fencing
-	input="${input//\`/}"
-	printf '%s' "$input"
-	return 0
-}
-
-# Sanitise untrusted strings before writing to log files.
-# Strips control characters (newlines, carriage returns, tabs, and non-printable
-# chars) to prevent log injection attacks where a crafted process name could
-# insert fake log entries or mislead administrators. (Gemini review, PR #2881)
-_sanitize_log_field() {
-	local input="$1"
-	# Strip all control characters (ASCII 0x00-0x1F and 0x7F) except space.
-	# The tr octal range is intentional (not a glob).
-	# shellcheck disable=SC2060
-	printf '%s' "$input" | tr -d '\000-\037\177'
-	return 0
-}
+# _sanitize_markdown and _sanitize_log_field provided by worker-lifecycle-common.sh
 
 PIDFILE="${HOME}/.aidevops/logs/pulse.pid"
 LOGFILE="${HOME}/.aidevops/logs/pulse.log"
@@ -198,156 +158,8 @@ check_dedup() {
 	return 1
 }
 
-#######################################
-# Kill a process and all its children (macOS-compatible)
-# Arguments:
-#   $1 - PID to kill
-#######################################
-_kill_tree() {
-	local pid="$1"
-	# Find all child processes recursively (bash 3.2 compatible — no mapfile)
-	local child
-	while IFS= read -r child; do
-		[[ -n "$child" ]] && _kill_tree "$child"
-	done < <(pgrep -P "$pid" 2>/dev/null || true)
-	kill "$pid" 2>/dev/null || true
-	return 0
-}
-
-#######################################
-# Force kill a process and all its children
-# Arguments:
-#   $1 - PID to kill
-#######################################
-_force_kill_tree() {
-	local pid="$1"
-	local child
-	while IFS= read -r child; do
-		[[ -n "$child" ]] && _force_kill_tree "$child"
-	done < <(pgrep -P "$pid" 2>/dev/null || true)
-	kill -9 "$pid" 2>/dev/null || true
-	return 0
-}
-
-#######################################
-# Get process age in seconds
-# Arguments:
-#   $1 - PID
-# Returns: elapsed seconds via stdout
-#######################################
-_get_process_age() {
-	local pid="$1"
-	local etime
-	# macOS ps etime format: MM:SS or HH:MM:SS or D-HH:MM:SS
-	etime=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ') || etime=""
-
-	if [[ -z "$etime" ]]; then
-		echo "0"
-		return 0
-	fi
-
-	local days=0 hours=0 minutes=0 seconds=0
-
-	# Parse D-HH:MM:SS format
-	if [[ "$etime" == *-* ]]; then
-		days="${etime%%-*}"
-		etime="${etime#*-}"
-	fi
-
-	# Count colons to determine format
-	local colon_count
-	colon_count=$(echo "$etime" | tr -cd ':' | wc -c | tr -d ' ')
-
-	if [[ "$colon_count" -eq 2 ]]; then
-		# HH:MM:SS
-		IFS=':' read -r hours minutes seconds <<<"$etime"
-	elif [[ "$colon_count" -eq 1 ]]; then
-		# MM:SS
-		IFS=':' read -r minutes seconds <<<"$etime"
-	else
-		seconds="$etime"
-	fi
-
-	# Validate components are numeric before arithmetic expansion
-	[[ "$days" =~ ^[0-9]+$ ]] || days=0
-	[[ "$hours" =~ ^[0-9]+$ ]] || hours=0
-	[[ "$minutes" =~ ^[0-9]+$ ]] || minutes=0
-	[[ "$seconds" =~ ^[0-9]+$ ]] || seconds=0
-
-	# Remove leading zeros to avoid octal interpretation
-	days=$((10#${days}))
-	hours=$((10#${hours}))
-	minutes=$((10#${minutes}))
-	seconds=$((10#${seconds}))
-
-	echo $((days * 86400 + hours * 3600 + minutes * 60 + seconds))
-	return 0
-}
-
-#######################################
-# Get integer CPU% for a single PID (helper for _get_process_tree_cpu)
-#
-# Extracts %CPU via ps, truncates to integer, validates numeric.
-# Returns 0 if the process doesn't exist or ps fails.
-#
-# Arguments:
-#   $1 - PID
-# Returns: integer CPU percentage via stdout
-#######################################
-_get_pid_cpu() {
-	local pid="$1"
-	local cpu_str
-	cpu_str=$(ps -p "$pid" -o %cpu= 2>/dev/null | tr -d ' ') || cpu_str="0"
-	# ps returns float like "12.3" — extract integer part
-	local cpu_int="${cpu_str%%.*}"
-	[[ "$cpu_int" =~ ^[0-9]+$ ]] || cpu_int=0
-	echo "$cpu_int"
-	return 0
-}
-
-#######################################
-# Get CPU usage percentage for a process tree (t1398.3)
-#
-# Iteratively walks the full descendant tree (BFS) using pgrep -P at
-# each level. Previous implementation only checked direct children,
-# missing grandchildren and deeper descendants — this caused incorrect
-# CPU calculations when active processes were nested deeper than one
-# level (e.g., node -> shell -> language-server).
-#
-# Arguments:
-#   $1 - PID
-# Returns: integer CPU percentage via stdout (0-N, summed across cores)
-#######################################
-_get_process_tree_cpu() {
-	local pid="$1"
-	local total_cpu=0
-
-	# Iteratively find the initial PID and all its descendants (BFS).
-	# pgrep -P only returns direct children, so we expand level by level.
-	local pids_to_scan=("$pid")
-	local all_pids=()
-	local i=0
-	while [[ $i -lt ${#pids_to_scan[@]} ]]; do
-		local current_pid="${pids_to_scan[$i]}"
-		all_pids+=("$current_pid")
-		local child
-		while IFS= read -r child; do
-			[[ -n "$child" ]] && pids_to_scan+=("$child")
-		done < <(pgrep -P "$current_pid" 2>/dev/null || true)
-		i=$((i + 1))
-	done
-
-	# Sum CPU for all unique PIDs in the process tree.
-	local p
-	for p in $(printf "%s\n" "${all_pids[@]}" | sort -u); do
-		local cpu
-		cpu=$(_get_pid_cpu "$p")
-		total_cpu=$((total_cpu + cpu))
-	done
-
-	echo "$total_cpu"
-	return 0
-}
+# Process lifecycle functions (_kill_tree, _force_kill_tree, _get_process_age,
+# _get_pid_cpu, _get_process_tree_cpu) provided by worker-lifecycle-common.sh
 
 #######################################
 # Pre-fetch state for ALL pulse-enabled repos
@@ -440,18 +252,18 @@ prefetch_state() {
 				echo ""
 
 				# Issues (include assignees for dispatch dedup)
-				# Filter out supervisor/persistent/quality-review issues — these are
-				# managed by pulse-wrapper.sh and must not be touched by the pulse agent.
-				# Exposing them in pre-fetched state causes the LLM to close them as
-				# "stale", creating churn (wrapper recreates them on the next cycle).
+				# Filter out supervisor/contributor/persistent/quality-review issues —
+				# these are managed by pulse-wrapper.sh and must not be touched by the
+				# pulse agent. Exposing them in pre-fetched state causes the LLM to
+				# close them as "stale", creating churn (wrapper recreates on next cycle).
 				local issue_json
 				issue_json=$(gh issue list --repo "$slug" --state open \
 					--json number,title,labels,updatedAt,assignees \
 					--limit 50 2>/dev/null) || issue_json="[]"
 
-				# Remove issues with supervisor, persistent, or quality-review labels
+				# Remove issues with supervisor, contributor, persistent, or quality-review labels
 				local filtered_json
-				filtered_json=$(echo "$issue_json" | jq '[.[] | select(.labels | map(.name) | (index("supervisor") or index("persistent") or index("quality-review")) | not)]')
+				filtered_json=$(echo "$issue_json" | jq '[.[] | select(.labels | map(.name) | (index("supervisor") or index("contributor") or index("persistent") or index("quality-review")) | not)]')
 
 				local issue_count
 				issue_count=$(echo "$filtered_json" | jq 'length')
@@ -498,6 +310,12 @@ prefetch_state() {
 
 	# Append active worker snapshot for orphaned PR detection (t216)
 	prefetch_active_workers >>"$STATE_FILE"
+
+	# Append repo hygiene data for LLM triage (t1417)
+	prefetch_hygiene >>"$STATE_FILE"
+
+	# Append priority-class worker allocations (t1423)
+	_append_priority_allocations >>"$STATE_FILE"
 
 	# Export PULSE_SCOPE_REPOS — comma-separated list of repo slugs that
 	# workers are allowed to create PRs/branches on (t1405, GH#2928).
@@ -693,100 +511,7 @@ _extract_milestone_summary() {
 	return 0
 }
 
-#######################################
-# Compute struggle ratio for a single worker (t1367)
-#
-# struggle_ratio = messages / max(1, commits)
-# High ratio with elapsed time indicates a worker that is active but
-# not producing useful output (thrashing). This is an informational
-# signal — the supervisor LLM decides what to do with it.
-#
-# Arguments:
-#   $1 - worker PID
-#   $2 - worker elapsed seconds
-#   $3 - worker command line
-# Output: "ratio|commits|messages|flag" to stdout
-#   flag: "" (normal), "struggling", or "thrashing"
-#######################################
-_compute_struggle_ratio() {
-	local pid="$1"
-	local elapsed_seconds="$2"
-	local cmd="$3"
-
-	local threshold="${STRUGGLE_RATIO_THRESHOLD:-30}"
-	local min_elapsed="${STRUGGLE_MIN_ELAPSED_MINUTES:-30}"
-	[[ "$threshold" =~ ^[0-9]+$ ]] || threshold=30
-	[[ "$min_elapsed" =~ ^[0-9]+$ ]] || min_elapsed=30
-	local min_elapsed_seconds=$((min_elapsed * 60))
-
-	# Extract --dir from command line
-	local worktree_dir=""
-	if [[ "$cmd" =~ --dir[[:space:]]+([^[:space:]]+) ]]; then
-		worktree_dir="${BASH_REMATCH[1]}"
-	fi
-
-	# No worktree — can't compute
-	if [[ -z "$worktree_dir" || ! -d "$worktree_dir" ]]; then
-		echo "n/a|0|0|"
-		return 0
-	fi
-
-	# Count commits since worker start
-	local commits=0
-	if [[ -d "${worktree_dir}/.git" || -f "${worktree_dir}/.git" ]]; then
-		local since_seconds_ago="${elapsed_seconds}"
-		commits=$(git -C "$worktree_dir" log --oneline --since="${since_seconds_ago} seconds ago" 2>/dev/null | wc -l | tr -d ' ') || commits=0
-	fi
-
-	# Estimate message count from OpenCode session DB
-	local messages=0
-	local db_path="${HOME}/.local/share/opencode/opencode.db"
-
-	if [[ -f "$db_path" ]]; then
-		# Extract title from command to match session
-		local session_title=""
-		if [[ "$cmd" =~ --title[[:space:]]+\"([^\"]+)\" ]] || [[ "$cmd" =~ --title[[:space:]]+([^[:space:]]+) ]]; then
-			session_title="${BASH_REMATCH[1]}"
-		fi
-
-		if [[ -n "$session_title" ]]; then
-			# Query message count for the most recent session matching this title
-			# Use sqlite3 with a LIKE match on session title
-			local escaped_title="${session_title//\'/\'\'}"
-			messages=$(sqlite3 "$db_path" "
-				SELECT COUNT(*)
-				FROM message m
-				JOIN session s ON m.session_id = s.id
-				WHERE s.title LIKE '%${escaped_title}%'
-				AND s.time_created > strftime('%s', 'now') - ${elapsed_seconds}
-			" 2>/dev/null) || messages=0
-		fi
-	fi
-
-	# Fallback: estimate from elapsed time if DB query failed
-	# Conservative heuristic: ~2 messages per minute for an active worker
-	if [[ "$messages" -eq 0 && "$elapsed_seconds" -gt 300 ]]; then
-		local elapsed_minutes=$((elapsed_seconds / 60))
-		messages=$((elapsed_minutes * 2))
-	fi
-
-	# Compute ratio
-	local denominator=$((commits > 0 ? commits : 1))
-	local ratio=$((messages / denominator))
-
-	# Determine flag
-	local flag=""
-	if [[ "$elapsed_seconds" -ge "$min_elapsed_seconds" ]]; then
-		if [[ "$ratio" -gt 50 && "$elapsed_seconds" -ge 3600 ]]; then
-			flag="thrashing"
-		elif [[ "$ratio" -gt "$threshold" && "$commits" -eq 0 ]]; then
-			flag="struggling"
-		fi
-	fi
-
-	echo "${ratio}|${commits}|${messages}|${flag}"
-	return 0
-}
+# _compute_struggle_ratio provided by worker-lifecycle-common.sh
 
 #######################################
 # Check and flag external-contributor PRs (t1391)
@@ -865,9 +590,15 @@ check_external_contributor_pr() {
 	if [[ "$do_post" == "--post" ]]; then
 		# Safe to post — this is the only code path that creates a comment.
 		gh pr comment "$pr_number" --repo "$repo_slug" \
-			--body "This PR is from an external contributor (@${pr_author}). Auto-merge is disabled for external PRs — a maintainer must review and merge manually." &&
+			--body "This PR is from an external contributor (@${pr_author}). Auto-merge is disabled for external PRs — a maintainer must review and approve manually.
+
+---
+**To approve or decline**, comment on this PR:
+- \`approved\` — removes the review gate and allows merge (CI permitting)
+- \`declined: <reason>\` — closes this PR (include your reason after the colon)" &&
 			gh api --silent "repos/${repo_slug}/issues/${pr_number}/labels" \
-				-X POST -f 'labels[]=external-contributor' || true
+				-X POST -f 'labels[]=external-contributor' \
+				-f 'labels[]=needs-maintainer-review' || true
 		echo "[pulse-wrapper] check_external_contributor_pr: flagged PR #$pr_number in $repo_slug as external contributor (@$pr_author)" >>"$LOGFILE"
 	fi
 	return 1
@@ -925,6 +656,178 @@ check_permission_failure_pr() {
 
 	echo "[pulse-wrapper] check_permission_failure_pr: posted permission-failure comment on PR #$pr_number in $repo_slug (HTTP $http_status)" >>"$LOGFILE"
 	return 0
+}
+
+#######################################
+# Check if a PR modifies GitHub Actions workflow files (t3934)
+#
+# PRs that modify .github/workflows/ files require the `workflow` scope
+# on the GitHub OAuth token. Without it, `gh pr merge` fails with:
+#   "refusing to allow an OAuth App to create or update workflow ... without workflow scope"
+#
+# This function checks the PR's changed files for workflow modifications
+# so the pulse can skip auto-merge and post a helpful comment instead of
+# failing with a cryptic GraphQL error.
+#
+# Arguments:
+#   $1 - PR number
+#   $2 - repo slug (owner/repo)
+#
+# Exit codes:
+#   0 - PR modifies workflow files
+#   1 - PR does NOT modify workflow files
+#   2 - API error (fail open — let merge attempt proceed)
+#######################################
+check_pr_modifies_workflows() {
+	local pr_number="$1"
+	local repo_slug="$2"
+
+	if [[ -z "$pr_number" || -z "$repo_slug" ]]; then
+		echo "[pulse-wrapper] check_pr_modifies_workflows: missing arguments" >>"$LOGFILE"
+		return 2
+	fi
+
+	local files_output
+	files_output=$(gh pr view "$pr_number" --repo "$repo_slug" --json files --jq '.files[].path')
+	local files_exit=$?
+
+	if [[ $files_exit -ne 0 ]]; then
+		echo "[pulse-wrapper] check_pr_modifies_workflows: API error (exit=$files_exit) for PR #$pr_number in $repo_slug — failing open" >>"$LOGFILE"
+		return 2
+	fi
+
+	if echo "$files_output" | grep -qE '^\.github/workflows/'; then
+		echo "[pulse-wrapper] check_pr_modifies_workflows: PR #$pr_number in $repo_slug modifies workflow files" >>"$LOGFILE"
+		return 0
+	fi
+
+	return 1
+}
+
+#######################################
+# Check if the current GitHub token has the `workflow` scope (t3934)
+#
+# The `workflow` scope is required to merge PRs that modify
+# .github/workflows/ files. This function checks the current
+# token's scopes via `gh auth status`.
+#
+# Exit codes:
+#   0 - token HAS workflow scope
+#   1 - token does NOT have workflow scope
+#   2 - unable to determine (fail open)
+#######################################
+check_gh_workflow_scope() {
+	local auth_output
+	auth_output=$(gh auth status 2>&1)
+	local auth_exit=$?
+
+	if [[ $auth_exit -ne 0 ]]; then
+		echo "[pulse-wrapper] check_gh_workflow_scope: gh auth status failed (exit=$auth_exit) — failing open" >>"$LOGFILE"
+		return 2
+	fi
+
+	if echo "$auth_output" | grep -q "'workflow'"; then
+		return 0
+	fi
+
+	# Also check for the scope without quotes (format varies by gh version)
+	if echo "$auth_output" | grep -qiE 'Token scopes:.*workflow'; then
+		return 0
+	fi
+
+	echo "[pulse-wrapper] check_gh_workflow_scope: token lacks workflow scope" >>"$LOGFILE"
+	return 1
+}
+
+#######################################
+# Guard merge of PRs that modify workflow files (t3934)
+#
+# Combines check_pr_modifies_workflows() and check_gh_workflow_scope()
+# into a single pre-merge guard. If the PR modifies workflow files and
+# the token lacks the workflow scope, posts a comment explaining the
+# issue and how to fix it. Idempotent — checks for existing comment.
+#
+# Arguments:
+#   $1 - PR number
+#   $2 - repo slug (owner/repo)
+#
+# Exit codes:
+#   0 - safe to merge (no workflow files, or token has scope)
+#   1 - blocked (workflow files + missing scope, comment posted)
+#   2 - API error (fail open — let merge attempt proceed)
+#######################################
+check_workflow_merge_guard() {
+	local pr_number="$1"
+	local repo_slug="$2"
+
+	if [[ -z "$pr_number" || -z "$repo_slug" ]]; then
+		echo "[pulse-wrapper] check_workflow_merge_guard: missing arguments" >>"$LOGFILE"
+		return 2
+	fi
+
+	# Step 1: Check if PR modifies workflow files
+	check_pr_modifies_workflows "$pr_number" "$repo_slug"
+	local wf_exit=$?
+
+	if [[ $wf_exit -eq 1 ]]; then
+		# No workflow files modified — safe to merge
+		return 0
+	fi
+
+	if [[ $wf_exit -eq 2 ]]; then
+		# API error — fail open, let merge attempt proceed
+		return 2
+	fi
+
+	# Step 2: PR modifies workflow files — check token scope
+	check_gh_workflow_scope
+	local scope_exit=$?
+
+	if [[ $scope_exit -eq 0 ]]; then
+		# Token has workflow scope — safe to merge
+		return 0
+	fi
+
+	if [[ $scope_exit -eq 2 ]]; then
+		# Unable to determine — fail open
+		return 2
+	fi
+
+	# Step 3: PR modifies workflows AND token lacks scope — check for existing comment
+	local comments_output
+	comments_output=$(gh pr view "$pr_number" --repo "$repo_slug" --json comments --jq '.comments[].body')
+	local comments_exit=$?
+
+	if [[ $comments_exit -ne 0 ]]; then
+		echo "[pulse-wrapper] check_workflow_merge_guard: API error reading comments for PR #$pr_number — failing open" >>"$LOGFILE"
+		return 2
+	fi
+
+	if echo "$comments_output" | grep -qF 'workflow scope'; then
+		# Already commented — still blocked
+		echo "[pulse-wrapper] check_workflow_merge_guard: PR #$pr_number already has workflow scope comment — skipping merge" >>"$LOGFILE"
+		return 1
+	fi
+
+	# Post comment explaining the issue
+	gh pr comment "$pr_number" --repo "$repo_slug" \
+		--body "**Cannot auto-merge: workflow scope required** (GH#3934)
+
+This PR modifies \`.github/workflows/\` files but the GitHub OAuth token used by the pulse lacks the \`workflow\` scope. GitHub requires this scope to merge PRs that modify workflow files.
+
+**To fix:**
+1. Run \`gh auth refresh -s workflow\` to add the \`workflow\` scope to your token
+2. The next pulse cycle will merge this PR automatically
+
+**Alternatively:** Merge manually via the GitHub UI." ||
+		true
+
+	# Add a label for visibility
+	gh api --silent "repos/${repo_slug}/issues/${pr_number}/labels" \
+		-X POST -f 'labels[]=needs-workflow-scope' || true
+
+	echo "[pulse-wrapper] check_workflow_merge_guard: blocked PR #$pr_number in $repo_slug — workflow files + missing scope" >>"$LOGFILE"
+	return 1
 }
 
 #######################################
@@ -987,6 +890,206 @@ prefetch_active_workers() {
 	fi
 
 	echo ""
+	return 0
+}
+
+#######################################
+# Append priority-class worker allocations to state file (t1423)
+#
+# Reads the allocation file written by calculate_priority_allocations()
+# and formats it as a section the pulse agent can act on.
+#
+# The pulse agent uses this to enforce soft reservations: product repos
+# get a guaranteed minimum share of worker slots, tooling gets the rest.
+# When one class has no pending work, the other can use freed slots.
+#
+# Output: allocation summary to stdout (appended to STATE_FILE by caller)
+#######################################
+_append_priority_allocations() {
+	local alloc_file="${HOME}/.aidevops/logs/pulse-priority-allocations"
+
+	echo ""
+	echo "# Priority-Class Worker Allocations (t1423)"
+	echo ""
+
+	if [[ ! -f "$alloc_file" ]]; then
+		echo "- Allocation data not available — using flat pool (no reservations)"
+		echo ""
+		return 0
+	fi
+
+	# Read allocation values
+	local max_workers product_repos tooling_repos product_min tooling_max reservation_pct
+	max_workers=$(grep '^MAX_WORKERS=' "$alloc_file" | cut -d= -f2) || max_workers=4
+	product_repos=$(grep '^PRODUCT_REPOS=' "$alloc_file" | cut -d= -f2) || product_repos=0
+	tooling_repos=$(grep '^TOOLING_REPOS=' "$alloc_file" | cut -d= -f2) || tooling_repos=0
+	product_min=$(grep '^PRODUCT_MIN=' "$alloc_file" | cut -d= -f2) || product_min=0
+	tooling_max=$(grep '^TOOLING_MAX=' "$alloc_file" | cut -d= -f2) || tooling_max=0
+	reservation_pct=$(grep '^PRODUCT_RESERVATION_PCT=' "$alloc_file" | cut -d= -f2) || reservation_pct=60
+
+	echo "Worker pool: **${max_workers}** total slots"
+	echo "Product repos (${product_repos}): **${product_min}** reserved slots (${reservation_pct}% minimum)"
+	echo "Tooling repos (${tooling_repos}): **${tooling_max}** slots (remainder)"
+	echo ""
+	echo "**Enforcement rules:**"
+	echo "- Before dispatching a tooling-repo worker, check: are product-repo workers using fewer than ${product_min} slots? If yes, the remaining product slots are reserved — do NOT fill them with tooling work."
+	echo "- If product repos have no pending work (no open issues, no failing PRs), their reserved slots become available for tooling."
+	echo "- If all ${max_workers} slots are needed for product work, tooling gets 0 (product reservation is a minimum, not a maximum)."
+	echo "- Merges (priority 1) and CI fixes (priority 2) are exempt — they always proceed regardless of class."
+	echo ""
+
+	return 0
+}
+
+#######################################
+# Pre-fetch repo hygiene data for LLM triage (t1417)
+#
+# Appends a "Repo Hygiene" section to the state file with:
+#   1. Orphan worktrees — branches with 0 commits ahead of main,
+#      no PR (open or merged), and no active worker process.
+#   2. Stash summary — count of needs-review stashes per repo.
+#   3. Uncommitted changes on main — repos with dirty main worktree.
+#
+# This data enables the pulse LLM to make intelligent triage decisions
+# about cleanup. Deterministic cleanup (merged-PR worktrees, safe stashes)
+# is handled by cleanup_worktrees() and cleanup_stashes() before this runs.
+# What remains here requires judgment.
+#
+# Output: hygiene summary to stdout (appended to STATE_FILE by caller)
+#######################################
+prefetch_hygiene() {
+	local repos_json="${HOME}/.config/aidevops/repos.json"
+
+	echo ""
+	echo "# Repo Hygiene"
+	echo ""
+	echo "Non-deterministic cleanup candidates requiring LLM assessment."
+	echo "Merged-PR worktrees and safe-to-drop stashes were already cleaned by the shell layer."
+	echo ""
+
+	if [[ ! -f "$repos_json" ]] || ! command -v jq &>/dev/null; then
+		echo "- repos.json not available — skipping hygiene prefetch"
+		echo ""
+		return 0
+	fi
+
+	local repo_paths
+	repo_paths=$(jq -r '.initialized_repos[] | select((.local_only // false) == false) | .path' "$repos_json" || echo "")
+
+	local found_any=false
+
+	local repo_path
+	while IFS= read -r repo_path; do
+		[[ -z "$repo_path" ]] && continue
+		[[ ! -d "$repo_path/.git" ]] && continue
+
+		local repo_name
+		repo_name=$(basename "$repo_path")
+		local repo_issues=""
+
+		# 1. Orphan worktrees: 0 commits ahead of default branch, no PR
+		local default_branch
+		default_branch=$(git -C "$repo_path" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || default_branch="main"
+		[[ -z "$default_branch" ]] && default_branch="main"
+
+		local wt_branch wt_path
+		while IFS= read -r line; do
+			if [[ "$line" =~ ^worktree\ (.+)$ ]]; then
+				wt_path="${BASH_REMATCH[1]}"
+			elif [[ "$line" =~ ^branch\ refs/heads/(.+)$ ]]; then
+				wt_branch="${BASH_REMATCH[1]}"
+			elif [[ -z "$line" && -n "$wt_branch" ]]; then
+				# Skip the default branch
+				if [[ "$wt_branch" != "$default_branch" ]]; then
+					local commits_ahead
+					commits_ahead=$(git -C "$repo_path" rev-list --count "${default_branch}..${wt_branch}" 2>/dev/null) || commits_ahead="?"
+
+					if [[ "$commits_ahead" == "0" ]]; then
+						# Check if any PR exists (open or merged)
+						local has_pr="false"
+						if command -v gh &>/dev/null; then
+							local pr_check
+							pr_check=$(gh pr list --repo "$(jq -r --arg p "$repo_path" '.initialized_repos[] | select(.path == $p) | .slug' "$repos_json" 2>/dev/null)" \
+								--head "$wt_branch" --state all --json number --jq 'length' 2>/dev/null) || pr_check="0"
+							[[ "${pr_check:-0}" -gt 0 ]] && has_pr="true"
+						fi
+
+						if [[ "$has_pr" == "false" ]]; then
+							# Check for dirty state
+							local dirty=""
+							local change_count
+							change_count=$(git -C "${wt_path:-$repo_path}" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || change_count=0
+							[[ "${change_count:-0}" -gt 0 ]] && dirty=" (${change_count} uncommitted files)"
+
+							repo_issues="${repo_issues}  - Orphan worktree: \`${wt_branch}\` — 0 commits, no PR${dirty} (${wt_path})\n"
+						fi
+					fi
+				fi
+				wt_path=""
+				wt_branch=""
+			fi
+		done < <(
+			git -C "$repo_path" worktree list --porcelain 2>/dev/null
+			echo ""
+		)
+
+		# 2. Stash summary (needs-review count)
+		local stash_count
+		stash_count=$(git -C "$repo_path" stash list 2>/dev/null | wc -l | tr -d ' ')
+		if [[ "${stash_count:-0}" -gt 0 ]]; then
+			repo_issues="${repo_issues}  - ${stash_count} stash(es) remaining (safe-to-drop already cleaned; these need review)\n"
+		fi
+
+		# 3. Uncommitted changes on main worktree
+		local main_wt_path="$repo_path"
+		local current_branch
+		current_branch=$(git -C "$main_wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null) || current_branch=""
+		if [[ "$current_branch" == "$default_branch" ]]; then
+			local main_dirty
+			main_dirty=$(git -C "$main_wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || main_dirty=0
+			if [[ "${main_dirty:-0}" -gt 0 ]]; then
+				repo_issues="${repo_issues}  - ${main_dirty} uncommitted file(s) on ${default_branch} branch\n"
+			fi
+		fi
+
+		# Output repo section if any issues found
+		if [[ -n "$repo_issues" ]]; then
+			found_any=true
+			echo "### ${repo_name}"
+			echo -e "$repo_issues"
+		fi
+	done <<<"$repo_paths"
+
+	if [[ "$found_any" == "false" ]]; then
+		echo "- All repos clean — no hygiene issues detected"
+		echo ""
+	fi
+
+	# PR salvage scan: detect closed-unmerged PRs with recoverable code
+	local salvage_helper="${SCRIPT_DIR}/pr-salvage-helper.sh"
+	if [[ -x "$salvage_helper" ]]; then
+		echo ""
+		echo "# PR Salvage (closed-unmerged with recoverable code)"
+		echo ""
+
+		local salvage_found=false
+		local slug path
+		while IFS='|' read -r slug path; do
+			[[ -z "$slug" ]] && continue
+			local salvage_output
+			salvage_output=$("$salvage_helper" prefetch "$slug" "$path" 2>/dev/null) || true
+			if [[ -n "$salvage_output" ]]; then
+				salvage_found=true
+				echo "$salvage_output"
+			fi
+		done < <(jq -r '.initialized_repos[] | select(.pulse == true and (.local_only // false) == false and .slug != "") | "\(.slug)|\(.path)"' "$repos_json" 2>/dev/null)
+
+		if [[ "$salvage_found" == "false" ]]; then
+			echo "- No salvageable closed-unmerged PRs detected"
+			echo ""
+		fi
+	fi
+
 	return 0
 }
 
@@ -1377,6 +1480,126 @@ cleanup_worktrees() {
 }
 
 #######################################
+# Clean up safe-to-drop stashes across ALL managed repos (t1417)
+#
+# Iterates repos.json (.initialized_repos[]) and runs
+# stash-audit-helper.sh auto-clean in each repo directory.
+# Only drops stashes whose content is already in HEAD — safe
+# and deterministic, no judgment needed.
+#
+# Stashes classified as "needs-review" or "obsolete" are left
+# for the LLM hygiene triage (see prefetch_hygiene + pulse.md).
+#######################################
+cleanup_stashes() {
+	local helper="${HOME}/.aidevops/agents/scripts/stash-audit-helper.sh"
+	if [[ ! -x "$helper" ]]; then
+		return 0
+	fi
+
+	local repos_json="${HOME}/.config/aidevops/repos.json"
+	local total_dropped=0
+
+	if [[ -f "$repos_json" ]] && command -v jq &>/dev/null; then
+		local repo_paths
+		repo_paths=$(jq -r '.initialized_repos[] | select((.local_only // false) == false) | .path' "$repos_json" || echo "")
+
+		local repo_path
+		while IFS= read -r repo_path; do
+			[[ -z "$repo_path" ]] && continue
+			[[ ! -d "$repo_path/.git" ]] && continue
+
+			# Skip repos with no stashes
+			local stash_count
+			stash_count=$(git -C "$repo_path" stash list 2>/dev/null | wc -l | tr -d ' ')
+			if [[ "${stash_count:-0}" -eq 0 ]]; then
+				continue
+			fi
+
+			local clean_result
+			clean_result=$(cd "$repo_path" && bash "$helper" auto-clean 2>&1) || true
+
+			local count
+			count=$(echo "$clean_result" | grep -c 'Dropped') || count=0
+			if [[ "$count" -gt 0 ]]; then
+				local repo_name
+				repo_name=$(basename "$repo_path")
+				echo "[pulse-wrapper] Stash cleanup ($repo_name): $count stash(es) dropped" >>"$LOGFILE"
+				total_dropped=$((total_dropped + count))
+			fi
+		done <<<"$repo_paths"
+	else
+		# Fallback: just clean the current repo
+		local clean_result
+		clean_result=$(bash "$helper" auto-clean 2>&1) || true
+		local fallback_count
+		fallback_count=$(echo "$clean_result" | grep -c 'Dropped') || fallback_count=0
+		if [[ "$fallback_count" -gt 0 ]]; then
+			echo "[pulse-wrapper] Stash cleanup: $fallback_count stash(es) dropped" >>"$LOGFILE"
+			total_dropped=$((total_dropped + fallback_count))
+		fi
+	fi
+
+	if [[ "$total_dropped" -gt 0 ]]; then
+		echo "[pulse-wrapper] Stash cleanup total: $total_dropped stash(es) dropped across all repos" >>"$LOGFILE"
+	fi
+
+	return 0
+}
+
+#######################################
+# Determine runner role for a repo: supervisor or contributor
+#
+# Checks the runner's permission on the repo via the GitHub API.
+# Maintainers (admin, maintain, write) are "supervisor"; everyone
+# else (read, none, 404) is "contributor". API failures default to
+# "contributor" (fail closed — never grant elevated status on error).
+#
+# Results are cached per runner+repo for the duration of the pulse
+# to avoid repeated API calls (one call per repo per pulse cycle).
+#
+# Arguments:
+#   $1 - runner GitHub login
+#   $2 - repo slug (owner/repo)
+# Output: "supervisor" or "contributor" to stdout
+#######################################
+_get_runner_role() {
+	local runner_user="$1"
+	local repo_slug="$2"
+
+	# Check cache (env var keyed by slug — avoids repeated API calls)
+	local cache_key="__RUNNER_ROLE_${repo_slug//[^a-zA-Z0-9]/_}"
+	local cached_role="${!cache_key:-}"
+	if [[ -n "$cached_role" ]]; then
+		echo "$cached_role"
+		return 0
+	fi
+
+	local role="contributor"
+	local api_path="repos/${repo_slug}/collaborators/${runner_user}/permission"
+	local response
+	response=$(gh api "$api_path" --jq '.permission // empty') || response=""
+
+	case "$response" in
+	admin | maintain | write)
+		role="supervisor"
+		;;
+	read | none | "")
+		role="contributor"
+		;;
+	*)
+		# Unknown permission value — fail closed
+		role="contributor"
+		;;
+	esac
+
+	# Cache for this pulse cycle
+	export "$cache_key=$role"
+
+	echo "$role"
+	return 0
+}
+
+#######################################
 # Update pinned health issue for a single repo
 #
 # Creates or updates a pinned GitHub issue with live status:
@@ -1386,29 +1609,56 @@ cleanup_worktrees() {
 #   - Last pulse timestamp
 #
 # One issue per runner (GitHub user) per repo. Uses labels
-# "supervisor" + "$runner_user" for dedup. Issue number cached
-# in ~/.aidevops/logs/ to avoid repeated lookups.
+# "supervisor" or "contributor" + "$runner_user" for dedup.
+# Issue number cached in ~/.aidevops/logs/ to avoid repeated lookups.
+#
+# Maintainers get [Supervisor:user] issues; non-maintainers get
+# [Contributor:user] issues. Role determined by _get_runner_role().
 #
 # Arguments:
 #   $1 - repo slug (owner/repo)
 #   $2 - repo path (local filesystem)
+#   $3 - cross-repo activity markdown (pre-computed by update_health_issues)
+#   $4 - cross-repo session time markdown (pre-computed by update_health_issues)
+#   $5 - cross-repo person stats markdown (pre-computed by update_health_issues)
 # Returns: 0 always (best-effort, never breaks the pulse)
 #######################################
 _update_health_issue_for_repo() {
 	local repo_slug="$1"
 	local repo_path="$2"
+	local cross_repo_md="${3:-}"
+	local cross_repo_session_time_md="${4:-}"
+	local cross_repo_person_stats_md="${5:-}"
 
 	[[ -z "$repo_slug" ]] && return 0
 
-	# Per-runner identity
+	# Per-runner identity and role
 	local runner_user
-	runner_user=$(gh api user --jq '.login' 2>/dev/null || whoami)
-	local runner_prefix="[Supervisor:${runner_user}]"
+	runner_user=$(gh api user --jq '.login' || whoami)
+
+	# Determine role: supervisor (maintainer) or contributor (non-maintainer)
+	local runner_role
+	runner_role=$(_get_runner_role "$runner_user" "$repo_slug")
+
+	local runner_prefix role_label role_label_color role_label_desc role_display
+	if [[ "$runner_role" == "supervisor" ]]; then
+		runner_prefix="[Supervisor:${runner_user}]"
+		role_label="supervisor"
+		role_label_color="1D76DB"
+		role_label_desc="Supervisor health dashboard"
+		role_display="Supervisor"
+	else
+		runner_prefix="[Contributor:${runner_user}]"
+		role_label="contributor"
+		role_label_color="A2EEEF"
+		role_label_desc="Contributor health dashboard"
+		role_display="Contributor"
+	fi
 
 	# Cache file for this runner + repo (slug with / replaced by -)
 	local slug_safe="${repo_slug//\//-}"
 	local cache_dir="${HOME}/.aidevops/logs"
-	local health_issue_file="${cache_dir}/health-issue-${runner_user}-${slug_safe}"
+	local health_issue_file="${cache_dir}/health-issue-${runner_user}-${role_label}-${slug_safe}"
 	local health_issue_number=""
 
 	mkdir -p "$cache_dir"
@@ -1423,7 +1673,9 @@ _update_health_issue_for_repo() {
 		local issue_state
 		issue_state=$(gh issue view "$health_issue_number" --repo "$repo_slug" --json state --jq '.state' 2>/dev/null || echo "")
 		if [[ "$issue_state" != "OPEN" ]]; then
-			_unpin_health_issue "$health_issue_number" "$repo_slug"
+			if [[ "$runner_role" == "supervisor" ]]; then
+				_unpin_health_issue "$health_issue_number" "$repo_slug"
+			fi
 			health_issue_number=""
 			rm -f "$health_issue_file" 2>/dev/null || true
 		fi
@@ -1433,9 +1685,9 @@ _update_health_issue_for_repo() {
 	if [[ -z "$health_issue_number" ]]; then
 		local label_results
 		label_results=$(gh issue list --repo "$repo_slug" \
-			--label "supervisor" --label "$runner_user" \
+			--label "$role_label" --label "$runner_user" \
 			--state open --json number,title \
-			--jq '[.[] | select(.title | startswith("[Supervisor:"))] | sort_by(.number) | reverse' 2>/dev/null || echo "[]")
+			--jq "[.[] | select(.title | startswith(\"[${role_display}:\"))] | sort_by(.number) | reverse" 2>/dev/null || echo "[]")
 
 		health_issue_number=$(printf '%s' "$label_results" | jq -r '.[0].number // empty' 2>/dev/null || echo "")
 
@@ -1447,9 +1699,11 @@ _update_health_issue_for_repo() {
 			dup_numbers=$(printf '%s' "$label_results" | jq -r '.[1:][].number' 2>/dev/null || echo "")
 			while IFS= read -r dup_num; do
 				[[ -z "$dup_num" ]] && continue
-				_unpin_health_issue "$dup_num" "$repo_slug"
+				if [[ "$runner_role" == "supervisor" ]]; then
+					_unpin_health_issue "$dup_num" "$repo_slug"
+				fi
 				gh issue close "$dup_num" --repo "$repo_slug" \
-					--comment "Closing duplicate supervisor health issue — superseded by #${health_issue_number}." 2>/dev/null || true
+					--comment "Closing duplicate ${runner_role} health issue — superseded by #${health_issue_number}." 2>/dev/null || true
 			done <<<"$dup_numbers"
 		fi
 	fi
@@ -1463,56 +1717,63 @@ _update_health_issue_for_repo() {
 		# Backfill labels
 		if [[ -n "$health_issue_number" ]]; then
 			gh label create "$runner_user" --repo "$repo_slug" --color "0E8A16" \
-				--description "Supervisor runner: ${runner_user}" --force 2>/dev/null || true
+				--description "${role_display} runner: ${runner_user}" --force 2>/dev/null || true
 			gh issue edit "$health_issue_number" --repo "$repo_slug" \
-				--add-label "supervisor" --add-label "$runner_user" 2>/dev/null || true
+				--add-label "$role_label" --add-label "$runner_user" 2>/dev/null || true
 		fi
 	fi
 
 	# Create the issue if it doesn't exist
 	if [[ -z "$health_issue_number" ]]; then
-		gh label create "supervisor" --repo "$repo_slug" --color "1D76DB" \
-			--description "Supervisor health dashboard" --force 2>/dev/null || true
+		gh label create "$role_label" --repo "$repo_slug" --color "$role_label_color" \
+			--description "$role_label_desc" --force 2>/dev/null || true
 		gh label create "$runner_user" --repo "$repo_slug" --color "0E8A16" \
-			--description "Supervisor runner: ${runner_user}" --force 2>/dev/null || true
+			--description "${role_display} runner: ${runner_user}" --force 2>/dev/null || true
 
 		health_issue_number=$(gh issue create --repo "$repo_slug" \
 			--title "${runner_prefix} starting..." \
-			--body "Live supervisor status for **${runner_user}**. Updated each pulse. Pin this issue for at-a-glance monitoring." \
-			--label "supervisor" --label "$runner_user" 2>/dev/null | grep -oE '[0-9]+$' || echo "")
+			--body "Live ${runner_role} status for **${runner_user}**. Updated each pulse. Pin this issue for at-a-glance monitoring." \
+			--label "$role_label" --label "$runner_user" 2>/dev/null | grep -oE '[0-9]+$' || echo "")
 
 		if [[ -z "$health_issue_number" ]]; then
 			echo "[pulse-wrapper] Health issue: could not create for ${repo_slug}" >>"$LOGFILE"
 			return 0
 		fi
 
-		# Pin (best-effort — requires admin)
-		local node_id
-		node_id=$(gh issue view "$health_issue_number" --repo "$repo_slug" --json id --jq '.id' 2>/dev/null || echo "")
-		if [[ -n "$node_id" ]]; then
+		# Pin only supervisor issues — contributor issues don't pin because
+		# GitHub allows max 3 pinned issues per repo and those slots are
+		# reserved for maintainer dashboards and the quality review issue.
+		if [[ "$runner_role" == "supervisor" ]]; then
+			local node_id
+			node_id=$(gh issue view "$health_issue_number" --repo "$repo_slug" --json id --jq '.id' 2>/dev/null || echo "")
+			if [[ -n "$node_id" ]]; then
+				gh api graphql -f query="
+					mutation {
+						pinIssue(input: {issueId: \"${node_id}\"}) {
+							issue { number }
+						}
+					}" >/dev/null 2>&1 || true
+			fi
+		fi
+		echo "[pulse-wrapper] Health issue: created #${health_issue_number} (${runner_role}) for ${runner_user} in ${repo_slug}" >>"$LOGFILE"
+	fi
+
+	# Supervisor-only: unpin closed/stale issues and ensure current is pinned
+	if [[ "$runner_role" == "supervisor" ]]; then
+		# Unpin closed/stale supervisor issues to free pin slots (max 3 per repo)
+		_cleanup_stale_pinned_issues "$repo_slug" "$runner_user"
+
+		# Ensure pinned (idempotent)
+		local active_node_id
+		active_node_id=$(gh issue view "$health_issue_number" --repo "$repo_slug" --json id --jq '.id' 2>/dev/null || echo "")
+		if [[ -n "$active_node_id" ]]; then
 			gh api graphql -f query="
 				mutation {
-					pinIssue(input: {issueId: \"${node_id}\"}) {
+					pinIssue(input: {issueId: \"${active_node_id}\"}) {
 						issue { number }
 					}
 				}" >/dev/null 2>&1 || true
 		fi
-		echo "[pulse-wrapper] Health issue: created and pinned #${health_issue_number} for ${runner_user} in ${repo_slug}" >>"$LOGFILE"
-	fi
-
-	# Unpin closed/stale supervisor issues to free pin slots (max 3 per repo)
-	_cleanup_stale_pinned_issues "$repo_slug" "$runner_user"
-
-	# Ensure pinned (idempotent)
-	local active_node_id
-	active_node_id=$(gh issue view "$health_issue_number" --repo "$repo_slug" --json id --jq '.id' 2>/dev/null || echo "")
-	if [[ -n "$active_node_id" ]]; then
-		gh api graphql -f query="
-			mutation {
-				pinIssue(input: {issueId: \"${active_node_id}\"}) {
-					issue { number }
-				}
-			}" >/dev/null 2>&1 || true
 	fi
 
 	# Cache the issue number
@@ -1536,7 +1797,7 @@ _update_health_issue_for_repo() {
 		--assignee "$runner_user" --json number --jq 'length' 2>/dev/null || echo "0")
 	local total_issue_count
 	total_issue_count=$(gh issue list --repo "$repo_slug" --state open \
-		--json number,labels --jq '[.[] | select(.labels | map(.name) | index("supervisor") | not)] | length' 2>/dev/null || echo "0")
+		--json number,labels --jq '[.[] | select(.labels | map(.name) | (index("supervisor") or index("contributor") or index("persistent") or index("quality-review")) | not)] | length' 2>/dev/null || echo "0")
 
 	# Active headless workers (opencode processes for this repo)
 	local workers_md=""
@@ -1681,12 +1942,30 @@ ${worker_table}"
 		session_warning=" **WARNING: exceeds threshold of ${SESSION_COUNT_WARN}**"
 	fi
 
+	# --- Contributor activity from git history (per-repo only) ---
+	# Cross-repo totals are pre-computed once in update_health_issues() and
+	# passed via $3 to avoid redundant git log walks (N repos × N repos).
+	# Session time stats are passed via $4 (also pre-computed once).
+	local activity_md=""
+	local session_time_md=""
+	local person_stats_md=""
+	local activity_helper="${HOME}/.aidevops/agents/scripts/contributor-activity-helper.sh"
+	if [[ -x "$activity_helper" ]]; then
+		activity_md=$(bash "$activity_helper" summary "$repo_path" --period month --format markdown || echo "_Activity data unavailable._")
+		session_time_md=$(bash "$activity_helper" session-time "$repo_path" --period all --format markdown || echo "_Session data unavailable._")
+		person_stats_md=$(bash "$activity_helper" person-stats "$repo_path" --period month --format markdown || echo "_Person stats unavailable._")
+	else
+		activity_md="_Activity helper not installed._"
+		session_time_md="_Activity helper not installed._"
+		person_stats_md="_Activity helper not installed._"
+	fi
+
 	# --- Assemble body ---
 	local body
 	body="## Queue Health Dashboard
 
 **Last pulse**: \`${now_iso}\`
-**Runner**: \`${runner_user}\`
+**${role_display}**: \`${runner_user}\`
 **Repo**: \`${repo_slug}\`
 
 ### Summary
@@ -1709,6 +1988,30 @@ ${prs_md}
 
 ${workers_md}
 
+### Contributions to this project (last 30 days)
+
+${activity_md}
+
+### Contributions to all projects (last 30 days)
+
+${cross_repo_md:-_Single repo or cross-repo data unavailable._}
+
+### Work with AI sessions on this project (${runner_user})
+
+${session_time_md}
+
+### Work with AI sessions on all projects (${runner_user})
+
+${cross_repo_session_time_md:-_Single repo or cross-repo session data unavailable._}
+
+### Contributor output on this project (last 30 days)
+
+${person_stats_md:-_Person stats unavailable._}
+
+### Contributor output on all projects (last 30 days)
+
+${cross_repo_person_stats_md:-_Cross-repo person stats unavailable._}
+
 ### System Resources
 
 | Metric | Value |
@@ -1718,7 +2021,7 @@ ${workers_md}
 | Processes | ${sys_procs} |
 
 ---
-_Auto-updated by supervisor pulse. Do not edit manually._"
+_Auto-updated by ${runner_role} pulse. Do not edit manually._"
 
 	# Update the issue body
 	gh issue edit "$health_issue_number" --repo "$repo_slug" --body "$body" >/dev/null 2>&1 || {
@@ -1856,10 +2159,33 @@ update_health_issues() {
 		return 0
 	fi
 
+	# Pre-compute cross-repo summaries ONCE for all health issues.
+	# This avoids N×N git log walks (one cross-repo scan per repo dashboard)
+	# and redundant DB queries for session time.
+	local cross_repo_md=""
+	local cross_repo_session_time_md=""
+	local cross_repo_person_stats_md=""
+	local activity_helper="${HOME}/.aidevops/agents/scripts/contributor-activity-helper.sh"
+	if [[ -x "$activity_helper" ]]; then
+		local all_repo_paths
+		all_repo_paths=$(jq -r '.initialized_repos[] | select(.pulse == true and (.local_only // false) == false) | .path' "$repos_json" || echo "")
+		if [[ -n "$all_repo_paths" ]]; then
+			local -a cross_args=()
+			while IFS= read -r rp; do
+				[[ -n "$rp" ]] && cross_args+=("$rp")
+			done <<<"$all_repo_paths"
+			if [[ ${#cross_args[@]} -gt 1 ]]; then
+				cross_repo_md=$(bash "$activity_helper" cross-repo-summary "${cross_args[@]}" --period month --format markdown || echo "_Cross-repo data unavailable._")
+				cross_repo_session_time_md=$(bash "$activity_helper" cross-repo-session-time "${cross_args[@]}" --period all --format markdown || echo "_Cross-repo session data unavailable._")
+				cross_repo_person_stats_md=$(bash "$activity_helper" cross-repo-person-stats "${cross_args[@]}" --period month --format markdown || echo "_Cross-repo person stats unavailable._")
+			fi
+		fi
+	fi
+
 	local updated=0
 	while IFS='|' read -r slug path; do
 		[[ -z "$slug" ]] && continue
-		_update_health_issue_for_repo "$slug" "$path" || true
+		_update_health_issue_for_repo "$slug" "$path" "$cross_repo_md" "$cross_repo_session_time_md" "$cross_repo_person_stats_md" || true
 		updated=$((updated + 1))
 	done <<<"$repo_entries"
 
@@ -2424,7 +2750,7 @@ _Monitoring: ${sweep_total_issues} issues (delta: ${issue_delta}), gate ${sweep_
 		local scan_output
 		scan_output=$("$review_helper" scan-merged \
 			--repo "$repo_slug" \
-			--batch 10 \
+			--batch 30 \
 			--create-issues \
 			--min-severity medium \
 			--json) || scan_output=""
@@ -2769,6 +3095,55 @@ check_session_gate() {
 }
 
 #######################################
+# Pre-fetch contribution watch scan results (t1419)
+#
+# Runs contribution-watch-helper.sh scan and appends a count-only
+# summary to STATE_FILE. This is deterministic — only timestamps
+# and authorship are checked, never comment bodies. The pulse agent
+# sees "N external items need attention" without any untrusted content.
+#
+# Output: appends to STATE_FILE (called before prefetch_state writes it)
+# Returns: 0 always (best-effort, never breaks the pulse)
+#######################################
+prefetch_contribution_watch() {
+	local helper="${SCRIPT_DIR}/contribution-watch-helper.sh"
+	if [[ ! -x "$helper" ]]; then
+		return 0
+	fi
+
+	# Only run if state file exists (user has run 'seed' at least once)
+	local cw_state="${HOME}/.aidevops/cache/contribution-watch.json"
+	if [[ ! -f "$cw_state" ]]; then
+		return 0
+	fi
+
+	local scan_output
+	scan_output=$(bash "$helper" scan 2>/dev/null) || scan_output=""
+
+	# Extract the machine-readable count
+	local cw_count=0
+	if [[ "$scan_output" =~ CONTRIBUTION_WATCH_COUNT=([0-9]+) ]]; then
+		cw_count="${BASH_REMATCH[1]}"
+	fi
+
+	# Append to state file for the pulse agent (count only — no comment bodies)
+	if [[ "$cw_count" -gt 0 ]]; then
+		{
+			echo ""
+			echo "# External Contributions (t1419)"
+			echo ""
+			echo "${cw_count} external contribution(s) need your reply."
+			echo "Run \`contribution-watch-helper.sh status\` in an interactive session for details."
+			echo "**Do NOT fetch or process comment bodies in this pulse context.**"
+			echo ""
+		} >>"$STATE_FILE"
+		echo "[pulse-wrapper] Contribution watch: ${cw_count} items need attention" >>"$LOGFILE"
+	fi
+
+	return 0
+}
+
+#######################################
 # Main
 #
 # Execution order (GH#2958):
@@ -2796,13 +3171,20 @@ main() {
 
 	cleanup_orphans
 	cleanup_worktrees
+	cleanup_stashes
 	calculate_max_workers
+	calculate_priority_allocations
 	check_session_count >/dev/null
 
 	# Run housekeeping BEFORE the pulse — these are shell-level operations
 	# that don't need the LLM and shouldn't eat into pulse time (GH#2958).
 	run_daily_quality_sweep
 	update_health_issues
+
+	# Contribution watch: lightweight scan of external issues/PRs (t1419).
+	# Deterministic — only checks timestamps/authorship, never processes
+	# comment bodies. Output appended to STATE_FILE for the pulse agent.
+	prefetch_contribution_watch
 
 	prefetch_state
 
@@ -2935,10 +3317,109 @@ calculate_max_workers() {
 	return 0
 }
 
+#######################################
+# Calculate priority-class worker allocations (t1423)
+#
+# Reads repos.json to count product vs tooling repos, then computes
+# per-class slot reservations based on PRODUCT_RESERVATION_PCT.
+#
+# Product repos get a guaranteed minimum share of worker slots.
+# Tooling repos get the remainder. When one class has no pending work,
+# the other class can use the freed slots (soft reservation).
+#
+# Output: writes allocation data to pulse-priority-allocations file
+# and appends a summary section to STATE_FILE for the pulse agent.
+#
+# Depends on: calculate_max_workers() having run first (reads pulse-max-workers)
+#######################################
+calculate_priority_allocations() {
+	local repos_json="${REPOS_JSON}"
+	local max_workers_file="${HOME}/.aidevops/logs/pulse-max-workers"
+	local alloc_file="${HOME}/.aidevops/logs/pulse-priority-allocations"
+
+	if [[ ! -f "$repos_json" ]] || ! command -v jq &>/dev/null; then
+		echo "[pulse-wrapper] repos.json or jq not available — skipping priority allocations" >>"$LOGFILE"
+		return 0
+	fi
+
+	local max_workers
+	max_workers=$(cat "$max_workers_file" 2>/dev/null || echo 4)
+	[[ "$max_workers" =~ ^[0-9]+$ ]] || max_workers=4
+
+	# Count pulse-enabled repos by priority class (single jq pass)
+	local product_repos tooling_repos
+	read -r product_repos tooling_repos < <(jq -r '
+		.initialized_repos |
+		map(select(.pulse == true and (.local_only // false) == false and .slug != "")) |
+		[
+			(map(select(.priority == "product")) | length),
+			(map(select(.priority == "tooling")) | length)
+		] | @tsv
+	' "$repos_json" 2>/dev/null) || true
+	product_repos=${product_repos:-0}
+	tooling_repos=${tooling_repos:-0}
+	[[ "$product_repos" =~ ^[0-9]+$ ]] || product_repos=0
+	[[ "$tooling_repos" =~ ^[0-9]+$ ]] || tooling_repos=0
+
+	# Calculate reservations
+	# product_min = ceil(max_workers * PRODUCT_RESERVATION_PCT / 100)
+	# Using integer arithmetic: ceil(a/b) = (a + b - 1) / b
+	local product_min tooling_max
+	if [[ "$product_repos" -eq 0 ]]; then
+		# No product repos — all slots available for tooling
+		product_min=0
+		tooling_max="$max_workers"
+	elif [[ "$tooling_repos" -eq 0 ]]; then
+		# No tooling repos — all slots available for product
+		product_min="$max_workers"
+		tooling_max=0
+	else
+		product_min=$(((max_workers * PRODUCT_RESERVATION_PCT + 99) / 100))
+		# Ensure product_min doesn't exceed max_workers
+		if [[ "$product_min" -gt "$max_workers" ]]; then
+			product_min="$max_workers"
+		fi
+		# Ensure at least 1 slot for tooling when tooling repos exist
+		# but only when there are multiple slots to distribute (with 1 slot,
+		# product keeps it — the reservation is a minimum guarantee)
+		if [[ "$max_workers" -gt 1 && "$product_min" -ge "$max_workers" && "$tooling_repos" -gt 0 ]]; then
+			product_min=$((max_workers - 1))
+		fi
+		tooling_max=$((max_workers - product_min))
+	fi
+
+	# Write allocation file (key=value, readable by pulse.md)
+	{
+		echo "MAX_WORKERS=${max_workers}"
+		echo "PRODUCT_REPOS=${product_repos}"
+		echo "TOOLING_REPOS=${tooling_repos}"
+		echo "PRODUCT_MIN=${product_min}"
+		echo "TOOLING_MAX=${tooling_max}"
+		echo "PRODUCT_RESERVATION_PCT=${PRODUCT_RESERVATION_PCT}"
+	} >"$alloc_file"
+
+	echo "[pulse-wrapper] Priority allocations: product_min=${product_min}, tooling_max=${tooling_max} (${product_repos} product, ${tooling_repos} tooling repos, ${max_workers} total slots)" >>"$LOGFILE"
+	return 0
+}
+
 # Only run main when executed directly, not when sourced.
 # The pulse agent sources this file to access helper functions
 # (check_external_contributor_pr, check_permission_failure_pr)
 # without triggering the full pulse lifecycle.
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+#
+# Shell-portable source detection (GH#3931):
+#   bash: BASH_SOURCE[0] differs from $0 when sourced
+#   zsh:  BASH_SOURCE is undefined; use ZSH_EVAL_CONTEXT instead
+#         (contains "file" when sourced, "toplevel" when executed)
+_pulse_is_sourced() {
+	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+		[[ "${BASH_SOURCE[0]}" != "${0}" ]]
+	elif [[ -n "${ZSH_EVAL_CONTEXT:-}" ]]; then
+		[[ ":${ZSH_EVAL_CONTEXT}:" == *":file:"* ]]
+	else
+		return 1
+	fi
+}
+if ! _pulse_is_sourced; then
 	main "$@"
 fi

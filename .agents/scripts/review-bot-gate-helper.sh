@@ -6,13 +6,23 @@
 #   review-bot-gate-helper.sh wait          <PR_NUMBER> [REPO] [MAX_WAIT_SECONDS]
 #   review-bot-gate-helper.sh list          <PR_NUMBER> [REPO]
 #   review-bot-gate-helper.sh request-retry <PR_NUMBER> [REPO]
+#   review-bot-gate-helper.sh batch-retry   [REPO]
 #
 # Commands:
-#   check          — Check once, return PASS/WAITING/SKIP
+#   check          — Check once, return PASS/PASS_RATE_LIMITED/WAITING/SKIP
 #   wait           — Poll until a bot posts or timeout (default 600s)
 #   list           — List all bot comments found on the PR
 #   request-retry  — If bots were rate-limited and no real review exists,
 #                     request a review retry (idempotent, safe to call every pulse)
+#   batch-retry    — Process all open PRs with 0 formal reviews, request retries
+#                     for rate-limited ones. Staggers requests to avoid re-triggering
+#                     rate limits. (GH#3932)
+#
+# Output values for check/wait:
+#   PASS              — At least one bot posted a real review
+#   PASS_RATE_LIMITED  — Bots are rate-limited but grace period exceeded (GH#3827)
+#   WAITING           — No real reviews yet, still within grace period
+#   SKIP              — PR has skip-review-gate label
 #
 # Exit codes:
 #   0 — PASS/SKIP/REQUESTED/ALREADY_REQUESTED/NO_ACTION
@@ -22,8 +32,12 @@
 # Environment:
 #   REVIEW_BOT_WAIT_MAX  — Max seconds to wait in 'wait' mode (default: 600)
 #   REVIEW_BOT_POLL_INTERVAL — Seconds between polls (default: 60)
+#   RATE_LIMIT_GRACE_SECONDS — How long to wait before passing rate-limited PRs
+#                              (default: 14400 = 4 hours). Set to 0 to disable.
 #
 # t1382: https://github.com/marcusquinn/aidevops/issues/2735
+# GH#3827: Rate-limit grace period — pass gate after timeout when bots are
+#          rate-limited, preventing indefinite PR blockage.
 
 set -euo pipefail
 
@@ -49,16 +63,47 @@ RATE_LIMIT_PATTERNS=(
 
 SKIP_LABEL="skip-review-gate"
 
+# GH#3827: Grace period for rate-limited bots. If bots posted rate-limit
+# notices (proving they're configured) but the PR has been open longer than
+# this threshold, pass the gate with a warning. Default: 4 hours (14400s).
+# Set RATE_LIMIT_GRACE_SECONDS=0 to disable (block indefinitely).
+RATE_LIMIT_GRACE_SECONDS="${RATE_LIMIT_GRACE_SECONDS:-14400}"
+
 # --- Functions ---
 
 usage() {
-	echo "Usage: $(basename "$0") {check|wait|list|request-retry} <PR_NUMBER> [REPO] [MAX_WAIT]"
+	echo "Usage: $(basename "$0") {check|wait|list|request-retry|batch-retry} <PR_NUMBER> [REPO] [MAX_WAIT]"
 	echo ""
 	echo "Commands:"
-	echo "  check          Check once for bot reviews (returns PASS/WAITING/SKIP)"
+	echo "  check          Check once for bot reviews (returns PASS/PASS_RATE_LIMITED/WAITING/SKIP)"
 	echo "  wait           Poll until bot reviews appear or timeout"
 	echo "  list           List all bot comments found"
 	echo "  request-retry  Request review retry if bots were rate-limited (idempotent)"
+	echo "  batch-retry    Process all open PRs with 0 reviews, request retries (GH#3932)"
+	return 0
+}
+
+get_pr_age_seconds() {
+	# Return the age of a PR in seconds since creation.
+	# Falls back to 0 if the creation time cannot be determined.
+	local pr_number="$1"
+	local repo="$2"
+
+	local created_at
+	created_at=$(gh pr view "$pr_number" --repo "$repo" \
+		--json createdAt -q '.createdAt' 2>/dev/null || echo "")
+	if [[ -z "$created_at" ]]; then
+		echo "0"
+		return 0
+	fi
+
+	local created_epoch now_epoch
+	# macOS date vs GNU date
+	created_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$created_at" +%s 2>/dev/null ||
+		date -d "$created_at" +%s 2>/dev/null ||
+		echo "0")
+	now_epoch=$(date +%s)
+	echo $((now_epoch - created_epoch))
 	return 0
 }
 
@@ -262,9 +307,29 @@ do_check() {
 		echo "Status check fallback: bots rate-limited but have SUCCESS status checks" >&2
 		return 0
 	elif [[ -n "$rate_limited_bots" ]]; then
+		# GH#3827: Rate-limit grace period. If bots posted rate-limit notices
+		# (proving they're configured and aware of the PR) but the PR has been
+		# open longer than RATE_LIMIT_GRACE_SECONDS, pass with a warning.
+		# This prevents indefinite blockage when bots are systemically rate-limited.
+		local pr_age
+		pr_age=$(get_pr_age_seconds "$pr_number" "$repo")
+		if [[ "$RATE_LIMIT_GRACE_SECONDS" -gt 0 ]] && [[ "$pr_age" -ge "$RATE_LIMIT_GRACE_SECONDS" ]]; then
+			local grace_hours=$((RATE_LIMIT_GRACE_SECONDS / 3600))
+			local age_hours=$((pr_age / 3600))
+			echo "PASS_RATE_LIMITED"
+			echo "Rate-limit grace period exceeded (PR is ${age_hours}h old, threshold: ${grace_hours}h)." >&2
+			echo "Bots are rate-limited: ${rate_limited_bots}" >&2
+			echo "Passing gate — bot reviews will be addressed post-merge if needed." >&2
+			return 0
+		fi
 		echo "WAITING"
 		echo "Bots posted rate-limit notices only (not real reviews): ${rate_limited_bots}" >&2
 		echo "No SUCCESS status checks found as fallback." >&2
+		if [[ "$RATE_LIMIT_GRACE_SECONDS" -gt 0 ]]; then
+			local grace_hours=$((RATE_LIMIT_GRACE_SECONDS / 3600))
+			local remaining=$(((RATE_LIMIT_GRACE_SECONDS - pr_age) / 60))
+			echo "Rate-limit grace period: ${grace_hours}h (${remaining}min remaining)." >&2
+		fi
 		return 1
 	else
 		echo "WAITING"
@@ -286,7 +351,7 @@ do_wait() {
 		local result
 		result=$(do_check "$pr_number" "$repo" 2>/dev/null) || true
 
-		if [[ "$result" == "PASS" || "$result" == "SKIP" ]]; then
+		if [[ "$result" == "PASS" || "$result" == "PASS_RATE_LIMITED" || "$result" == "SKIP" ]]; then
 			echo "$result"
 			return 0
 		fi
@@ -441,6 +506,74 @@ Review bots were rate-limited when this PR was created (affected: ${rate_limited
 	fi
 }
 
+do_batch_retry() {
+	# GH#3932: Process all open PRs with 0 formal reviews, request retries
+	# for rate-limited ones. Staggers requests with a delay between each to
+	# avoid re-triggering CodeRabbit's hourly rate limit.
+	#
+	# Returns summary: REQUESTED_N (where N is the count of retries requested)
+	local repo="$1"
+	local stagger_seconds="${BATCH_RETRY_STAGGER:-5}"
+
+	echo "Scanning open PRs in ${repo} for rate-limited reviews..." >&2
+
+	# Get all open PRs with 0 formal reviews
+	local pr_numbers
+	pr_numbers=$(gh pr list --repo "$repo" --state open --limit 100 \
+		--json number,reviews \
+		--jq '[.[] | select((.reviews | length) == 0)] | .[].number' || echo "")
+
+	if [[ -z "$pr_numbers" ]]; then
+		echo "NO_ACTION"
+		echo "No open PRs with 0 formal reviews found." >&2
+		return 0
+	fi
+
+	local total=0
+	local requested=0
+	local already=0
+	local skipped=0
+	local pr_num result
+
+	while IFS= read -r pr_num; do
+		[[ -z "$pr_num" ]] && continue
+		total=$((total + 1))
+
+		# Run request-retry for each PR (it handles idempotency internally)
+		result=$(do_request_retry "$pr_num" "$repo") || true
+
+		case "$result" in
+		REQUESTED)
+			requested=$((requested + 1))
+			echo "  PR #${pr_num}: retry requested" >&2
+			# Stagger to avoid re-triggering rate limits
+			if [[ "$stagger_seconds" -gt 0 ]]; then
+				sleep "$stagger_seconds"
+			fi
+			;;
+		ALREADY_REQUESTED)
+			already=$((already + 1))
+			echo "  PR #${pr_num}: already requested" >&2
+			;;
+		HAS_REVIEWS)
+			echo "  PR #${pr_num}: has formal reviews (skipped)" >&2
+			;;
+		NO_ACTION)
+			skipped=$((skipped + 1))
+			echo "  PR #${pr_num}: no rate-limited bots (skipped)" >&2
+			;;
+		*)
+			skipped=$((skipped + 1))
+			echo "  PR #${pr_num}: ${result:-error} (skipped)" >&2
+			;;
+		esac
+	done <<<"$pr_numbers"
+
+	echo "REQUESTED_${requested}"
+	echo "Batch retry complete: ${total} PRs scanned, ${requested} retries requested, ${already} already requested, ${skipped} skipped." >&2
+	return 0
+}
+
 # --- Main ---
 
 main() {
@@ -449,6 +582,20 @@ main() {
 	local repo="${3:-}"
 	local max_wait="${4:-}"
 
+	# batch-retry only needs repo, not pr_number
+	if [[ "$command" == "batch-retry" ]]; then
+		local batch_repo="${2:-}"
+		if [[ -z "$batch_repo" ]]; then
+			batch_repo=$(gh repo view --json nameWithOwner -q .nameWithOwner || echo "")
+			if [[ -z "$batch_repo" ]]; then
+				echo "ERROR: Could not determine repo. Pass REPO as argument." >&2
+				return 2
+			fi
+		fi
+		do_batch_retry "$batch_repo"
+		return $?
+	fi
+
 	if [[ -z "$command" || -z "$pr_number" ]]; then
 		usage
 		return 2
@@ -456,7 +603,7 @@ main() {
 
 	# Default repo from current git context
 	if [[ -z "$repo" ]]; then
-		repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")
+		repo=$(gh repo view --json nameWithOwner -q .nameWithOwner || echo "")
 		if [[ -z "$repo" ]]; then
 			echo "ERROR: Could not determine repo. Pass REPO as third argument." >&2
 			return 2
