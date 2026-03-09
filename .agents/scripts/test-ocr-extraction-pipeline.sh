@@ -693,7 +693,7 @@ create_large_invoice() {
 		local amount=$((i * 10))
 		subtotal=$((subtotal + amount))
 		local vat_amt
-		vat_amt=$(echo "$amount * 0.2" | bc 2>/dev/null || echo "$((amount / 5))")
+		vat_amt=$(echo "$amount * 0.2" | bc || echo "$((amount / 5))")
 		if [[ -n "$items" ]]; then
 			items="${items},"
 		fi
@@ -708,9 +708,9 @@ create_large_invoice() {
     }"
 	done
 	local vat_total
-	vat_total=$(echo "$subtotal * 0.2" | bc 2>/dev/null || echo "$((subtotal / 5))")
+	vat_total=$(echo "$subtotal * 0.2" | bc || echo "$((subtotal / 5))")
 	local total
-	total=$(echo "$subtotal + $vat_total" | bc 2>/dev/null || echo "$((subtotal + subtotal / 5))")
+	total=$(echo "$subtotal + $vat_total" | bc || echo "$((subtotal + subtotal / 5))")
 
 	cat >"$output_file" <<FIXTURE
 {
@@ -742,7 +742,7 @@ test_pipeline_classify() {
 		local text_file="${TEST_WORKSPACE}/invoice-text.txt"
 		create_invoice_text "$text_file"
 		local output
-		output="$("$PYTHON_CMD" "$PIPELINE_PY" classify "$text_file" 2>/dev/null)" || true
+		output="$("$PYTHON_CMD" "$PIPELINE_PY" classify "$text_file")" || true
 		if echo "$output" | grep -q '"purchase_invoice"'; then
 			log_test "PASS" "${group}/invoice-text"
 		else
