@@ -322,6 +322,12 @@ wave_docs() {
 		return 1
 	}
 
+	# Validate JSON before parsing
+	if ! echo "$result" | jq empty 2>/dev/null; then
+		print_error "WAVE API returned invalid JSON (possible HTML error page)"
+		return 1
+	fi
+
 	echo ""
 	print_header_line "WAVE Documentation: $item_id"
 
@@ -374,6 +380,12 @@ wave_credits() {
 		print_error "Failed to reach WAVE API"
 		return 1
 	}
+
+	# Validate JSON before parsing
+	if ! echo "$result" | jq empty 2>/dev/null; then
+		print_error "WAVE API returned invalid JSON (possible HTML error page)"
+		return 1
+	fi
 
 	local success
 	success=$(echo "$result" | jq -r '.status.success // false')
@@ -548,12 +560,13 @@ run_pa11y_audit() {
 		fi
 	fi
 
-	parse_pa11y_report "$report_file"
+	parse_pa11y_report "$report_file" "$standard"
 	return 0
 }
 
 parse_pa11y_report() {
 	local report_file="$1"
+	local standard="${2:-$A11Y_WCAG_LEVEL}"
 
 	check_jq || return 1
 
@@ -570,7 +583,7 @@ parse_pa11y_report() {
 	notices=$(jq '[.[] | select(.type == "notice")] | length' "$report_file" 2>/dev/null || echo "0")
 
 	echo ""
-	print_header_line "pa11y Results ($A11Y_WCAG_LEVEL)"
+	print_header_line "pa11y Results ($standard)"
 	echo "  Total issues: $total"
 
 	if [[ "$errors" -gt 0 ]]; then
@@ -1137,7 +1150,7 @@ main() {
 	"install-deps")
 		install_deps
 		;;
-	"help" | *)
+	"help")
 		print_header_line "Accessibility & Contrast Testing Helper"
 		echo "Usage: $0 [command] [options]"
 		echo ""
@@ -1182,6 +1195,11 @@ main() {
 		echo "  $0 bulk websites.txt"
 		echo ""
 		echo "Reports saved to: $A11Y_REPORTS_DIR"
+		;;
+	*)
+		print_error "Unknown command: $command"
+		print_info "Run: $0 help"
+		return 1
 		;;
 	esac
 }
