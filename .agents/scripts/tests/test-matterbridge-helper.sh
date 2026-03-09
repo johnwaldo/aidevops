@@ -150,8 +150,12 @@ test_simplex_bridge_init() {
 	# Check config permissions
 	if [[ -f "$config_path" ]]; then
 		local perms
-		# stat -c '%a' is Linux; stat -f '%Lp' is macOS
-		perms="$(stat -c '%a' "$config_path" || stat -f '%Lp' "$config_path" || echo "unknown")"
+		# stat -c '%a' is GNU/Linux; stat -f '%Lp' is BSD/macOS
+		case "$(uname -s)" in
+		Linux*) perms="$(stat -c '%a' "$config_path")" ;;
+		Darwin* | FreeBSD*) perms="$(stat -f '%Lp' "$config_path")" ;;
+		*) perms="unknown" ;;
+		esac
 		if [[ "$perms" == "600" ]]; then
 			print_result "simplex-bridge init: config has 600 permissions" 0
 		else
