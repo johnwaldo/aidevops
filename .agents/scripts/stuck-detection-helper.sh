@@ -147,7 +147,7 @@ _sd_write_state() {
 
 	# Atomic write via temp file + mv
 	local tmp_file="${state_file}.tmp.$$"
-	if ! printf '%s\n' "$state_json" >"$tmp_file" 2>/dev/null; then
+	if ! printf '%s\n' "$state_json" >"$tmp_file"; then
 		_sd_log_warn "failed to write temp state file: $tmp_file"
 		rm -f "$tmp_file" 2>/dev/null || true
 		return 1
@@ -261,14 +261,32 @@ cmd_label_stuck() {
 	local suggested_actions="$6"
 	local repo_slug="${7:-}"
 
-	if [[ -z "$issue_number" || -z "$milestone_min" || -z "$confidence" ]]; then
+	if [[ -z "$issue_number" || -z "$milestone_min" || -z "$elapsed_min" || -z "$confidence" ]]; then
 		_sd_log_error "usage: label-stuck <issue_number> <milestone_min> <elapsed_min> <confidence> <reasoning> <suggested_actions> [--repo <slug>]"
+		return 1
+	fi
+
+	# Validate numeric parameters before any side effects (GitHub ops, state mutations).
+	# milestone_min/elapsed_min are integers used in jq --argjson and comment interpolation.
+	# confidence is a float used in awk comparison — non-numeric strings cause
+	# lexicographic semantics (e.g., "high" >= "0.7" is true).
+	if ! [[ "$milestone_min" =~ ^[0-9]+$ ]] || ! [[ "$elapsed_min" =~ ^[0-9]+$ ]]; then
+		_sd_log_error "milestone_min and elapsed_min must be positive integers (got milestone=${milestone_min}, elapsed=${elapsed_min})"
+		return 1
+	fi
+	if ! [[ "$confidence" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+		_sd_log_error "confidence must be a number, got: ${confidence}"
 		return 1
 	fi
 
 	# Check confidence threshold
 	local above_threshold
-	above_threshold=$(awk "BEGIN { print ($confidence >= $STUCK_CONFIDENCE_THRESHOLD) ? 1 : 0 }" 2>/dev/null) || above_threshold="0"
+	if ! [[ "$confidence" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]] ||
+		! [[ "$STUCK_CONFIDENCE_THRESHOLD" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]]; then
+		_sd_log_error "confidence values must be numeric (got confidence=${confidence}, threshold=${STUCK_CONFIDENCE_THRESHOLD})"
+		return 1
+	fi
+	above_threshold=$(awk -v c="$confidence" -v t="$STUCK_CONFIDENCE_THRESHOLD" 'BEGIN { print (c >= t) ? 1 : 0 }') || above_threshold="0"
 
 	if [[ "$above_threshold" -ne 1 ]]; then
 		_sd_log_info "confidence $confidence below threshold $STUCK_CONFIDENCE_THRESHOLD for issue #$issue_number — not labeling"
@@ -307,7 +325,7 @@ cmd_label_stuck() {
 
 	# Apply label
 	gh issue edit "$issue_number" --repo "$repo_slug" \
-		--add-label "$STUCK_LABEL" 2>/dev/null || {
+		--add-label "$STUCK_LABEL" || {
 		_sd_log_warn "failed to add label to issue #$issue_number"
 		return 1
 	}
@@ -330,12 +348,15 @@ ${suggested_actions}
 ---
 *This is an advisory notification only. No automated action has been taken. The worker continues running. The \`${STUCK_LABEL}\` label will be automatically removed if the task completes successfully.*"
 
+	local comment_failed=0
 	gh issue comment "$issue_number" --repo "$repo_slug" \
-		--body "$comment_body" 2>/dev/null || {
+		--body "$comment_body" || {
 		_sd_log_warn "failed to comment on issue #$issue_number"
+		comment_failed=1
 	}
 
-	# Record milestone and labeled issue in state
+	# Record milestone and labeled issue in state (regardless of comment success,
+	# since the label was applied — skipping state would cause re-labeling).
 	_sd_record_milestone "$issue_number" "$milestone_min" "$repo_slug" || true
 
 	local state
@@ -351,7 +372,7 @@ ${suggested_actions}
 	fi
 
 	_sd_log_warn "labeled issue #$issue_number as stuck (confidence: $confidence, milestone: ${milestone_min}min)"
-	return 0
+	return "$comment_failed"
 }
 
 # Remove stuck-detection label from a GitHub issue on task success.
@@ -394,7 +415,7 @@ cmd_label_clear() {
 
 	# Remove the label
 	gh issue edit "$issue_number" --repo "$repo_slug" \
-		--remove-label "$STUCK_LABEL" 2>/dev/null || {
+		--remove-label "$STUCK_LABEL" || {
 		_sd_log_warn "failed to remove label from issue #$issue_number"
 		return 1
 	}
@@ -416,7 +437,8 @@ cmd_label_clear() {
 	new_state=$(printf '%s' "$state" | jq \
 		--arg key "$issue_key" \
 		--arg issue "$issue_number" \
-		'del(.milestones_checked[$key]) | .labeled_issues = [.labeled_issues[] | select(.issue != $issue)]') || true
+		--arg repo "$repo_slug" \
+		'del(.milestones_checked[$key]) | .labeled_issues = [(.labeled_issues // [])[] | select((.issue != $issue) or (.repo != $repo))]') || true
 	if [[ -n "$new_state" ]]; then
 		_sd_write_state "$new_state" || true
 	fi

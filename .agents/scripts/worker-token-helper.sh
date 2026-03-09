@@ -367,6 +367,11 @@ cmd_create() {
 			;;
 		--ttl | -t)
 			ttl="$2"
+			# Validate TTL is numeric to prevent arithmetic injection
+			if ! [[ "$ttl" =~ ^[0-9]+$ ]]; then
+				log_token "ERROR" "TTL must be a positive integer: ${ttl}"
+				return 1
+			fi
 			if ((ttl > MAX_TTL)); then
 				log_token "WARN" "TTL capped at ${MAX_TTL}s (requested ${ttl}s)"
 				ttl=$MAX_TTL
@@ -398,14 +403,14 @@ cmd_create() {
 
 	# Strategy 1: GitHub App installation token (best — enforced by GitHub)
 	local token_file
-	token_file=$(create_app_token "$repo" "$permissions" "$ttl" 2>/dev/null) && {
+	token_file=$(create_app_token "$repo" "$permissions" "$ttl") && {
 		log_token "INFO" "Strategy: GitHub App installation token (enforced scoping)"
 		printf '%s' "$token_file"
 		return 0
 	}
 
 	# Strategy 2: Delegated token (fallback — advisory scoping)
-	token_file=$(create_delegated_token "$repo" "$permissions" "$ttl" 2>/dev/null) && {
+	token_file=$(create_delegated_token "$repo" "$permissions" "$ttl") && {
 		log_token "INFO" "Strategy: Delegated token (advisory scoping)"
 		printf '%s' "$token_file"
 		return 0
@@ -434,6 +439,22 @@ cmd_validate() {
 
 	if [[ -z "$token_file" ]]; then
 		log_token "ERROR" "Token file required: --token-file /path/to/token"
+		return 1
+	fi
+
+	# Validate token file path is within TOKEN_DIR to prevent path traversal
+	# Canonicalize both paths with realpath to handle symlinked home directories
+	local real_path token_dir_real
+	token_dir_real=$(realpath "$TOKEN_DIR" 2>/dev/null) || {
+		log_token "ERROR" "Cannot resolve token directory: ${TOKEN_DIR}"
+		return 1
+	}
+	real_path=$(realpath "$token_file" 2>/dev/null) || {
+		log_token "ERROR" "Cannot resolve token file path: ${token_file}"
+		return 1
+	}
+	if [[ "$real_path" != "${token_dir_real}/"* ]]; then
+		log_token "ERROR" "Token file must be within ${TOKEN_DIR}: ${token_file}"
 		return 1
 	fi
 
@@ -502,6 +523,24 @@ cmd_revoke() {
 
 	if [[ -z "$token_file" ]]; then
 		log_token "ERROR" "Token file required: --token-file /path/to/token"
+		return 1
+	fi
+
+	# Validate token file path is within TOKEN_DIR to prevent path traversal
+	# Resolve parent directory instead of the file itself — the token file may
+	# already be deleted (only .meta remains), and realpath fails on missing files.
+	local token_dir_real token_parent_real token_base
+	token_dir_real=$(realpath "$TOKEN_DIR" 2>/dev/null) || {
+		log_token "ERROR" "Cannot resolve token directory: ${TOKEN_DIR}"
+		return 1
+	}
+	token_parent_real=$(realpath "$(dirname "$token_file")" 2>/dev/null) || {
+		log_token "ERROR" "Cannot resolve token file path: ${token_file}"
+		return 1
+	}
+	token_base=$(basename "$token_file")
+	if [[ "$token_parent_real" != "$token_dir_real" || "$token_base" != *.token ]]; then
+		log_token "ERROR" "Token file must be within ${TOKEN_DIR}: ${token_file}"
 		return 1
 	fi
 
