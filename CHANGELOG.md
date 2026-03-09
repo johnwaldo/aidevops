@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.166.0] - 2026-03-09
+
+### Added
+
+- add top apps by screen time percentage table to profile README (#3952)
+
 ## [2.159.0] - 2026-03-08
 
 ### Added
