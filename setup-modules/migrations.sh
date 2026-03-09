@@ -537,6 +537,7 @@ disable_ondemand_mcps() {
 	)
 
 	local disabled=0
+	local changed=0
 	local tmp_config
 	tmp_config=$(mktemp)
 	trap 'rm -f "${tmp_config:-}"' RETURN
@@ -565,7 +566,7 @@ disable_ondemand_mcps() {
 		if jq -e ".mcp[\"$mcp\"].type == \"stdio\" or .mcp[\"$mcp\"].command[0] == \"echo\"" "$tmp_config" >/dev/null 2>&1; then
 			jq "del(.mcp[\"$mcp\"])" "$tmp_config" >"${tmp_config}.new" && mv "${tmp_config}.new" "$tmp_config"
 			print_info "Removed invalid MCP entry: $mcp"
-			disabled=1 # Mark as changed
+			changed=1
 		fi
 	done
 
@@ -575,14 +576,16 @@ disable_ondemand_mcps() {
 		if jq -e ".mcp[\"$mcp\"].enabled == false" "$tmp_config" >/dev/null 2>&1; then
 			jq ".mcp[\"$mcp\"].enabled = true" "$tmp_config" >"${tmp_config}.new" && mv "${tmp_config}.new" "$tmp_config"
 			print_info "Re-enabled $mcp MCP"
-			disabled=1 # Mark as changed
+			changed=1
 		fi
 	done
 
-	if [[ $disabled -gt 0 ]]; then
+	if [[ $disabled -gt 0 || $changed -gt 0 ]]; then
 		create_backup_with_rotation "$opencode_config" "opencode"
 		mv "$tmp_config" "$opencode_config"
-		print_info "Disabled $disabled MCP(s) globally (use subagents to enable on-demand)"
+		if [[ $disabled -gt 0 ]]; then
+			print_info "Disabled $disabled MCP(s) globally (use subagents to enable on-demand)"
+		fi
 	else
 		rm -f "$tmp_config"
 	fi

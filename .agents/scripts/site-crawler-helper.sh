@@ -700,11 +700,11 @@ crawl4ai_generate_reports() {
     local code_200=0 code_301=0 code_302=0 code_404=0 code_500=0 code_other=0
     for code in "${status_codes[@]}"; do
         case "$code" in
-            200) ((code_200++)) ;;
-            301) ((code_301++)) ;;
-            302) ((code_302++)) ;;
-            404) ((code_404++)) ;;
-            500) ((code_500++)) ;;
+            200) ((++code_200)) ;;
+            301) ((++code_301)) ;;
+            302) ((++code_302)) ;;
+            404) ((++code_404)) ;;
+            500) ((++code_500)) ;;
             *) ((++code_other)) ;;
         esac
     done

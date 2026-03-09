@@ -102,6 +102,8 @@ PIP_TOOLS=(
 OUTDATED_COUNT=0
 INSTALLED_COUNT=0
 NOT_INSTALLED_COUNT=0
+TIMEOUT_COUNT=0
+UNKNOWN_COUNT=0
 declare -a OUTDATED_PACKAGES=()
 declare -a JSON_RESULTS=()
 
@@ -274,12 +276,12 @@ check_tool() {
 		status="timeout"
 		icon="⏱"
 		color="$RED"
-		((++INSTALLED_COUNT))
+		((++TIMEOUT_COUNT))
 	elif [[ "$installed" == "unknown" || "$latest" == "unknown" ]]; then
 		status="unknown"
 		icon="?"
 		color="$YELLOW"
-		((++INSTALLED_COUNT))
+		((++UNKNOWN_COUNT))
 	elif [[ "$installed" != "$latest" ]] && version_lt "$installed" "$latest"; then
 		status="outdated"
 		icon="⬆"
@@ -386,7 +388,9 @@ main() {
 		echo "  \"summary\": {"
 		echo "    \"installed\": $INSTALLED_COUNT,"
 		echo "    \"outdated\": $OUTDATED_COUNT,"
-		echo "    \"not_installed\": $NOT_INSTALLED_COUNT"
+		echo "    \"not_installed\": $NOT_INSTALLED_COUNT,"
+		echo "    \"timeout\": $TIMEOUT_COUNT,"
+		echo "    \"unknown\": $UNKNOWN_COUNT"
 		echo "  },"
 		echo "  \"tools\": ["
 		local first=true
@@ -415,6 +419,12 @@ main() {
 		echo "  Installed & up to date: $INSTALLED_COUNT"
 		echo "  Outdated: $OUTDATED_COUNT"
 		echo "  Not installed: $NOT_INSTALLED_COUNT"
+		if [[ $TIMEOUT_COUNT -gt 0 ]]; then
+			echo "  Timeout (version check hung): $TIMEOUT_COUNT"
+		fi
+		if [[ $UNKNOWN_COUNT -gt 0 ]]; then
+			echo "  Unknown (could not verify): $UNKNOWN_COUNT"
+		fi
 		echo ""
 	fi
 
