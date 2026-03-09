@@ -435,7 +435,7 @@ run_lighthouse_a11y() {
 		--output=json \
 		--output-path="$report_file" \
 		--chrome-flags="$chrome_flags" \
-		"${lighthouse_args[@]}" \
+		${lighthouse_args[@]+"${lighthouse_args[@]}"} \
 		--quiet; then
 
 		print_success "Report saved: $report_file"
