@@ -211,11 +211,13 @@ cmd_setup() {
 	existing_token=$(config_get "accessToken")
 	if [[ -n "$existing_token" ]]; then
 		echo -n "Bot access token [****${existing_token: -8}]: "
-		read -r access_token </dev/tty
+		read -rs access_token </dev/tty
+		echo ""
 		access_token="${access_token:-$existing_token}"
 	else
 		echo -n "Bot access token: "
-		read -r access_token </dev/tty
+		read -rs access_token </dev/tty
+		echo ""
 	fi
 
 	if [[ -z "$access_token" ]]; then
@@ -387,14 +389,14 @@ cmd_setup() {
 				done <<<"$mappings"
 
 				if ((${#missing_runners[@]} > 0)); then
-					log_warn "The following mapped runners do not exist yet:"
+					log_info "Creating missing runners for mapped rooms..."
 					for mr in "${missing_runners[@]}"; do
-						echo "  - $mr"
-					done
-					echo ""
-					echo "Create them with:"
-					for mr in "${missing_runners[@]}"; do
-						echo "  runner-helper.sh create $mr --description \"Description\" --workdir /path/to/project"
+						if "$runner_helper" create "$mr" --description "Matrix bot runner for $mr" 2>/dev/null; then
+							log_success "Created runner: $mr"
+						else
+							log_warn "Failed to create runner: $mr"
+							echo "  Create manually: runner-helper.sh create $mr --description \"Description\" --workdir /path/to/project"
+						fi
 					done
 					echo ""
 				fi
@@ -1090,21 +1092,7 @@ async function dispatchViaAPI(prompt, runnerName) {
     if (!msgRes.ok) throw new Error(`Failed to send message: ${msgRes.status}`);
     const rawText = await msgRes.text();
 
-    // Parse JSONL stream — extract text parts from streaming response
-    const textParts = [];
-    for (const line of rawText.split("\n")) {
-        if (!line.trim()) continue;
-        try {
-            const event = JSON.parse(line);
-            if (event.type === "text" && event.part?.text) {
-                textParts.push(event.part.text);
-            }
-        } catch {
-            // Skip non-JSON lines
-        }
-    }
-
-    return { sessionId: session.id, text: textParts.join("\n") || "(no response)" };
+    return { sessionId: session.id, text: parseJsonlText(rawText) || "(no response)" };
 }
 
 // Truncate long messages for Matrix
@@ -2686,11 +2674,27 @@ cmd_auto_setup() {
 
 	# ── Step 7: Create rooms and map to runners ──
 	if [[ -n "$runners" ]]; then
-		log_info "Step 7/8: Creating rooms and mapping to runners..."
+		log_info "Step 7/8: Creating rooms, runners, and mapping..."
 
+		local runner_helper="$HOME/.aidevops/agents/scripts/runner-helper.sh"
 		IFS=',' read -ra runner_list <<<"$runners"
 		for runner in "${runner_list[@]}"; do
 			runner=$(echo "$runner" | tr -d ' ')
+
+			# Create the runner if it doesn't exist
+			if [[ -x "$runner_helper" ]]; then
+				if ! "$runner_helper" status "$runner" &>/dev/null; then
+					log_info "Creating runner: $runner"
+					"$runner_helper" create "$runner" --description "Matrix bot runner for $runner" 2>/dev/null || {
+						log_warn "Failed to create runner: $runner"
+					}
+				else
+					log_info "Runner already exists: $runner"
+				fi
+			else
+				log_warn "runner-helper.sh not found — create runners manually: runner-helper.sh create $runner"
+			fi
+
 			local room_name="AI: ${runner}"
 			local room_alias="${runner}"
 
@@ -2965,7 +2969,7 @@ cmd_cleanup_invites() {
 	local rejected=0
 	while IFS= read -r room_id; do
 		# Check if this room is in our mappings
-		if echo "$mapped_rooms" | grep -qF "$room_id"; then
+		if echo "$mapped_rooms" | grep -qxF "$room_id"; then
 			log_info "Keeping invite for mapped room: $room_id"
 			continue
 		fi
@@ -2977,22 +2981,29 @@ cmd_cleanup_invites() {
 
 		log_info "Rejecting stale invite: $room_id ($room_name)"
 
+		# URL-encode room_id safely — pass as argument, not interpolated into code
 		local encoded_room
-		encoded_room=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$room_id'))")
+		encoded_room=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$room_id")
 
-		# Leave (reject invite)
-		curl -sf -X POST "${homeserver}/_matrix/client/v3/rooms/${encoded_room}/leave" \
+		# Leave (reject invite) — check exit code before counting
+		local leave_ok=false
+		if curl -sf -X POST "${homeserver}/_matrix/client/v3/rooms/${encoded_room}/leave" \
 			-H "Authorization: Bearer $access_token" \
 			-H "Content-Type: application/json" \
-			-d '{}' >/dev/null 2>&1
+			-d '{}' >/dev/null 2>&1; then
+			leave_ok=true
+		fi
 
 		# Forget the room
-		curl -sf -X POST "${homeserver}/_matrix/client/v3/rooms/${encoded_room}/forget" \
-			-H "Authorization: Bearer $access_token" \
-			-H "Content-Type: application/json" \
-			-d '{}' >/dev/null 2>&1
-
-		((++rejected))
+		if [[ "$leave_ok" == "true" ]]; then
+			curl -sf -X POST "${homeserver}/_matrix/client/v3/rooms/${encoded_room}/forget" \
+				-H "Authorization: Bearer $access_token" \
+				-H "Content-Type: application/json" \
+				-d '{}' >/dev/null 2>&1
+			((++rejected))
+		else
+			log_error "Failed to leave room: $room_id"
+		fi
 	done <<<"$invited_rooms"
 
 	if ((rejected > 0)); then

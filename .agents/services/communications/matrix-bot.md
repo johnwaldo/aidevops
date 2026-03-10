@@ -454,7 +454,7 @@ runner-helper.sh edit code-reviewer
 | Access denied | Check `allowedUsers` in config |
 | Bot not joining rooms | Invite the bot user to the room via Element |
 | Bot crashes on startup | Run `matrix-dispatch-helper.sh cleanup-invites` to reject stale invites |
-| Raw JSON in responses | Regenerate bot script: `matrix-dispatch-helper.sh setup` |
+| Raw JSON in responses | Regenerate bot script: `matrix-dispatch-helper.sh setup`, then restart: `matrix-dispatch-helper.sh stop && matrix-dispatch-helper.sh start` |
 | Stale PID file | Run `matrix-dispatch-helper.sh stop` to clean up |
 | Wrong working directory | Check runner config: `runner-helper.sh status <name>` (verify workdir) |
 
