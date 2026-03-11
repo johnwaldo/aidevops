@@ -2012,7 +2012,7 @@ SOPSEOF
 		local security_posture_script="$AGENTS_DIR/scripts/security-posture-helper.sh"
 		if [[ -f "$security_posture_script" ]]; then
 			print_info "Running security posture assessment..."
-			if bash "$security_posture_script" store "$project_root" 2>/dev/null; then
+			if bash "$security_posture_script" store "$project_root"; then
 				print_success "Security posture assessed and stored in .aidevops.json"
 			else
 				print_warning "Security posture assessment found issues (review with: aidevops security audit)"
