@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.171.6] - 2026-03-11
+
+### Changed
+
+- Documentation: add unreleased patch release changelog entries
+
 ### Fixed
 
-- harden update checks when Homebrew is missing or GitHub auth refresh fails (#4143)
-- fix pulse status drift and preserve worker cap reporting in the wrapper path (#4140)
-- unblock patch releases from historical preflight debt with tag-aware checks (#4146)
+- make patch preflight trap cleanup shellcheck-safe
+- unblock patch release preflight from historical debt
+- clarify pulse wrapper fallback warning
+- improve pulse wrapper fallback observability
+- harden aidevops update when brew or auth refresh fails
+- keep pulse status and worker cap reporting aligned
+- use GitHub API fallback for gh version check when brew unavailable
 
 ## [2.171.5] - 2026-03-11
 
