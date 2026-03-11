@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- harden update checks when Homebrew is missing or GitHub auth refresh fails (#4143)
+- fix pulse status drift and preserve worker cap reporting in the wrapper path (#4140)
+- unblock patch releases from historical preflight debt with tag-aware checks (#4146)
+
 ## [2.171.5] - 2026-03-11
 
 ### Fixed
