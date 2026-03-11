@@ -45,16 +45,64 @@ readonly FMT_COST_DATA="  %-35s %6s %10s %10s %10s \$%s\n"
 readonly FMT_AUDIT_ROW="  %-25s %6s\n"
 readonly FMT_SUMMARY_ROW="  %-20s %6s\n"
 
-# Sanitize a session ID filter to prevent injection attacks.
+# Validate and normalize a session ID filter.
 # Only allows alphanumeric characters, hyphens, underscores, and dots.
 # Arguments:
 #   $1 - raw session filter value
-# Output: sanitized value on stdout
+# Output: validated value on stdout
 _sanitize_session_filter() {
 	local raw="${1:-}"
-	# Strip any characters that aren't alphanumeric, dash, underscore, or dot
-	local sanitized="${raw//[^a-zA-Z0-9_.-]/}"
-	echo "$sanitized"
+	if [[ -z "$raw" ]]; then
+		return 0
+	fi
+
+	if [[ "$raw" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+		echo "$raw"
+		return 0
+	fi
+
+	return 1
+}
+
+# Run the observability cost query against SQLite with an optional bound session.
+# Arguments:
+#   $1 - output format: "text" or "json"
+#   $2 - session ID filter (optional)
+# Output: sqlite query result on stdout
+_security_cost_query_sqlite() {
+	local output_format="${1:-text}"
+	local session_filter=""
+	if ! session_filter=$(_sanitize_session_filter "${2:-}"); then
+		return 1
+	fi
+
+	local session_param="null"
+	if [[ -n "$session_filter" ]]; then
+		session_param="'${session_filter}'"
+	fi
+
+	local -a sqlite_cmd=(sqlite3)
+	if [[ "$output_format" == "json" ]]; then
+		sqlite_cmd+=(-json)
+	else
+		sqlite_cmd+=(-separator '|')
+	fi
+	sqlite_cmd+=("$OBS_DB")
+
+	"${sqlite_cmd[@]}" \
+		".parameter init" \
+		".parameter set @session_id ${session_param}" \
+		"SELECT
+			COALESCE(model_id, 'unknown') AS model,
+			COUNT(*) AS requests,
+			COALESCE(SUM(tokens_input), 0) AS input_tokens,
+			COALESCE(SUM(tokens_output), 0) AS output_tokens,
+			COALESCE(SUM(tokens_cache_read), 0) AS cache_tokens,
+			COALESCE(SUM(cost), 0) AS cost
+		FROM llm_requests
+		WHERE (@session_id IS NULL OR session_id = @session_id)
+		GROUP BY model_id
+		ORDER BY cost DESC;"
 	return 0
 }
 
@@ -65,33 +113,15 @@ _sanitize_session_filter() {
 # Output: formatted cost table on stdout
 _security_cost_summary() {
 	local session_filter
-	session_filter=$(_sanitize_session_filter "${1:-}")
+	if ! session_filter=$(_sanitize_session_filter "${1:-}"); then
+		echo "  Invalid session filter"
+		return 1
+	fi
 
 	# Prefer SQLite DB (real-time via plugin)
 	if [[ -f "$OBS_DB" ]] && command -v sqlite3 &>/dev/null; then
-		local where_clause=""
-		if [[ -n "$session_filter" ]]; then
-			local safe_session
-			safe_session=$(_sanitize_session_filter "$session_filter")
-			# Belt-and-suspenders: escape single quotes for SQL even though
-			# _sanitize_session_filter already strips them
-			safe_session="${safe_session//\'/\'\'}"
-			where_clause="WHERE session_id = '${safe_session}'"
-		fi
 		local result
-		result=$(sqlite3 -separator '|' "$OBS_DB" "
-            SELECT
-                COALESCE(model_id, 'unknown') AS model,
-                COUNT(*) AS requests,
-                COALESCE(SUM(tokens_input), 0) AS input_tok,
-                COALESCE(SUM(tokens_output), 0) AS output_tok,
-                COALESCE(SUM(tokens_cache_read), 0) AS cache_tok,
-                COALESCE(SUM(cost), 0) AS total_cost
-            FROM llm_requests
-            ${where_clause}
-            GROUP BY model_id
-            ORDER BY total_cost DESC;
-        " 2>/dev/null) || result=""
+		result=$(_security_cost_query_sqlite "text" "$session_filter" 2>/dev/null) || result=""
 
 		if [[ -n "$result" ]]; then
 			printf "$FMT_COST_ROW" "Model" "Reqs" "Input" "Output" "Cache" "Cost"
@@ -102,6 +132,9 @@ _security_cost_summary() {
 				[[ -z "$model" ]] && continue
 				# Validate numeric fields to prevent injection via malformed DB data
 				[[ "$reqs" =~ ^[0-9]+$ ]] || reqs=0
+				[[ "$input_tok" =~ ^[0-9]+$ ]] || input_tok=0
+				[[ "$output_tok" =~ ^[0-9]+$ ]] || output_tok=0
+				[[ "$cache_tok" =~ ^[0-9]+$ ]] || cache_tok=0
 				[[ "$cost" =~ ^[0-9.]+$ ]] || cost="0"
 				local short_model="${model##*/}"
 				short_model="${short_model:0:35}"
@@ -482,7 +515,10 @@ _security_posture() {
 #   $2 - output format: "text" or "json" (default: text)
 output_security_summary() {
 	local session_filter
-	session_filter=$(_sanitize_session_filter "${1:-}")
+	if ! session_filter=$(_sanitize_session_filter "${1:-}"); then
+		echo "Invalid session filter" >&2
+		return 1
+	fi
 	local output_format="${2:-text}"
 
 	if [[ "$output_format" == "json" ]]; then
@@ -566,7 +602,10 @@ output_security_summary() {
 #   $1 - session ID filter (optional)
 _security_summary_json() {
 	local session_filter
-	session_filter=$(_sanitize_session_filter "${1:-}")
+	if ! session_filter=$(_sanitize_session_filter "${1:-}"); then
+		echo "Invalid session filter" >&2
+		return 1
+	fi
 
 	# Collect counts first (used by both posture calculation and JSON output)
 	local audit_count=0 net_access=0 net_flagged=0 net_denied=0
@@ -602,27 +641,8 @@ _security_summary_json() {
 	local cost_json="[]"
 	local cost_total=0
 	if [[ -f "$OBS_DB" ]] && command -v sqlite3 &>/dev/null; then
-		local where_clause=""
-		if [[ -n "$session_filter" ]]; then
-			local safe_session
-			safe_session=$(_sanitize_session_filter "$session_filter")
-			safe_session="${safe_session//\'/\'\'}"
-			where_clause="WHERE session_id = '${safe_session}'"
-		fi
 		local db_result
-		db_result=$(sqlite3 -json "$OBS_DB" "
-			SELECT
-				COALESCE(model_id, 'unknown') AS model,
-				COUNT(*) AS requests,
-				COALESCE(SUM(tokens_input), 0) AS input_tokens,
-				COALESCE(SUM(tokens_output), 0) AS output_tokens,
-				COALESCE(SUM(tokens_cache_read), 0) AS cache_tokens,
-				COALESCE(SUM(cost), 0) AS cost
-			FROM llm_requests
-			${where_clause}
-			GROUP BY model_id
-			ORDER BY cost DESC;
-		" 2>/dev/null) || db_result=""
+		db_result=$(_security_cost_query_sqlite "json" "$session_filter" 2>/dev/null) || db_result=""
 		if [[ -n "$db_result" && "$db_result" != "[]" ]]; then
 			cost_json="$db_result"
 			cost_total=$(echo "$db_result" | jq '[.[].cost] | add // 0' 2>/dev/null) || cost_total=0
@@ -657,19 +677,19 @@ _security_summary_json() {
 	fi
 
 	# Session context — query helper if available
-	local session_context_available="false"
-	local session_context_score="null"
+	local session_context_json='{"available":false}'
 	local session_helper="${SCRIPT_DIR}/session-security-helper.sh"
 	if [[ -x "$session_helper" ]]; then
-		session_context_available="true"
-		local score_result
+		local context_result
 		if [[ -n "$session_filter" ]]; then
-			score_result=$("$session_helper" score --session "$session_filter" 2>/dev/null) || score_result=""
+			context_result=$("$session_helper" get-context --session-id "$session_filter" 2>/dev/null) || context_result=""
 		else
-			score_result=$("$session_helper" score 2>/dev/null) || score_result=""
+			context_result=$("$session_helper" get-context 2>/dev/null) || context_result=""
 		fi
-		if [[ -n "$score_result" ]]; then
-			session_context_score=$(jq -n --arg s "$score_result" '$s')
+		if [[ -n "$context_result" ]]; then
+			session_context_json=$(printf '%s' "$context_result" | jq -c --argjson available true '. + {available: $available}' 2>/dev/null) || session_context_json='{"available":true}'
+		else
+			session_context_json='{"available":true}'
 		fi
 	fi
 
@@ -713,8 +733,7 @@ _security_summary_json() {
 		--argjson pg_blocks "$pg_blocks" \
 		--argjson pg_warns "$pg_warns" \
 		--argjson pg_sanitizes "$pg_sanitizes" \
-		--argjson session_context_available "$session_context_available" \
-		--argjson session_context_score "$session_context_score" \
+		--argjson session_context "$session_context_json" \
 		--argjson quarantine_available "$quarantine_available" \
 		--argjson quarantine_pending "$quarantine_pending" \
 		'{
@@ -725,7 +744,7 @@ _security_summary_json() {
 			audit: { total_events: $audit_count, chain_intact: $chain_intact },
 			network: { logged_access: $net_access, flagged: $net_flagged, denied: $net_denied },
 			prompt_guard: { total_detections: $pg_total, blocked: $pg_blocks, warned: $pg_warns, sanitized: $pg_sanitizes },
-			session_context: { available: $session_context_available, score: $session_context_score },
+			session_context: $session_context,
 			quarantine: { available: $quarantine_available, pending_items: $quarantine_pending }
 		}'
 	return 0
@@ -1111,8 +1130,7 @@ main() {
 			fi
 			shift
 			local raw_session="$1"
-			session_filter=$(_sanitize_session_filter "$raw_session")
-			if [[ -z "$session_filter" || "$session_filter" != "$raw_session" ]]; then
+			if ! session_filter=$(_sanitize_session_filter "$raw_session"); then
 				echo "Error: --session may only contain letters, numbers, dots, hyphens, and underscores" >&2
 				exit 1
 			fi
