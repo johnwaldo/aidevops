@@ -528,20 +528,22 @@ If decomposition succeeds (`SUBTASK_COUNT >= 2`):
 
 ### Dispatch workers for open issues
 
-For each dispatchable issue:
+For each dispatchable issue (intelligence-first):
 
 1. Skip if a worker is already running for it locally (check `ps` output for the issue number)
 2. Skip if an open PR already exists for it (check PR list)
-3. Skip if the issue has `status:queued`, `status:in-progress`, or `status:in-review` labels — but only if the issue was updated within the last 3 hours. These labels indicate a worker is handling it (possibly on another machine). If the label is stale (3+ hours, no PR, no recent branch activity), the worker likely died — recover the issue: relabel to `status:available`, unassign, and comment explaining the recovery. It becomes dispatchable this cycle.
-4. Skip if the issue is assigned and was updated within the last 3 hours — someone is actively working on it. If assigned but stale (3+ hours, no PR), treat as abandoned: unassign and relabel to `status:available`.
-5. Read the issue body briefly — if it has `blocked-by:` references, check if those are resolved (merged PR exists). If not, skip it.
-5.5. **Classify and decompose (t1408.2):** Run the task decomposition check described in "Task decomposition before dispatch" above. If the task is composite, create child tasks and skip direct dispatch. If atomic (or classification unavailable), proceed to dispatch.
-6. Dispatch:
+3. Treat labels as hints, not gates. `status:queued`, `status:in-progress`, and `status:in-review` suggest active work, but verify with evidence (active worker, recent PR updates, recent commits) before skipping.
+4. Treat unassigned + non-blocked issues as available by default. `status:available` is optional metadata, not a requirement.
+5. If an issue is assigned and recently updated (<3h), usually skip it. If assigned but stale (3+h, no active PR/worker evidence), treat it as abandoned: unassign and comment the recovery; make it dispatchable this cycle.
+6. Read the issue body briefly — if it has `blocked-by:` references, check if those are resolved (merged PR exists). If not, skip it.
+6.5. **Classify and decompose (t1408.2):** Run the task decomposition check described in "Task decomposition before dispatch" above. If the task is composite, create child tasks and skip direct dispatch. If atomic (or classification unavailable), proceed to dispatch.
+7. Prioritize by value density and flow efficiency, not label perfection: unblock merge-ready PRs first, then critical/high issues, then best-next backlog items that keep worker slots full.
+8. Dispatch:
 
 ```bash
 # Assign the issue to prevent duplicate work by other runners/humans
 RUNNER_USER=$(gh api user --jq '.login' 2>/dev/null || whoami)
-gh issue edit <number> --repo <slug> --add-assignee "$RUNNER_USER" --add-label "status:queued" --remove-label "status:available" 2>/dev/null || true
+gh issue edit <number> --repo <slug> --add-assignee "$RUNNER_USER" --add-label "status:queued" --remove-label "status:available" 2>/dev/null || gh issue edit <number> --repo <slug> --add-assignee "$RUNNER_USER" --add-label "status:queued" 2>/dev/null || true
 
 ~/.aidevops/agents/scripts/headless-runtime-helper.sh run \
   --role worker \
@@ -552,28 +554,28 @@ gh issue edit <number> --repo <slug> --add-assignee "$RUNNER_USER" --add-label "
 sleep 2
 ```
 
-### Dispatch candidate fallback (t1443)
+### Candidate discovery baseline (t1443 + t1448)
 
-Do NOT treat `auto-dispatch` as a hard gate for worker dispatch. It is a hint, not a requirement.
+Do NOT treat `auto-dispatch` or `status:available` as hard gates. They are hints only.
 
-When the queue looks idle (`Workers: 0` or very low) but there is visible backlog, run this fallback before ending the cycle:
+In every pulse cycle, build candidates from unassigned, non-blocked issues first, then apply judgment and safeguards.
 
-1. Search for open issues in scoped repos that are not blocked/in-progress/review and have no active PR/worker.
+1. Search for open issues in scoped repos that are not blocked and have no active PR/worker evidence.
 2. Prioritize `priority:critical`, `priority:high`, and `bug` labels first.
-3. If feature/bug candidates are scarce, include `quality-debt` items even when they do not carry `auto-dispatch` or `status:available` labels.
+3. Include `quality-debt` candidates when they are the highest-value available work, even without `auto-dispatch`/`status:available` labels.
 4. Respect existing caps and safeguards (quality-debt concurrency cap, blast-radius guidance, stale-label recovery).
 
 Example discovery query:
 
 ```bash
 gh issue list --repo <slug> --state open \
-  --search "(label:priority:critical OR label:priority:high OR label:bug OR label:quality-debt) -label:status:blocked -label:status:queued -label:status:in-progress -label:status:in-review" \
+  --search "(label:priority:critical OR label:priority:high OR label:bug OR label:quality-debt) -label:status:blocked no:assignee" \
   --limit 100
 ```
 
-If you dispatch from this fallback path, add a short issue comment such as:
+If you dispatch an unassigned issue without `auto-dispatch`/`status:available`, add a short issue comment such as:
 
-"Dispatching via backlog fallback (t1443): high-priority work was pending without `auto-dispatch`/`status:available` labels."
+"Dispatching via intelligence-first backlog selection (t1448): issue is unassigned, non-blocked, and highest-value available work this cycle."
 
 **Dispatch rules:**
 - ALWAYS use `~/.aidevops/agents/scripts/headless-runtime-helper.sh run` for headless dispatches — NEVER `claude`, `claude -p`, or raw `opencode run`
