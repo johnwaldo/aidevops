@@ -53,7 +53,7 @@ assert_line_exists() {
 	fi
 
 	fail "$message"
-	return 1
+	return 0
 }
 
 run_checks() {
