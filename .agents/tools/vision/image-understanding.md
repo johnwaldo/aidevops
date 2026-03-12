@@ -113,7 +113,7 @@ base64 -i screenshot.png | \
 
 **Image token costs**: Images are resized and tiled. A 1024x1024 image uses ~765 tokens. Larger images use more tiles. Use `detail: "low"` for cheaper analysis (~85 tokens per image).
 
-**Image size limits**: Max 20MB per image. Images are auto-resized by the API (short side scaled to 768px for `high` detail). No hard pixel dimension limit, but very large images increase token cost without improving accuracy.
+**Image size limits**: API limits vary by endpoint — the 20MB figure applies to ChatGPT web uploads, not the API. For the Chat Completions API (vision), images are auto-resized: short side scaled to 768px for `high` detail, or 512px for `low` detail. Large images increase token cost without improving accuracy. Refer to the [OpenAI vision API docs](https://platform.openai.com/docs/guides/vision) for current endpoint-specific limits.
 
 ### Anthropic (Claude Vision)
 
@@ -138,17 +138,17 @@ curl https://api.anthropic.com/v1/messages \
 
 **Supported formats**: JPEG, PNG, GIF, WebP. Max 5MB per image (API), 10MB (Claude.ai).
 
-**Image size limits**: Max 8000px per dimension AND max 1568 megapixels total area (width x height). Full-page screenshots easily exceed these limits. The API rejects oversized images with: `At least one of the image dimensions exceed max allowed size: 8000 pixels`. Resize before submission:
+**Image size limits**: Images larger than 8000×8000 px are rejected (hard limit ≈ 64 megapixels). Images with a long edge exceeding 1568 px are automatically downscaled by the API. For optimal latency, Anthropic recommends resizing to ≤1.15 megapixels within 1568 px in both dimensions. Full-page screenshots easily exceed these bounds. The API rejects oversized images with: `At least one of the image dimensions exceed max allowed size: 8000 pixels`. Resize before submission:
 
 ```bash
-# macOS (built-in, no install)
-sips --resampleHeightWidthMax 4000 input.png --out output.png
+# macOS (built-in, no install) — resize to 1568px max on longest side
+sips --resampleHeightWidthMax 1568 input.png --out output.png
 
 # Cross-platform (requires ImageMagick)
-magick input.png -resize '4000x4000>' output.png  # '>' = only shrink, never upscale
+magick input.png -resize '1568x1568>' output.png  # '>' = only shrink, never upscale
 ```
 
-The 4000px max gives a safe margin below the 8000px hard limit while preserving detail for visual comparison. See GH#4213 for the `browser-qa-helper.sh` auto-resize implementation.
+The 1568px target avoids the auto-downscale latency penalty while staying well within the 8000px hard limit. See GH#4213 for the `browser-qa-helper.sh` auto-resize implementation.
 
 ### Google (Gemini Vision)
 
