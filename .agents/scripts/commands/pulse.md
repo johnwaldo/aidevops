@@ -280,7 +280,7 @@ gh run rerun <run_id> --repo <slug>
 - Only re-run the specific failed workflow run, not all checks on the PR
 - If a re-run still fails, the fix didn't work — file a new issue, don't re-run again
 - Limit to 10 re-runs per pulse cycle to avoid API rate limits
-- Log each re-run: "Re-ran <check name> on PR #<number> (stale failure from pre-fix workflow)"
+- Log each re-run: "Re-ran [check-name] on PR #[number] (stale failure from pre-fix workflow)"
 
 This completes the detect-fix-heal cycle: the pulse detects the pattern, dispatches a worker to fix the workflow, and once the fix merges, heals the existing PRs that were affected.
 
@@ -1159,6 +1159,11 @@ Ref: quality review issue #${QUALITY_ISSUE}"
 
 # Session miner (has its own 20h interval guard — usually a no-op)
 ~/.aidevops/agents/scripts/session-miner-pulse.sh 2>&1 || true
+
+# Optional: auto-file model-agnostic self-improvement issues from high-signal
+# common+outlier lanes (dedup + cap guarded in script)
+SESSION_MINER_AUTO_ISSUES=1 SESSION_MINER_MAX_ISSUES=3 \
+  ~/.aidevops/agents/scripts/session-miner-pulse.sh --force --create-issues 2>&1 || true
 ```
 
 Output a brief summary of what you did (past tense), then exit.
