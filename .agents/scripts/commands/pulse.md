@@ -558,6 +558,22 @@ sleep 2
 
 If a dispatch attempt exits immediately with provider/auth failure (for example `Token refresh failed`, `authentication`, `401`, `403`, `400` in startup logs), do not wait for next cycle. Re-dispatch in the same cycle via `headless-runtime-helper.sh run` with an explicit alternate model/provider and continue filling remaining slots.
 
+**Launch validation is mandatory (t1452):** after each dispatch, verify the worker actually started and did not fall through to CLI usage output.
+
+```bash
+# 1) Process exists (session-key must map to a live run)
+pgrep -fal "issue-<number>|Issue #<number>:" >/dev/null
+
+# 2) Startup log is not CLI help/usage output
+LOG_PATH="/tmp/pulse-<slug>-<number>.log"
+if [[ -f "$LOG_PATH" ]] && rg -q '^opencode run \[message\.\.]|^run opencode with a message|^Options:' "$LOG_PATH"; then
+  echo "Invalid worker launch for #<number> (CLI usage output)"
+  # Relaunch immediately via helper (never leave this for next pulse)
+fi
+```
+
+If validation fails, re-dispatch immediately via `headless-runtime-helper.sh run`, add a short issue comment noting the failed launch and correction, and continue filling slots.
+
 9. **Fill-to-cap post-condition (t1449):** before ending the pulse cycle, compare active workers vs `MAX_WORKERS`. If below cap and runnable scoped issues/PR work exists in any repo class, continue dispatching until cap is reached or no runnable candidates remain. Do not leave slots idle because of class reservations when one class is PR-capped or empty.
 
 ### Candidate discovery baseline (t1443 + t1448)
@@ -588,7 +604,9 @@ If you dispatch an unassigned issue without `auto-dispatch`/`status:available`, 
 - Background with `&`, sleep 2 between dispatches
 - The helper alternates the default headless providers/models (`anthropic/claude-sonnet-4-6`, `openai/gpt-5.3-codex`), persists session IDs per provider + session key, honors provider backoff, and rejects `opencode/*` gateway models (no Zen fallback for headless runs)
 - Do NOT add `--model` for first attempts — let the helper choose the alternating default. **Exception:** when escalating after 2+ failed attempts on the same issue, pass `--model anthropic/claude-opus-4-6` to the helper (see "Model escalation after repeated failures" above).
+- If you must run raw `opencode run` for diagnosis, use only documented flags from `opencode run --help` and NEVER pass unsupported options (for example `--max-iterations`); unsupported flags cause usage-output false starts that burn worker slots.
 - If helper-selected launch fails at startup with auth/provider errors, immediately retry with explicit alternate provider in the same cycle (for example `--model openai/gpt-5.3-codex` after anthropic auth failure) and log the fallback in an issue comment.
+- After every dispatch, run launch validation (live process + no CLI usage output in startup log) before counting the slot as filled.
 - Use `--dir <path>` from repos.json
 - Route non-code tasks with `--agent`: SEO, Content, Marketing, Business, Research (see AGENTS.md "Agent Routing")
 - If a dispatched worker later looks stalled, `worker-watchdog.sh` now inspects the recent OpenCode transcript tail before killing it, includes that diagnostic evidence in the retry trail, and gives provider-wait evidence one extra timeout window before re-queueing the issue.
