@@ -12,8 +12,9 @@ init_log_file
 
 readonly SCREENSHOTS_DIR="${HOME}/.aidevops/.agent-workspace/tmp/browser-qa"
 readonly QA_RESULTS_DIR="${HOME}/.aidevops/.agent-workspace/tmp/browser-qa/results"
-readonly DEFAULT_TIMEOUT=30000
-readonly DEFAULT_VIEWPORTS="desktop,mobile"
+readonly BROWSER_QA_DEFAULT_TIMEOUT=30000
+readonly BROWSER_QA_DEFAULT_VIEWPORTS="desktop,mobile"
+readonly BROWSER_QA_DEFAULT_MAX_IMAGE_DIM=4000
 
 # =============================================================================
 # Viewport Definitions
@@ -88,8 +89,73 @@ wait_for_url() {
 }
 
 # =============================================================================
-# Screenshot Capture
+# Image Resizing (for Vision API Compatibility)
 # =============================================================================
+
+# Resize images exceeding the max dimension to comply with Anthropic API limits.
+# Anthropic API: max 8000px per dimension, 1568 megapixels total area.
+# Default max dimension of 4000px keeps area well under limit (16MP).
+# Args: $1 = directory containing images, $2 = max dimension (default 4000)
+# Uses sips (macOS) with magick (ImageMagick) fallback
+resize_screenshots() {
+	local dir="$1"
+	local max_dim="${2:-$BROWSER_QA_DEFAULT_MAX_IMAGE_DIM}"
+
+	if [[ ! -d "$dir" ]]; then
+		return 0
+	fi
+
+	# Check for image resize tools
+	local resize_cmd=""
+	if command -v sips &>/dev/null; then
+		resize_cmd="sips"
+	elif command -v magick &>/dev/null; then
+		resize_cmd="magick"
+	else
+		log_warn "No image resize tool found (sips or magick). Skipping resize."
+		log_warn "Screenshots may exceed Anthropic API limits (8000px/1568MP)"
+		return 0
+	fi
+
+	local resized=0
+	for img in "$dir"/*.png "$dir"/*.jpg "$dir"/*.jpeg; do
+		[[ -f "$img" ]] || continue
+
+		local width height
+		if [[ "$resize_cmd" == "sips" ]]; then
+			width=$(sips -g pixelWidth "$img" 2>/dev/null | awk '/pixelWidth/{print $2}')
+			height=$(sips -g pixelHeight "$img" 2>/dev/null | awk '/pixelHeight/{print $2}')
+		else
+			width=$(magick identify -format "%w" "$img" 2>/dev/null)
+			height=$(magick identify -format "%h" "$img" 2>/dev/null)
+		fi
+
+		# Skip if we couldn't get dimensions
+		if [[ -z "$width" || -z "$height" ]]; then
+			continue
+		fi
+
+		# Resize if either dimension exceeds max
+		if [[ "$width" -gt "$max_dim" || "$height" -gt "$max_dim" ]]; then
+			log_info "Resizing $(basename "$img"): ${width}x${height} -> max ${max_dim}px"
+
+			if [[ "$resize_cmd" == "sips" ]]; then
+				sips --resampleHeightWidthMax "$max_dim" "$img" --out "$img" &>/dev/null ||
+					log_warn "Failed to resize $img"
+			else
+				magick "$img" -resize "${max_dim}x${max_dim}>" "$img" 2>/dev/null ||
+					log_warn "Failed to resize $img"
+			fi
+			resized=$((resized + 1))
+		fi
+	done
+
+	if [[ $resized -gt 0 ]]; then
+		log_info "Resized $resized screenshot(s) for vision API compatibility"
+	fi
+
+	return 0
+}
 
 # Capture screenshots of pages at specified viewports using Playwright.
 # Args: --url URL --pages "/ /about /dashboard" --viewports "desktop,mobile" --output-dir DIR
@@ -97,10 +163,11 @@ wait_for_url() {
 cmd_screenshot() {
 	local url=""
 	local pages="/"
-	local viewports="$DEFAULT_VIEWPORTS"
+	local viewports="$BROWSER_QA_DEFAULT_VIEWPORTS"
 	local output_dir="$SCREENSHOTS_DIR"
-	local timeout="$DEFAULT_TIMEOUT"
+	local timeout="$BROWSER_QA_DEFAULT_TIMEOUT"
 	local full_page="false"
+	local max_dim="$BROWSER_QA_DEFAULT_MAX_IMAGE_DIM"
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -127,6 +194,10 @@ cmd_screenshot() {
 		--full-page)
 			full_page="true"
 			shift
+			;;
+		--max-dim)
+			max_dim="$2"
+			shift 2
 			;;
 		*)
 			log_error "Unknown option: $1"
@@ -221,6 +292,12 @@ SCRIPT
 	local exit_code=0
 	node "$script_file" || exit_code=$?
 	rm -f "$script_file"
+
+	# Resize screenshots exceeding max dimension (for vision API compatibility)
+	if [[ $exit_code -eq 0 && -d "$output_dir" ]]; then
+		resize_screenshots "$output_dir" "$max_dim"
+	fi
+
 	return $exit_code
 }
 
@@ -234,7 +311,7 @@ SCRIPT
 cmd_links() {
 	local url=""
 	local depth=2
-	local timeout="$DEFAULT_TIMEOUT"
+	local timeout="$BROWSER_QA_DEFAULT_TIMEOUT"
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -577,7 +654,7 @@ cmd_smoke() {
 	local url=""
 	local pages="/"
 	local format="json"
-	local timeout="$DEFAULT_TIMEOUT"
+	local timeout="$BROWSER_QA_DEFAULT_TIMEOUT"
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -729,10 +806,10 @@ SCRIPT
 cmd_run() {
 	local url=""
 	local pages="/"
-	local viewports="$DEFAULT_VIEWPORTS"
+	local viewports="$BROWSER_QA_DEFAULT_VIEWPORTS"
 	local format="json"
 	local output_dir="$QA_RESULTS_DIR"
-	local timeout="$DEFAULT_TIMEOUT"
+	local timeout="$BROWSER_QA_DEFAULT_TIMEOUT"
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -906,10 +983,18 @@ Common Options:
   --format FMT        Output format: json or markdown (default: json)
   --timeout MS        Navigation timeout in milliseconds (default: 30000)
   --output-dir DIR    Directory for screenshots and reports
+  --full-page         Capture full-page screenshots (not just viewport)
+  --max-dim N         Max image dimension in pixels (default: 4000, for vision API compatibility)
+
+Note:
+  Screenshots are automatically resized if they exceed the max dimension to comply
+  with Anthropic API limits (8000px per dimension, 1568MP total area). Use --max-dim
+  to adjust if needed (e.g., --max-dim 6000 for higher quality).
 
 Examples:
   browser-qa-helper.sh run --url http://localhost:3000 --pages "/ /about /dashboard"
   browser-qa-helper.sh screenshot --url http://localhost:3000 --viewports desktop,tablet,mobile
+  browser-qa-helper.sh screenshot --url http://localhost:3000 --full-page --max-dim 6000
   browser-qa-helper.sh links --url http://localhost:3000 --depth 3
   browser-qa-helper.sh a11y --url http://localhost:3000 --level AAA
   browser-qa-helper.sh smoke --url http://localhost:3000 --pages "/ /login"

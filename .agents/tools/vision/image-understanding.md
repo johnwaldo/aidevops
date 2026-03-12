@@ -136,6 +136,22 @@ curl https://api.anthropic.com/v1/messages \
 
 **Supported formats**: JPEG, PNG, GIF, WebP. Max 5MB per image (API), 10MB (Claude.ai).
 
+**Image size limits**:
+- Max 8000 pixels per dimension (width or height)
+- Max 1568 megapixels total area (width x height)
+- Recommended: resize to 4000px max dimension before submission (keeps area at 16MP, well under limit)
+
+Resize using:
+```bash
+# macOS (built-in sips)
+sips --resampleHeightWidthMax 4000 input.png --out output.png
+
+# Cross-platform (ImageMagick)
+magick input.png -resize '4000x4000>' output.png
+```
+
+For automated screenshots, `browser-qa-helper.sh` automatically resizes images exceeding the max dimension (default 4000px).
+
 ### Google (Gemini Vision)
 
 ```bash

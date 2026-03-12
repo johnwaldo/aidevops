@@ -103,6 +103,12 @@ browser-qa-helper.sh screenshot --url http://localhost:3000 \
   --full-page
 ```
 
+**Automatic resizing**: Screenshots are automatically resized if they exceed the max dimension (default 4000px) to comply with Anthropic API limits (8000px per dimension, 1568MP area). Use `--max-dim` to adjust:
+
+```bash
+browser-qa-helper.sh screenshot --url http://localhost:3000 --full-page --max-dim 6000
+```
+
 **Viewport definitions**:
 
 | Name | Width | Height | Use case |
