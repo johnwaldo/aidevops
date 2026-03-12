@@ -142,7 +142,7 @@ analyze_spam_content() {
 	local high_risk_found=0
 	for phrase in "${high_risk_phrases[@]}"; do
 		local count
-		count=$(echo "$content" | grep -ciE "$phrase" || true)
+		count=$( (echo "$content" | grep -oiE "$phrase" || true) | wc -l | tr -d ' ')
 		count="${count:-0}"
 		if [[ "$count" -gt 0 ]]; then
 			print_warning "High-risk phrase found: '$phrase' ($count occurrences)"
@@ -194,7 +194,7 @@ analyze_spam_content() {
 	local medium_risk_found=0
 	for phrase in "${medium_risk_phrases[@]}"; do
 		local count
-		count=$(echo "$content" | grep -ciE "$phrase" || true)
+		count=$( (echo "$content" | grep -oiE "$phrase" || true) | wc -l | tr -d ' ')
 		count="${count:-0}"
 		if [[ "$count" -gt 0 ]]; then
 			medium_risk_found=$((medium_risk_found + 1))
