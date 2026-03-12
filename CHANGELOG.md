@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.172.7] - 2026-03-12
+
+### Fixed
+
+- reduce contribution-watch noise with notification filtering
+
 ## [2.172.6] - 2026-03-12
 
 ### Changed
