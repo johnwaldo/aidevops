@@ -910,7 +910,7 @@ cmd_scan_stdin() {
 	fi
 
 	local content
-	content=$(cat "$tmp_file")
+	content=$(<"$tmp_file")
 
 	if [[ -z "$content" ]]; then
 		_pg_log_error "No content received on stdin"

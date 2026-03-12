@@ -949,7 +949,6 @@ bq_trending() {
 	adopted) order_col="total_origins_adopted_new" ;;
 	deprecated) order_col="total_origins_deprecated_existing" ;;
 	esac
-
 	local query
 	query=$(
 		cat <<EOSQL

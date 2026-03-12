@@ -276,13 +276,12 @@ transport_available() {
 #######################################
 transport_simplex_send() {
 	local envelope="$1"
+	local rc=0
 
 	if ! transport_available "simplex"; then
 		log_warn "SimpleX transport not available (simplex-chat not installed or simplex-helper.sh not found)"
 		return 1
 	fi
-
-	local rc=0
 
 	# Prefer group delivery (broadcast to all agents in the group)
 	if [[ -n "$SIMPLEX_MAIL_GROUP" ]]; then
@@ -542,22 +541,24 @@ receive_simplex() {
 		local msg_id from_agent to_agent msg_type priority convoy payload
 		IFS='|' read -r msg_id from_agent to_agent msg_type priority convoy payload <<<"$decoded"
 
+		local should_archive="true"
 		# Only ingest messages addressed to this agent or to "all"
 		if [[ "$to_agent" == "$agent_id" || "$to_agent" == "all" ]]; then
 			if ingest_remote_message "$msg_id" "$from_agent" "$to_agent" "$msg_type" "$priority" "$convoy" "$payload"; then
 				count=$((count + 1))
 			else
-				log_warn "Failed to ingest message $msg_id, leaving envelope for retry"
-				continue
+				should_archive="false"
+				log_warn "Failed to ingest envelope $(basename "$envelope_file"); leaving for retry"
 			fi
 		fi
 
-		# Archive processed envelope (only reached if ingestion succeeded)
-		local archive_rc=0
-		mv "$envelope_file" "${envelope_file}.processed" || archive_rc=$?
-		if [[ $archive_rc -ne 0 ]]; then
-			log_warn "Failed to archive envelope (rc=$archive_rc), removing: $envelope_file"
-			rm -f "$envelope_file"
+		# Archive processed envelope only when safe to do so
+		if [[ "$should_archive" == "true" ]]; then
+			local archive_rc=0
+			mv "$envelope_file" "${envelope_file}.processed" || archive_rc=$?
+			if [[ $archive_rc -ne 0 ]]; then
+				log_warn "Failed to archive envelope (rc=$archive_rc); leaving original in place: $envelope_file"
+			fi
 		fi
 	done
 
