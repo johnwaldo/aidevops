@@ -377,7 +377,7 @@ PY
 		printf '%s' "rate_limit"
 		return 0
 	fi
-	if [[ "$lowered" == *"unauthorized"* ]] || [[ "$lowered" == *"401"* ]] || [[ "$lowered" == *"invalid api key"* ]] || [[ "$lowered" == *"authentication"* ]] || [[ "$lowered" == *"auth"* && "$lowered" == *"failed"* ]]; then
+	if [[ "$lowered" == *"unauthorized"* ]] || [[ "$lowered" == *"401"* ]] || [[ "$lowered" == *"invalid api key"* ]] || [[ "$lowered" == *"authentication"* ]] || [[ "$lowered" == *"auth"* && "$lowered" == *"failed"* ]] || [[ "$lowered" == *"token refresh failed"* ]] || [[ "$lowered" == *"invalid_grant"* ]] || [[ "$lowered" == *"invalid refresh token"* ]]; then
 		printf '%s' "auth_error"
 		return 0
 	fi
@@ -678,59 +678,92 @@ cmd_run() {
 		return 1
 	}
 
-	local selected_model provider persisted_session=""
+	local selected_model
 	selected_model=$(choose_model "$role" "$model_override") || return $?
-	provider=$(extract_provider "$selected_model")
-	if [[ "$role" == "pulse" ]]; then
-		# Pulse runs must start from the current pre-fetched state each cycle.
-		# Reusing a prior OpenCode session contaminates later /pulse runs with
-		# stale conversational context, which leads to idle watchdog kills and an
-		# empty worker pool. Workers still keep session reuse.
-		clear_session_id "$provider" "$session_key"
-	else
-		persisted_session=$(get_session_id "$provider" "$session_key")
-	fi
 
-	local -a cmd=("$OPENCODE_BIN_DEFAULT" run "$prompt" --dir "$work_dir" -m "$selected_model" --title "$title" --format json)
-	if [[ -n "$agent_name" ]]; then
-		cmd+=(--agent "$agent_name")
-	fi
-	if [[ -n "$persisted_session" ]]; then
-		cmd+=(--session "$persisted_session" --continue)
-	fi
-	if [[ ${#extra_args[@]} -gt 0 ]]; then
-		cmd+=("${extra_args[@]}")
-	fi
+	local attempt=1
+	local max_attempts=2
+	while [[ "$attempt" -le "$max_attempts" ]]; do
+		local provider persisted_session=""
+		provider=$(extract_provider "$selected_model")
+		if [[ "$role" == "pulse" ]]; then
+			# Pulse runs must start from the current pre-fetched state each cycle.
+			# Reusing a prior OpenCode session contaminates later /pulse runs with
+			# stale conversational context, which leads to idle watchdog kills and an
+			# empty worker pool. Workers still keep session reuse.
+			clear_session_id "$provider" "$session_key"
+		else
+			persisted_session=$(get_session_id "$provider" "$session_key")
+		fi
 
-	local output_file
-	output_file=$(mktemp)
-	local exit_code=0
-	"${cmd[@]}" 2>&1 | tee "$output_file"
-	exit_code=${PIPESTATUS[0]}
+		local -a cmd=("$OPENCODE_BIN_DEFAULT" run "$prompt" --dir "$work_dir" -m "$selected_model" --title "$title" --format json)
+		if [[ -n "$agent_name" ]]; then
+			cmd+=(--agent "$agent_name")
+		fi
+		if [[ -n "$persisted_session" ]]; then
+			cmd+=(--session "$persisted_session" --continue)
+		fi
+		if [[ ${#extra_args[@]} -gt 0 ]]; then
+			cmd+=("${extra_args[@]}")
+		fi
 
-	local discovered_session
-	discovered_session=$(extract_session_id_from_output "$output_file")
-	local activity_detected
-	activity_detected=$(output_has_activity "$output_file")
-	if [[ "$exit_code" -eq 0 ]]; then
-		if [[ "$activity_detected" != "1" ]]; then
-			record_provider_backoff "$provider" "provider_error" "$output_file"
+		local output_file
+		output_file=$(mktemp)
+		local exit_code=0
+		local errexit_was_on=0
+		if [[ $- == *e* ]]; then
+			errexit_was_on=1
+			set +e
+		fi
+		"${cmd[@]}" 2>&1 | tee "$output_file"
+		exit_code=${PIPESTATUS[0]}
+		if [[ "$errexit_was_on" -eq 1 ]]; then
+			set -e
+		fi
+
+		local discovered_session
+		discovered_session=$(extract_session_id_from_output "$output_file")
+		local activity_detected
+		activity_detected=$(output_has_activity "$output_file")
+		if [[ "$exit_code" -eq 0 ]]; then
+			if [[ "$activity_detected" != "1" ]]; then
+				record_provider_backoff "$provider" "provider_error" "$output_file"
+				rm -f "$output_file"
+				print_warning "$provider returned exit 0 without any model activity; backing off provider"
+				return 75
+			fi
+			if [[ "$role" != "pulse" && -n "$discovered_session" ]]; then
+				store_session_id "$provider" "$session_key" "$discovered_session" "$selected_model"
+			fi
 			rm -f "$output_file"
-			print_warning "$provider returned exit 0 without any model activity; backing off provider"
-			return 75
+			return 0
 		fi
-		if [[ "$role" != "pulse" && -n "$discovered_session" ]]; then
-			store_session_id "$provider" "$session_key" "$discovered_session" "$selected_model"
-		fi
-		rm -f "$output_file"
-		return 0
-	fi
 
-	local failure_reason
-	failure_reason=$(classify_failure_reason "$output_file")
-	record_provider_backoff "$provider" "$failure_reason" "$output_file"
-	rm -f "$output_file"
-	return "$exit_code"
+		local failure_reason
+		failure_reason=$(classify_failure_reason "$output_file")
+		record_provider_backoff "$provider" "$failure_reason" "$output_file"
+		rm -f "$output_file"
+
+		if [[ -n "$model_override" ]]; then
+			return "$exit_code"
+		fi
+
+		if [[ "$failure_reason" != "auth_error" ]]; then
+			return "$exit_code"
+		fi
+
+		if [[ "$attempt" -ge "$max_attempts" ]]; then
+			return "$exit_code"
+		fi
+
+		local next_model
+		next_model=$(choose_model "$role" "") || return "$exit_code"
+		print_warning "$provider auth failure detected at startup; retrying once with alternate provider model $next_model"
+		selected_model="$next_model"
+		attempt=$((attempt + 1))
+	done
+
+	return 1
 }
 
 show_help() {
