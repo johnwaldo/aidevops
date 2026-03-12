@@ -737,7 +737,7 @@ check_skill_frontmatter() {
 check_secret_policy() {
 	echo -e "${BLUE}Checking Secret Safety Policy...${NC}"
 
-	local policy_script=".agents/scripts/secret-policy-check.sh"
+	local policy_script=".agents/scripts/safety-policy-check.sh"
 	if [[ ! -x "$policy_script" ]]; then
 		print_error "Missing executable policy checker: $policy_script"
 		return 1

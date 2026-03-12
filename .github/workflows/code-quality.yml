@@ -135,7 +135,7 @@ jobs:
     - name: Secret Safety Policy Check
       run: |
         echo "Running secret safety policy checks..."
-        bash .agents/scripts/secret-policy-check.sh
+        bash .agents/scripts/safety-policy-check.sh
         echo "Secret safety policy checks passed"
 
   sonarcloud:
