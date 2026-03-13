@@ -108,7 +108,7 @@ check_ai_deps() {
 	# Check pyproject.toml (pip)
 	if [[ -f "$repo_path/pyproject.toml" ]]; then
 		local pyproject_matched
-		pyproject_matched=$(grep -iE "$AI_DEPS_PIP" "$repo_path/pyproject.toml" | sed 's/[>=<"'\'',].*//' | tr -d ' ') || true
+		pyproject_matched=$(grep -iE "$AI_DEPS_PIP" "$repo_path/pyproject.toml" | sed -E "s/^[[:space:]]*['\"]?//; s/[[:space:]]*(==|~=|!=|<=|>=|<|>|@|;).*//; s/[\"',[:space:]]+$//") || true
 		if [[ -n "$pyproject_matched" ]]; then
 			deps_found="${deps_found}${pyproject_matched}"$'\n'
 		fi

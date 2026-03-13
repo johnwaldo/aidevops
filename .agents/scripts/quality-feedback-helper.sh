@@ -633,12 +633,12 @@ _scan_single_pr() {
 	# --- Fetch inline review comments (file-level) ---
 	local comments
 	comments=$(gh api "repos/${repo_slug}/pulls/${pr_num}/comments" \
-		--paginate --jq '.') || comments="[]"
+		--paginate --jq '.' | jq -s 'add // []') || comments="[]"
 
 	# --- Fetch review bodies (top-level reviews) ---
 	local reviews
 	reviews=$(gh api "repos/${repo_slug}/pulls/${pr_num}/reviews" \
-		--paginate --jq '.') || reviews="[]"
+		--paginate --jq '.' | jq -s 'add // []') || reviews="[]"
 
 	# Process inline comments
 	local inline_findings
