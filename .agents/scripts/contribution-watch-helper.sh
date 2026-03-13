@@ -13,7 +13,8 @@
 #
 # Usage:
 #   contribution-watch-helper.sh seed [--dry-run]     Discover all external contributions
-#   contribution-watch-helper.sh scan                 Check notifications for new external activity
+#   contribution-watch-helper.sh scan [--backfill]    Check notifications for new external activity
+#                                                    Optional: metadata-only safety-net sweep of tracked threads
 #   contribution-watch-helper.sh status               Show watched items and their state
 #   contribution-watch-helper.sh install               Install launchd plist
 #   contribution-watch-helper.sh uninstall             Remove launchd plist
@@ -435,10 +436,18 @@ cmd_seed() {
 }
 
 # =============================================================================
-# Scan: check for new comments since last scan
+# Scan: check notifications for new external activity
 # =============================================================================
 
 cmd_scan() {
+	local run_backfill=false
+	local scan_arg
+	for scan_arg in "$@"; do
+		if [[ "$scan_arg" == "--backfill" ]]; then
+			run_backfill=true
+		fi
+	done
+
 	_check_prerequisites || return 1
 
 	local username
@@ -473,21 +482,12 @@ cmd_scan() {
 	local notifications
 	notifications=$(gh api --paginate "notifications?participating=true&all=true&per_page=${API_PAGE_SIZE}${since_arg}" 2>/dev/null) || notifications=""
 
-	if [[ -z "$notifications" ]]; then
-		echo -e "${GREEN}All caught up — no external contributions need attention${NC}"
-		echo "Checked 0 notifications."
-		local now_iso_no_data
-		now_iso_no_data=$(_now_iso)
-		state=$(echo "$state" | jq --arg ts "$now_iso_no_data" '.last_scan = $ts')
-		_write_state "$state"
-		echo "CONTRIBUTION_WATCH_COUNT=0"
-		return 0
-	fi
-
 	local needs_attention=0
 	local items_checked=0
+	local backfill_checked=0
 	local attention_items=""
 	local notifications_checked=0
+	local alerted_keys=$'\n'
 
 	while IFS= read -r row; do
 		[[ -z "$row" ]] && continue
@@ -548,6 +548,11 @@ cmd_scan() {
 			continue
 		fi
 
+		if [[ "$alerted_keys" == *$'\n'"$item_key"$'\n'* ]]; then
+			continue
+		fi
+		alerted_keys+="${item_key}"$'\n'
+
 		needs_attention=$((needs_attention + 1))
 		attention_items="${attention_items}  ${item_key} (${item_type}): ${title} — reason: ${reason}\n"
 
@@ -562,6 +567,83 @@ cmd_scan() {
 
 		items_checked=$((items_checked + 1))
 	done < <(echo "$notifications" | jq -c '.[]?')
+
+	# Optional safety net: one deterministic metadata-only sweep over tracked items.
+	# Use this for low-frequency backfill to catch muted/unsubscribed notification gaps.
+	if [[ "$run_backfill" == "true" ]]; then
+		local items_keys
+		items_keys=$(echo "$state" | jq -r '.items | keys[]' 2>/dev/null) || items_keys=""
+
+		while IFS= read -r key; do
+			[[ -z "$key" ]] && continue
+			backfill_checked=$((backfill_checked + 1))
+
+			local repo_slug
+			repo_slug="${key%#*}"
+			if _is_managed_repo "$repo_slug" "$managed_slugs"; then
+				continue
+			fi
+
+			local number
+			number="${key##*#}"
+
+			local comments_meta
+			comments_meta=$(gh api "repos/${repo_slug}/issues/${number}/comments" \
+				--jq '[.[] | {author: .user.login, created: .created_at}] | sort_by(.created) | reverse | .[0]' \
+				2>/dev/null) || comments_meta=""
+
+			if [[ -z "$comments_meta" || "$comments_meta" == "null" ]]; then
+				continue
+			fi
+
+			local latest_comment_author
+			latest_comment_author=$(echo "$comments_meta" | jq -r '.author // ""')
+			local latest_comment_time
+			latest_comment_time=$(echo "$comments_meta" | jq -r '.created // ""')
+			if [[ -z "$latest_comment_time" ]]; then
+				continue
+			fi
+
+			state=$(echo "$state" | jq \
+				--arg key "$key" \
+				--arg time "$latest_comment_time" \
+				'.items[$key].last_any_comment = (if .items[$key].last_any_comment == "" or $time > .items[$key].last_any_comment then $time else .items[$key].last_any_comment end)')
+
+			if [[ "$latest_comment_author" == "$username" ]]; then
+				state=$(echo "$state" | jq --arg key "$key" --arg time "$latest_comment_time" '.items[$key].last_our_comment = $time')
+				continue
+			fi
+
+			local last_notified
+			last_notified=$(echo "$state" | jq -r --arg key "$key" '.items[$key].last_notified // ""')
+			if [[ -n "$last_notified" ]] && [[ ! "$latest_comment_time" > "$last_notified" ]]; then
+				continue
+			fi
+
+			if [[ "$alerted_keys" == *$'\n'"$key"$'\n'* ]]; then
+				continue
+			fi
+			alerted_keys+="${key}"$'\n'
+
+			local title
+			title=$(echo "$state" | jq -r --arg key "$key" '.items[$key].title // "unknown"')
+			local item_type
+			item_type=$(echo "$state" | jq -r --arg key "$key" '.items[$key].type // "issue"')
+
+			needs_attention=$((needs_attention + 1))
+			attention_items="${attention_items}  ${key} (${item_type}): ${title} — reason: backfill\n"
+
+			local hot_until
+			hot_until=$(date -u -v+24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+24 hours' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+			state=$(echo "$state" | jq \
+				--arg key "$key" \
+				--arg updated "$latest_comment_time" \
+				--arg hot "$hot_until" \
+				'.items[$key].last_notified = $updated | .items[$key].hot_until = $hot')
+
+			items_checked=$((items_checked + 1))
+		done <<<"$items_keys"
+	fi
 
 	# Update scan timestamp
 	local now_iso
@@ -583,7 +665,10 @@ cmd_scan() {
 	fi
 
 	echo "Checked ${notifications_checked} notifications (${items_checked} actionable external threads)."
-	_log_info "Scan complete: notifications=${notifications_checked}, actionable=${items_checked}, needs_attention=${needs_attention}"
+	if [[ "$run_backfill" == "true" ]]; then
+		echo "Backfill sweep checked ${backfill_checked} tracked threads."
+	fi
+	_log_info "Scan complete: notifications=${notifications_checked}, actionable=${items_checked}, backfill_checked=${backfill_checked}, needs_attention=${needs_attention}, run_backfill=${run_backfill}"
 
 	# Output machine-readable count for pulse integration
 	echo "CONTRIBUTION_WATCH_COUNT=${needs_attention}"
@@ -793,7 +878,8 @@ cmd_help() {
 	echo ""
 	echo "Usage:"
 	echo "  contribution-watch-helper.sh seed [--dry-run]   Discover all external contributions"
-	echo "  contribution-watch-helper.sh scan               Check notifications for new external activity"
+	echo "  contribution-watch-helper.sh scan [--backfill]  Check notifications for new external activity"
+	echo "                                                  --backfill adds a metadata-only safety-net sweep"
 	echo "  contribution-watch-helper.sh status             Show watched items and their state"
 	echo "  contribution-watch-helper.sh install            Install launchd plist"
 	echo "  contribution-watch-helper.sh uninstall          Remove launchd plist"
