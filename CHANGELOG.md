@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.172.15] - 2026-03-13
+
+### Fixed
+
+- adapt stale pulse recovery timeout to underfill severity (#4348)
+
 ## [2.172.14] - 2026-03-13
 
 ### Changed
