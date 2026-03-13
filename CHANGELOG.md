@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.172.18] - 2026-03-13
+
+### Changed
+
+- Maintenance: claim t1472
+
+### Fixed
+
+- recycle stale workers during severe pulse underfill (#4353)
+
 ## [2.172.17] - 2026-03-13
 
 ### Changed
