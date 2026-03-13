@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- prevent duplicate quality-debt recreation across multi-user `scan-merged` runs using shared `review-feedback-scanned` PR markers
+- dedupe quality-debt creation against closed issue history and stop counting comment appends as newly created issues
+- reconcile stale TODO parent task states for t1408, t1428, and superseded t1427
+
 ## [2.172.7] - 2026-03-12
 
 ### Fixed
