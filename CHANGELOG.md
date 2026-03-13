@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.172.8] - 2026-03-13
+
+### Changed
+
+- Documentation: add turn-end claim discipline gate (#4306)
+- Documentation: add unreleased notes for t1459 release
+
 ### Fixed
 
-- prevent duplicate quality-debt recreation across multi-user `scan-merged` runs using shared `review-feedback-scanned` PR markers
-- dedupe quality-debt creation against closed issue history and stop counting comment appends as newly created issues
-- reconcile stale TODO parent task states for t1408, t1428, and superseded t1427
+- auto-run contribution-watch backfill on low cadence
+- add backfill safety-net mode to contribution-watch
 
 ## [2.172.7] - 2026-03-12
 
