@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.172.11] - 2026-03-13
+
+### Fixed
+
+- resolve critical quality-debt in tech-stack.md (GH#3686) (#4331)
+- replace PID file deletion with IDLE sentinel to close dedup race window (GH#4324) (#4332)
+- add explicit return 0 to all success paths in wappalyzer-helper.sh (#4333)
+- resolve critical quality-debt in wp-helper.sh (GH#3629) (#4334)
+- add trap-guarded helper for mktemp in test-pr-task-check.sh (#4329)
+- correct BigQuery HTTP Archive query to use UNNEST for technologies array (#4328)
+- address PR #1497 review feedback in todo-sync.sh (GH#3695) (#4327)
+- recycle stale pulse process when underfilled (#4326)
+
 ## [2.172.10] - 2026-03-13
 
 ### Changed
