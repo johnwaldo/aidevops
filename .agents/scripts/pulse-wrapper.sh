@@ -101,6 +101,7 @@ PULSE_PREFETCH_ISSUE_LIMIT="${PULSE_PREFETCH_ISSUE_LIMIT:-200}"                 
 PULSE_RUNNABLE_PR_LIMIT="${PULSE_RUNNABLE_PR_LIMIT:-200}"                                               # Open PR sample size for runnable-candidate counting
 PULSE_RUNNABLE_ISSUE_LIMIT="${PULSE_RUNNABLE_ISSUE_LIMIT:-1000}"                                        # Open issue sample size for runnable-candidate counting
 PULSE_QUEUED_SCAN_LIMIT="${PULSE_QUEUED_SCAN_LIMIT:-1000}"                                              # Queued/in-progress scan window per repo
+UNDERFILL_RECYCLE_DEFICIT_MIN_PCT="${UNDERFILL_RECYCLE_DEFICIT_MIN_PCT:-25}"                            # Run worker recycler when underfill reaches this threshold
 
 # Process guard limits (t1398)
 CHILD_RSS_LIMIT_KB="${CHILD_RSS_LIMIT_KB:-2097152}"           # 2 GB default — kill child if RSS exceeds this
@@ -135,6 +136,10 @@ PULSE_PREFETCH_ISSUE_LIMIT=$(_validate_int PULSE_PREFETCH_ISSUE_LIMIT "$PULSE_PR
 PULSE_RUNNABLE_PR_LIMIT=$(_validate_int PULSE_RUNNABLE_PR_LIMIT "$PULSE_RUNNABLE_PR_LIMIT" 200 1)
 PULSE_RUNNABLE_ISSUE_LIMIT=$(_validate_int PULSE_RUNNABLE_ISSUE_LIMIT "$PULSE_RUNNABLE_ISSUE_LIMIT" 1000 1)
 PULSE_QUEUED_SCAN_LIMIT=$(_validate_int PULSE_QUEUED_SCAN_LIMIT "$PULSE_QUEUED_SCAN_LIMIT" 1000 1)
+UNDERFILL_RECYCLE_DEFICIT_MIN_PCT=$(_validate_int UNDERFILL_RECYCLE_DEFICIT_MIN_PCT "$UNDERFILL_RECYCLE_DEFICIT_MIN_PCT" 25 1)
+if [[ "$UNDERFILL_RECYCLE_DEFICIT_MIN_PCT" -gt 100 ]]; then
+	UNDERFILL_RECYCLE_DEFICIT_MIN_PCT=100
+fi
 CHILD_RSS_LIMIT_KB=$(_validate_int CHILD_RSS_LIMIT_KB "$CHILD_RSS_LIMIT_KB" 2097152 1)
 CHILD_RUNTIME_LIMIT=$(_validate_int CHILD_RUNTIME_LIMIT "$CHILD_RUNTIME_LIMIT" 1800 1)
 SHELLCHECK_RSS_LIMIT_KB=$(_validate_int SHELLCHECK_RSS_LIMIT_KB "$SHELLCHECK_RSS_LIMIT_KB" 1048576 1)
@@ -156,6 +161,7 @@ REPOS_JSON="${REPOS_JSON:-${HOME}/.config/aidevops/repos.json}"
 STATE_FILE="${HOME}/.aidevops/logs/pulse-state.txt"
 QUEUE_METRICS_FILE="${HOME}/.aidevops/logs/pulse-queue-metrics"
 SCOPE_FILE="${HOME}/.aidevops/logs/pulse-scope-repos"
+WORKER_WATCHDOG_HELPER="${SCRIPT_DIR}/worker-watchdog.sh"
 
 if [[ ! -x "$HEADLESS_RUNTIME_HELPER" ]]; then
 	printf '[pulse-wrapper] ERROR: headless runtime helper is missing or not executable: %s (SCRIPT_DIR=%s)\n' "$HEADLESS_RUNTIME_HELPER" "$SCRIPT_DIR" >&2
@@ -2271,6 +2277,10 @@ enforce_utilization_invariants() {
 		[[ "$runnable_count" =~ ^[0-9]+$ ]] || runnable_count=0
 		[[ "$queued_without_worker" =~ ^[0-9]+$ ]] || queued_without_worker=0
 
+		run_underfill_worker_recycler "$max_workers" "$active_workers" "$runnable_count" "$queued_without_worker"
+		active_workers=$(count_active_workers)
+		[[ "$active_workers" =~ ^[0-9]+$ ]] || active_workers=0
+
 		if [[ "$active_workers" -ge "$max_workers" && "$queued_without_worker" -eq 0 ]]; then
 			echo "[pulse-wrapper] Utilization invariant satisfied: active workers ${active_workers}/${max_workers}" >>"$LOGFILE"
 			return 0
@@ -2296,6 +2306,81 @@ enforce_utilization_invariants() {
 	done
 
 	echo "[pulse-wrapper] Reached backfill attempt cap (${max_attempts}) before utilization invariant converged" >>"$LOGFILE"
+	return 0
+}
+
+#######################################
+# Recycle stale workers aggressively when underfill is severe
+#
+# During deep underfill, long-running workers can occupy slots while making
+# no mergeable progress. Run worker-watchdog with stricter thresholds so
+# stale workers are recycled before the next pulse dispatch attempt.
+#
+# Arguments:
+#   $1 - max workers
+#   $2 - active workers
+#   $3 - runnable candidate count
+#   $4 - queued_without_worker count
+#######################################
+run_underfill_worker_recycler() {
+	local max_workers="$1"
+	local active_workers="$2"
+	local runnable_count="$3"
+	local queued_without_worker="$4"
+
+	[[ "$max_workers" =~ ^[0-9]+$ ]] || max_workers=1
+	[[ "$active_workers" =~ ^[0-9]+$ ]] || active_workers=0
+	[[ "$runnable_count" =~ ^[0-9]+$ ]] || runnable_count=0
+	[[ "$queued_without_worker" =~ ^[0-9]+$ ]] || queued_without_worker=0
+
+	if [[ "$active_workers" -ge "$max_workers" ]]; then
+		return 0
+	fi
+
+	if [[ "$runnable_count" -eq 0 && "$queued_without_worker" -eq 0 ]]; then
+		return 0
+	fi
+
+	if [[ ! -x "$WORKER_WATCHDOG_HELPER" ]]; then
+		echo "[pulse-wrapper] Underfill recycler skipped: worker-watchdog helper missing or not executable (${WORKER_WATCHDOG_HELPER})" >>"$LOGFILE"
+		return 0
+	fi
+
+	local deficit_pct
+	deficit_pct=$(((max_workers - active_workers) * 100 / max_workers))
+	if [[ "$deficit_pct" -lt "$UNDERFILL_RECYCLE_DEFICIT_MIN_PCT" ]]; then
+		return 0
+	fi
+
+	local thrash_elapsed_threshold
+	local thrash_message_threshold
+	local progress_timeout
+	local max_runtime
+	if [[ "$deficit_pct" -ge 50 ]]; then
+		thrash_elapsed_threshold=1800
+		thrash_message_threshold=90
+		progress_timeout=420
+		max_runtime=7200
+	else
+		thrash_elapsed_threshold=3600
+		thrash_message_threshold=120
+		progress_timeout=480
+		max_runtime=9000
+	fi
+
+	echo "[pulse-wrapper] Underfill recycler: running worker-watchdog (active ${active_workers}/${max_workers}, deficit ${deficit_pct}%, runnable=${runnable_count}, queued_without_worker=${queued_without_worker})" >>"$LOGFILE"
+
+	if WORKER_WATCHDOG_NOTIFY=false \
+		WORKER_THRASH_ELAPSED_THRESHOLD="$thrash_elapsed_threshold" \
+		WORKER_THRASH_MESSAGE_THRESHOLD="$thrash_message_threshold" \
+		WORKER_PROGRESS_TIMEOUT="$progress_timeout" \
+		WORKER_MAX_RUNTIME="$max_runtime" \
+		"$WORKER_WATCHDOG_HELPER" --check >>"$LOGFILE" 2>&1; then
+		echo "[pulse-wrapper] Underfill recycler complete: worker-watchdog check finished" >>"$LOGFILE"
+	else
+		echo "[pulse-wrapper] Underfill recycler warning: worker-watchdog returned non-zero" >>"$LOGFILE"
+	fi
+
 	return 0
 }
 
@@ -2376,6 +2461,21 @@ main() {
 	if [[ "$initial_active_workers" -lt "$initial_max_workers" ]]; then
 		initial_underfilled_mode=1
 		initial_underfill_pct=$(((initial_max_workers - initial_active_workers) * 100 / initial_max_workers))
+	fi
+	local initial_runnable_count initial_queued_without_worker
+	initial_runnable_count=$(count_runnable_candidates)
+	initial_queued_without_worker=$(count_queued_without_worker)
+	[[ "$initial_runnable_count" =~ ^[0-9]+$ ]] || initial_runnable_count=0
+	[[ "$initial_queued_without_worker" =~ ^[0-9]+$ ]] || initial_queued_without_worker=0
+	run_underfill_worker_recycler "$initial_max_workers" "$initial_active_workers" "$initial_runnable_count" "$initial_queued_without_worker"
+	initial_active_workers=$(count_active_workers)
+	[[ "$initial_active_workers" =~ ^[0-9]+$ ]] || initial_active_workers=0
+	if [[ "$initial_active_workers" -lt "$initial_max_workers" ]]; then
+		initial_underfilled_mode=1
+		initial_underfill_pct=$(((initial_max_workers - initial_active_workers) * 100 / initial_max_workers))
+	else
+		initial_underfilled_mode=0
+		initial_underfill_pct=0
 	fi
 
 	run_pulse "$initial_underfilled_mode" "$initial_underfill_pct"
