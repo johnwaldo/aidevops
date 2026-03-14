@@ -24,7 +24,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -147,42 +147,42 @@ def extract_entities_spacy(text: str) -> dict[str, list[str]]:
 # Ollama LLM extraction (fallback)
 # ---------------------------------------------------------------------------
 
-def _check_ollama() -> bool:
-    """Check if Ollama is running and accessible."""
+def _run_ollama_list() -> Optional[subprocess.CompletedProcess]:
+    """Run 'ollama list' and return the result, or None on failure."""
     try:
         result = subprocess.run(
             ["ollama", "list"],
             capture_output=True, text=True, timeout=5
         )
-        return result.returncode == 0
+        if result.returncode == 0:
+            return result
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+        pass
+    return None
+
+
+def _check_ollama() -> bool:
+    """Check if Ollama is running and accessible."""
+    return _run_ollama_list() is not None
 
 
 def _get_ollama_model() -> Optional[str]:
     """Find the best available Ollama model for NER."""
-    try:
-        result = subprocess.run(
-            ["ollama", "list"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            return None
+    result = _run_ollama_list()
+    if result is None:
+        return None
 
-        available = result.stdout.lower()
-        # Prefer models good at structured extraction
-        for model in ["llama3.2", "llama3.1", "llama3", "mistral", "gemma2", "phi3"]:
-            if model in available:
-                return model
+    available = result.stdout.lower()
+    # Prefer models good at structured extraction
+    for model in ["llama3.2", "llama3.1", "llama3", "mistral", "gemma2", "phi3"]:
+        if model in available:
+            return model
 
-        # Fall back to first available model
-        lines = result.stdout.strip().split("\n")
-        if len(lines) > 1:  # Skip header line
-            first_model = lines[1].split()[0]
-            return first_model.split(":")[0]
-
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+    # Fall back to first available model
+    lines = result.stdout.strip().split("\n")
+    if len(lines) > 1:  # Skip header line
+        first_model = lines[1].split()[0]
+        return first_model.split(":")[0]
 
     return None
 
@@ -239,9 +239,12 @@ def extract_entities_ollama(text: str) -> dict[str, list[str]]:
         raise RuntimeError("Ollama timed out (120s)")
 
 
-def _parse_llm_response(response: str) -> dict[str, list[str]]:
-    """Parse LLM JSON response, handling common formatting issues."""
-    # Try to extract JSON from the response
+def _extract_json_from_response(response: str) -> Optional[dict]:
+    """Extract and parse JSON from an LLM response string.
+
+    Handles markdown code blocks, bare JSON, and single-quote issues.
+    Returns parsed dict or None if parsing fails.
+    """
     # LLMs sometimes wrap JSON in markdown code blocks
     json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', response, re.DOTALL)
     if json_match:
@@ -254,29 +257,43 @@ def _parse_llm_response(response: str) -> dict[str, list[str]]:
         response = response[brace_start:brace_end + 1]
 
     try:
-        data = json.loads(response)
+        return json.loads(response)
     except json.JSONDecodeError:
-        # Last resort: try to fix common issues
-        response = response.replace("'", '"')
-        try:
-            data = json.loads(response)
-        except json.JSONDecodeError:
-            return {}
+        pass
 
-    # Validate and clean the response
+    # Last resort: try to fix common issues (single quotes)
+    response = response.replace("'", '"')
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        return None
+
+
+def _validate_and_clean_entities(data: dict) -> dict[str, list[str]]:
+    """Validate and clean entity lists from parsed LLM output."""
     entities: dict[str, list[str]] = {}
     for entity_type in ENTITY_TYPES:
-        if entity_type in data and isinstance(data[entity_type], list):
-            cleaned = []
-            for item in data[entity_type]:
-                if isinstance(item, str):
-                    c = _clean_entity(item, entity_type)
-                    if c and c not in cleaned:
-                        cleaned.append(c)
-            if cleaned:
-                entities[entity_type] = cleaned
-
+        raw_list = data.get(entity_type)
+        if not isinstance(raw_list, list):
+            continue
+        cleaned = []
+        for item in raw_list:
+            if not isinstance(item, str):
+                continue
+            c = _clean_entity(item, entity_type)
+            if c and c not in cleaned:
+                cleaned.append(c)
+        if cleaned:
+            entities[entity_type] = cleaned
     return entities
+
+
+def _parse_llm_response(response: str) -> dict[str, list[str]]:
+    """Parse LLM JSON response, handling common formatting issues."""
+    data = _extract_json_from_response(response)
+    if data is None:
+        return {}
+    return _validate_and_clean_entities(data)
 
 
 # ---------------------------------------------------------------------------
@@ -362,35 +379,14 @@ def _clean_entity(text: str, entity_type: str) -> str:
 # Main extraction orchestrator
 # ---------------------------------------------------------------------------
 
-def extract_entities(text: str, method: str = "auto") -> dict[str, list[str]]:
-    """Extract entities from text using the specified method.
-
-    Args:
-        text: The text to extract entities from.
-        method: 'auto' (try spaCy, then Ollama, then regex),
-                'spacy', 'ollama', or 'regex'.
-
-    Returns:
-        Dict mapping entity type to list of entity strings.
-    """
-    if method == "spacy":
-        return extract_entities_spacy(text)
-
-    if method == "ollama":
-        return extract_entities_ollama(text)
-
-    if method == "regex":
-        return extract_entities_regex(text)
-
-    # Auto: try methods in order of quality
+def _try_auto_extraction(text: str) -> dict[str, list[str]]:
+    """Try extraction methods in order of quality: spaCy, Ollama, regex."""
     # 1. spaCy (best quality, local, fast)
-    if _check_spacy():
+    if _check_spacy() and _get_spacy_model() is not None:
         try:
-            nlp = _get_spacy_model()
-            if nlp is not None:
-                result = extract_entities_spacy(text)
-                if result:
-                    return result
+            result = extract_entities_spacy(text)
+            if result:
+                return result
         except Exception as e:
             print(f"spaCy extraction failed: {e}", file=sys.stderr)
 
@@ -405,6 +401,31 @@ def extract_entities(text: str, method: str = "auto") -> dict[str, list[str]]:
 
     # 3. Regex (minimal, always available)
     return extract_entities_regex(text)
+
+
+# Direct method dispatch (excludes 'auto' which uses fallback logic)
+_METHOD_DISPATCH: dict[str, Callable[[str], dict[str, list[str]]]] = {
+    "spacy": extract_entities_spacy,
+    "ollama": extract_entities_ollama,
+    "regex": extract_entities_regex,
+}
+
+
+def extract_entities(text: str, method: str = "auto") -> dict[str, list[str]]:
+    """Extract entities from text using the specified method.
+
+    Args:
+        text: The text to extract entities from.
+        method: 'auto' (try spaCy, then Ollama, then regex),
+                'spacy', 'ollama', or 'regex'.
+
+    Returns:
+        Dict mapping entity type to list of entity strings.
+    """
+    extractor = _METHOD_DISPATCH.get(method)
+    if extractor is not None:
+        return extractor(text)
+    return _try_auto_extraction(text)
 
 
 # ---------------------------------------------------------------------------
@@ -500,8 +521,8 @@ def update_frontmatter(file_path: str, entities: dict[str, list[str]]) -> bool:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    """CLI entry point."""
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
         description="Extract named entities from markdown email bodies (t1044.6)"
     )
@@ -519,8 +540,24 @@ def main() -> int:
         "--json", action="store_true",
         help="Output entities as JSON (default when not updating frontmatter)"
     )
+    return parser
 
-    args = parser.parse_args()
+
+def _format_entity_summary(entities: dict[str, list[str]]) -> str:
+    """Format entities as a human-readable summary for logging."""
+    if not entities:
+        return "  (no entities found)"
+    lines = []
+    for etype, elist in entities.items():
+        summary = ", ".join(elist[:5])
+        suffix = f" (+{len(elist) - 5} more)" if len(elist) > 5 else ""
+        lines.append(f"  {etype}: {summary}{suffix}")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    """CLI entry point."""
+    args = _build_arg_parser().parse_args()
 
     input_path = Path(args.input)
     if not input_path.is_file():
@@ -536,23 +573,16 @@ def main() -> int:
     else:
         entities = extract_entities(body, method=args.method)
 
-    if args.update_frontmatter:
-        if update_frontmatter(args.input, entities):
-            print(f"Updated frontmatter in {args.input}")
-            # Also print the entities for logging
-            if entities:
-                for etype, elist in entities.items():
-                    print(f"  {etype}: {', '.join(elist[:5])}"
-                          + (f" (+{len(elist) - 5} more)" if len(elist) > 5 else ""))
-            else:
-                print("  (no entities found)")
-        else:
-            print(f"Could not update frontmatter in {args.input}", file=sys.stderr)
-            return 1
-    else:
-        # Output JSON
+    if not args.update_frontmatter:
         print(json.dumps(entities, indent=2, ensure_ascii=False))
+        return 0
 
+    if not update_frontmatter(args.input, entities):
+        print(f"Could not update frontmatter in {args.input}", file=sys.stderr)
+        return 1
+
+    print(f"Updated frontmatter in {args.input}")
+    print(_format_entity_summary(entities))
     return 0
 
 

@@ -38,8 +38,7 @@ import argparse
 from pathlib import Path
 import mimetypes
 import re
-import json
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, NamedTuple
 from collections import defaultdict
 import subprocess
 import urllib.request
@@ -59,6 +58,16 @@ ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 
 # Anthropic model for summarisation (cheapest tier)
 ANTHROPIC_MODEL = 'claude-haiku-4-20250414'
+
+
+class ConvertOptions(NamedTuple):
+    """Internal options bundle for email_to_markdown pipeline stages."""
+    extract_entities: bool = False
+    entity_method: str = 'auto'
+    summary_mode: str = 'auto'
+    thread_map: Optional[Dict] = None
+    dedup_registry: Optional[Dict] = None
+    no_normalise: bool = False
 
 
 def parse_eml(file_path):
@@ -81,38 +90,50 @@ def parse_msg(file_path):
     return msg
 
 
-def get_email_body(msg, prefer_html=True):
-    """Extract email body, preferring HTML if available."""
+def _extract_mime_parts(msg):
+    """Extract text/plain and text/html parts from an email.message.Message.
+
+    Returns (body_text, body_html) taking the first occurrence of each type.
+    """
     body_text = ""
     body_html = ""
-    
+    if msg.is_multipart():
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            if content_type == 'text/plain' and not body_text:
+                body_text = part.get_content()
+            elif content_type == 'text/html' and not body_html:
+                body_html = part.get_content()
+    else:
+        content_type = msg.get_content_type()
+        if content_type == 'text/plain':
+            body_text = msg.get_content()
+        elif content_type == 'text/html':
+            body_html = msg.get_content()
+    return body_text, body_html
+
+
+def _html_to_markdown(html_body):
+    """Convert HTML email body to markdown text."""
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.ignore_images = False
+    h.ignore_emphasis = False
+    h.body_width = 0  # Don't wrap lines
+    return h.handle(html_body)
+
+
+def get_email_body(msg, prefer_html=True):
+    """Extract email body, preferring HTML if available."""
     if hasattr(msg, 'body'):  # extract_msg Message object
         body_text = msg.body or ""
         body_html = msg.htmlBody or ""
     else:  # email.message.Message object
-        if msg.is_multipart():
-            for part in msg.walk():
-                content_type = part.get_content_type()
-                if content_type == 'text/plain' and not body_text:
-                    body_text = part.get_content()
-                elif content_type == 'text/html' and not body_html:
-                    body_html = part.get_content()
-        else:
-            content_type = msg.get_content_type()
-            if content_type == 'text/plain':
-                body_text = msg.get_content()
-            elif content_type == 'text/html':
-                body_html = msg.get_content()
-    
-    # Convert HTML to markdown if available and preferred
+        body_text, body_html = _extract_mime_parts(msg)
+
     if body_html and prefer_html:
-        h = html2text.HTML2Text()
-        h.ignore_links = False
-        h.ignore_images = False
-        h.ignore_emphasis = False
-        h.body_width = 0  # Don't wrap lines
-        return h.handle(body_html)
-    
+        return _html_to_markdown(body_html)
+
     return body_text
 
 
@@ -180,6 +201,40 @@ def _save_attachment(filepath, data, content_hash, dedup_registry):
     return dedup_info
 
 
+def _process_one_attachment(filename, data, output_path, dedup_registry):
+    """Save a single attachment and return its metadata dict."""
+    filepath = output_path / filename
+    content_hash = compute_content_hash(data)
+    dedup_info = _save_attachment(filepath, data, content_hash, dedup_registry)
+    att_meta = {
+        'filename': filename,
+        'path': str(filepath),
+        'size': len(data),
+        'content_hash': content_hash,
+    }
+    att_meta.update(dedup_info)
+    return att_meta
+
+
+def _iter_msg_attachments(msg):
+    """Yield (filename, data) pairs from an extract_msg Message object."""
+    for attachment in msg.attachments:
+        filename = attachment.longFilename or attachment.shortFilename or "attachment"
+        yield filename, attachment.data
+
+
+def _iter_eml_attachments(msg):
+    """Yield (filename, data) pairs from an email.message.Message object."""
+    for part in msg.walk():
+        if part.get_content_maintype() == 'multipart':
+            continue
+        if part.get('Content-Disposition') is None:
+            continue
+        filename = part.get_filename()
+        if filename:
+            yield filename, part.get_payload(decode=True)
+
+
 def extract_attachments(msg, output_dir, dedup_registry=None):
     """Extract attachments from email message with content-hash deduplication.
 
@@ -187,48 +242,18 @@ def extract_attachments(msg, output_dir, dedup_registry=None):
     duplicate attachments are symlinked to the first occurrence instead of being
     written again, and a 'deduplicated_from' field is added to their metadata.
     """
-    attachments = []
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     if hasattr(msg, 'attachments'):  # extract_msg Message object
-        for attachment in msg.attachments:
-            filename = attachment.longFilename or attachment.shortFilename or "attachment"
-            filepath = output_path / filename
-            data = attachment.data
-            content_hash = compute_content_hash(data)
-            dedup_info = _save_attachment(filepath, data, content_hash, dedup_registry)
-            att_meta = {
-                'filename': filename,
-                'path': str(filepath),
-                'size': len(data),
-                'content_hash': content_hash,
-            }
-            att_meta.update(dedup_info)
-            attachments.append(att_meta)
+        att_iter = _iter_msg_attachments(msg)
     else:  # email.message.Message object
-        for part in msg.walk():
-            if part.get_content_maintype() == 'multipart':
-                continue
-            if part.get('Content-Disposition') is None:
-                continue
+        att_iter = _iter_eml_attachments(msg)
 
-            filename = part.get_filename()
-            if filename:
-                filepath = output_path / filename
-                data = part.get_payload(decode=True)
-                content_hash = compute_content_hash(data)
-                dedup_info = _save_attachment(filepath, data, content_hash, dedup_registry)
-                att_meta = {
-                    'filename': filename,
-                    'path': str(filepath),
-                    'size': len(data),
-                    'content_hash': content_hash,
-                }
-                att_meta.update(dedup_info)
-                attachments.append(att_meta)
-
-    return attachments
+    return [
+        _process_one_attachment(filename, data, output_path, dedup_registry)
+        for filename, data in att_iter
+    ]
 
 
 def format_size(size_bytes):
@@ -315,6 +340,126 @@ def _has_attribution_before(lines, index):
     return False
 
 
+class _SectionState:
+    """Mutable state tracker for email section normalisation."""
+    __slots__ = ('in_quote_block', 'in_signature', 'in_forwarded')
+
+    def __init__(self):
+        self.in_quote_block = False
+        self.in_signature = False
+        self.in_forwarded = False
+
+
+def _handle_forwarded_header(result, state):
+    """Emit a forwarded-message heading and update state."""
+    if state.in_quote_block:
+        result.append('')
+        state.in_quote_block = False
+    state.in_signature = False
+    state.in_forwarded = True
+    result.append('')
+    result.append('## Forwarded Message')
+    result.append('')
+
+
+def _handle_forwarded_body(stripped, result, state):
+    """Process a line while inside a forwarded header block.
+
+    Returns True if the line was consumed, False to fall through.
+    """
+    if state.in_forwarded and _HEADER_FIELD_RE.match(stripped):
+        result.append(f'**{stripped}**')
+        return True
+    if state.in_forwarded and stripped and not _HEADER_FIELD_RE.match(stripped):
+        state.in_forwarded = False
+        result.append('')
+    return False
+
+
+def _handle_signature(stripped, line, result, state):
+    """Process signature-related lines.
+
+    Returns True if the line was consumed, False to fall through.
+    """
+    if _is_signature_delimiter(stripped):
+        if state.in_quote_block:
+            result.append('')
+            state.in_quote_block = False
+        state.in_signature = True
+        result.append('')
+        result.append('## Signature')
+        result.append('')
+        return True
+    if not state.in_signature:
+        return False
+    # Inside signature block — check for exit conditions
+    if stripped.startswith('>') or re.match(
+            r'^-{3,}\s*(Forwarded|Original)', stripped):
+        state.in_signature = False
+        return False
+    result.append(line)
+    return True
+
+
+def _start_quote_block(lines, i, result):
+    """Emit a quoted-reply heading if no attribution line precedes this quote."""
+    if not _has_attribution_before(lines, i):
+        result.append('')
+        result.append('## Quoted Reply')
+        result.append('')
+
+
+def _handle_quote_exit(stripped, result):
+    """Handle transition out of a quote block on a non-quoted line.
+
+    Returns True if the line was consumed as an attribution, False otherwise.
+    """
+    if _ATTRIBUTION_RE.match(stripped):
+        result.append('')
+        result.append('## Quoted Reply')
+        result.append('')
+        result.append(f'*{stripped}*')
+        return True
+    return False
+
+
+def _handle_quoted_line(line, lines, i, result, state):
+    """Handle lines that are part of or transitioning from a quote block.
+
+    Returns True if the line was consumed, False to fall through.
+    """
+    stripped = line.strip()
+    if stripped.startswith('>'):
+        if not state.in_quote_block:
+            state.in_quote_block = True
+            _start_quote_block(lines, i, result)
+        result.append(line)
+        return True
+
+    if state.in_quote_block:
+        state.in_quote_block = False
+        return _handle_quote_exit(stripped, result)
+
+    return False
+
+
+def _process_section_line(line, lines, i, result, state):
+    """Dispatch a single line through the section-detection pipeline.
+
+    Returns True if the line was consumed by a handler, False to append as-is.
+    """
+    stripped = line.strip()
+
+    if _is_forwarded_header(stripped):
+        _handle_forwarded_header(result, state)
+        return True
+
+    consumed = (_handle_forwarded_body(stripped, result, state)
+                or _handle_signature(stripped, line, result, state)
+                or _handle_quoted_line(line, lines, i, result, state))
+    return consumed
+
+
 def normalise_email_sections(body):
     """Detect and structure email-specific sections in the body text.
 
@@ -325,78 +470,11 @@ def normalise_email_sections(body):
     """
     lines = body.splitlines()
     result = []
-    in_quote_block = False
-    in_signature = False
-    in_forwarded = False
+    state = _SectionState()
 
     for i, line in enumerate(lines):
-        stripped = line.strip()
-
-        # --- Forwarded message detection ---
-        if _is_forwarded_header(stripped):
-            if in_quote_block:
-                result.append('')
-                in_quote_block = False
-            in_signature = False
-            in_forwarded = True
-            result.append('')
-            result.append('## Forwarded Message')
-            result.append('')
-            continue
-
-        # Forwarded header fields (From:, Date:, Subject:, To:, etc.)
-        if in_forwarded and _HEADER_FIELD_RE.match(stripped):
-            result.append(f'**{stripped}**')
-            continue
-
-        # End forwarded header block on first non-header, non-blank line
-        if in_forwarded and stripped and not _HEADER_FIELD_RE.match(stripped):
-            in_forwarded = False
-            result.append('')
-
-        # --- Signature detection (RFC 3676) ---
-        if _is_signature_delimiter(stripped):
-            if in_quote_block:
-                result.append('')
-                in_quote_block = False
-            in_signature = True
-            result.append('')
-            result.append('## Signature')
-            result.append('')
-            continue
-
-        # Lines in signature block
-        if in_signature:
-            if stripped.startswith('>') or re.match(
-                    r'^-{3,}\s*(Forwarded|Original)', stripped):
-                in_signature = False
-            else:
-                result.append(line)
-                continue
-
-        # --- Quoted reply detection ---
-        if stripped.startswith('>'):
-            if not in_quote_block:
-                in_quote_block = True
-                if not _has_attribution_before(lines, i):
-                    result.append('')
-                    result.append('## Quoted Reply')
-                    result.append('')
+        if not _process_section_line(line, lines, i, result, state):
             result.append(line)
-            continue
-
-        # Transition out of quote block
-        if in_quote_block and not stripped.startswith('>'):
-            in_quote_block = False
-            if _ATTRIBUTION_RE.match(stripped):
-                result.append('')
-                result.append('## Quoted Reply')
-                result.append('')
-                result.append(f'*{stripped}*')
-                continue
-
-        # Regular line
-        result.append(line)
 
     return '\n'.join(result)
 
@@ -437,6 +515,45 @@ def build_thread_map(emails_dir: Path) -> Dict[str, Dict]:
     return thread_map
 
 
+def _walk_ancestor_chain(message_id: str, thread_map: Dict[str, Dict]) -> List[str]:
+    """Walk backwards from message_id to the thread root via in_reply_to.
+
+    Returns the chain of message IDs from root to message_id, inclusive.
+    """
+    current_id = message_id
+    chain = [current_id]
+    visited = {current_id}
+
+    while True:
+        current_info = thread_map.get(current_id)
+        if not current_info:
+            break
+        in_reply_to = current_info.get('in_reply_to', '')
+        if not in_reply_to or in_reply_to not in thread_map:
+            break
+        if in_reply_to in visited:
+            break
+        chain.insert(0, in_reply_to)
+        visited.add(in_reply_to)
+        current_id = in_reply_to
+
+    return chain
+
+
+def _count_descendants(msg_id: str, thread_map: Dict[str, Dict],
+                       visited_desc: set) -> int:
+    """Recursively count all descendants of msg_id in the thread map."""
+    if msg_id in visited_desc:
+        return 0
+    visited_desc.add(msg_id)
+
+    count = 1
+    for mid, info in thread_map.items():
+        if info.get('in_reply_to') == msg_id and mid not in visited_desc:
+            count += _count_descendants(mid, thread_map, visited_desc)
+    return count
+
+
 def reconstruct_thread(message_id: str, thread_map: Dict[str, Dict]) -> Tuple[str, int, int]:
     """Reconstruct thread information for a given message.
     
@@ -447,50 +564,12 @@ def reconstruct_thread(message_id: str, thread_map: Dict[str, Dict]) -> Tuple[st
     """
     if not message_id or message_id not in thread_map:
         return ('', 0, 0)
-    
-    # Walk backwards to find root
-    current_id = message_id
-    chain = [current_id]
-    visited = {current_id}
-    
-    while True:
-        current_info = thread_map.get(current_id)
-        if not current_info:
-            break
-        
-        in_reply_to = current_info.get('in_reply_to', '')
-        if not in_reply_to or in_reply_to not in thread_map:
-            break
-        
-        # Prevent infinite loops
-        if in_reply_to in visited:
-            break
-        
-        chain.insert(0, in_reply_to)
-        visited.add(in_reply_to)
-        current_id = in_reply_to
-    
-    # Root is first in chain
+
+    chain = _walk_ancestor_chain(message_id, thread_map)
     thread_id = chain[0]
-    
-    # Position is where our message appears in the chain
     thread_position = chain.index(message_id) + 1
-    
-    # Walk forwards from root to find all descendants
-    def count_descendants(msg_id: str, visited_desc: set) -> int:
-        if msg_id in visited_desc:
-            return 0
-        visited_desc.add(msg_id)
-        
-        count = 1
-        # Find all messages that reply to this one
-        for mid, info in thread_map.items():
-            if info.get('in_reply_to') == msg_id and mid not in visited_desc:
-                count += count_descendants(mid, visited_desc)
-        return count
-    
-    thread_length = count_descendants(thread_id, set())
-    
+    thread_length = _count_descendants(thread_id, thread_map, set())
+
     return (thread_id, thread_position, thread_length)
 
 
@@ -710,6 +789,24 @@ def _summarise_with_anthropic(plain_text, subject):
     return None
 
 
+def _try_llm_summary(plain_text, subject, warn_on_fail=False):
+    """Attempt LLM summarisation via Ollama then Anthropic.
+
+    Returns (summary, method) on success, or None if both fail.
+    When warn_on_fail is True, prints a warning before returning None.
+    """
+    summary = _summarise_with_ollama(plain_text, subject)
+    if summary:
+        return summary, 'ollama'
+    summary = _summarise_with_anthropic(plain_text, subject)
+    if summary:
+        return summary, 'anthropic'
+    if warn_on_fail:
+        print("WARNING: LLM unavailable, falling back to heuristic summary",
+              file=sys.stderr)
+    return None
+
+
 def generate_summary(body, subject='', summary_mode='auto'):
     """Generate a 1-2 sentence summary for the email description field.
 
@@ -735,38 +832,18 @@ def generate_summary(body, subject='', summary_mode='auto'):
     if not plain_text:
         return '', 'heuristic'
 
-    word_count = len(plain_text.split())
-
-    # Force heuristic mode
     if summary_mode == 'heuristic':
         return extract_sentences(plain_text), 'heuristic'
 
-    # Force LLM mode
-    if summary_mode == 'llm':
-        summary = _summarise_with_ollama(plain_text, subject)
-        if summary:
-            return summary, 'ollama'
-        summary = _summarise_with_anthropic(plain_text, subject)
-        if summary:
-            return summary, 'anthropic'
-        # LLM unavailable — fall back to heuristic with warning
-        print("WARNING: LLM unavailable, falling back to heuristic summary",
-              file=sys.stderr)
-        return extract_sentences(plain_text), 'heuristic'
+    # LLM-capable modes: 'llm' (forced) or 'auto' (long emails only)
+    use_llm = summary_mode == 'llm' or len(plain_text.split()) > SUMMARY_WORD_THRESHOLD
 
-    # Auto mode: route based on word count
-    if word_count <= SUMMARY_WORD_THRESHOLD:
-        return extract_sentences(plain_text), 'heuristic'
+    if use_llm:
+        result = _try_llm_summary(plain_text, subject,
+                                  warn_on_fail=(summary_mode == 'llm'))
+        if result:
+            return result
 
-    # Long email — try LLM summarisation
-    summary = _summarise_with_ollama(plain_text, subject)
-    if summary:
-        return summary, 'ollama'
-    summary = _summarise_with_anthropic(plain_text, subject)
-    if summary:
-        return summary, 'anthropic'
-
-    # No LLM available — fall back to heuristic
     return extract_sentences(plain_text), 'heuristic'
 
 
@@ -807,6 +884,41 @@ def parse_date_safe(date_str):
         return str(date_str)
 
 
+def _format_attachment_yaml(att):
+    """Format a single attachment dict as indented YAML list-item lines."""
+    lines = [f'  - filename: {yaml_escape(att["filename"])}']
+    lines.append(f'    size: {yaml_escape(att["size"])}')
+    if 'content_hash' in att:
+        lines.append(f'    content_hash: {att["content_hash"]}')
+    if 'deduplicated_from' in att:
+        lines.append(f'    deduplicated_from: {yaml_escape(att["deduplicated_from"])}')
+    return lines
+
+
+def _format_attachments_yaml(key, attachments):
+    """Format the attachments list as YAML lines."""
+    if not attachments:
+        return [f'{key}: []']
+    lines = [f'{key}:']
+    for att in attachments:
+        lines.extend(_format_attachment_yaml(att))
+    return lines
+
+
+def _format_entities_yaml(key, entities):
+    """Format the entities dict-of-lists as YAML lines."""
+    if not entities:
+        return [f'{key}: {{}}']
+    lines = [f'{key}:']
+    for entity_type, entity_list in entities.items():
+        if not entity_list:
+            continue
+        lines.append(f'  {entity_type}:')
+        for entity in entity_list:
+            lines.append(f'    - {yaml_escape(entity)}')
+    return lines
+
+
 def build_frontmatter(metadata):
     """Build YAML frontmatter string from metadata dict.
 
@@ -817,27 +929,9 @@ def build_frontmatter(metadata):
     lines = ['---']
     for key, value in metadata.items():
         if key == 'attachments' and isinstance(value, list):
-            if not value:
-                lines.append(f'{key}: []')
-            else:
-                lines.append(f'{key}:')
-                for att in value:
-                    lines.append(f'  - filename: {yaml_escape(att["filename"])}')
-                    lines.append(f'    size: {yaml_escape(att["size"])}')
-                    if 'content_hash' in att:
-                        lines.append(f'    content_hash: {att["content_hash"]}')
-                    if 'deduplicated_from' in att:
-                        lines.append(f'    deduplicated_from: {yaml_escape(att["deduplicated_from"])}')
+            lines.extend(_format_attachments_yaml(key, value))
         elif key == 'entities' and isinstance(value, dict):
-            if not value:
-                lines.append(f'{key}: {{}}')
-            else:
-                lines.append(f'{key}:')
-                for entity_type, entity_list in value.items():
-                    if entity_list:
-                        lines.append(f'  {entity_type}:')
-                        for entity in entity_list:
-                            lines.append(f'    - {yaml_escape(entity)}')
+            lines.extend(_format_entities_yaml(key, value))
         elif isinstance(value, (int, float)):
             lines.append(f'{key}: {value}')
         else:
@@ -873,6 +967,127 @@ def run_entity_extraction(body, method='auto'):
         return {}
 
 
+def _parse_email_file(input_path):
+    """Parse an email file based on its extension. Exits on unsupported types."""
+    ext = input_path.suffix.lower()
+    if ext == '.eml':
+        return parse_eml(input_path)
+    if ext == '.msg':
+        return parse_msg(input_path)
+    print(f"ERROR: Unsupported file type: {ext}", file=sys.stderr)
+    print("Supported: .eml, .msg", file=sys.stderr)
+    sys.exit(1)
+
+
+def _extract_headers(msg):
+    """Extract all visible email headers into a flat dict."""
+    return {
+        'from': extract_header_safe(msg, 'From', 'Unknown'),
+        'to': extract_header_safe(msg, 'To', 'Unknown'),
+        'cc': extract_header_safe(msg, 'Cc'),
+        'bcc': extract_header_safe(msg, 'Bcc'),
+        'subject': extract_header_safe(msg, 'Subject', 'No Subject'),
+        'message_id': extract_header_safe(msg, 'Message-ID'),
+        'in_reply_to': extract_header_safe(msg, 'In-Reply-To'),
+        'date_sent_raw': extract_header_safe(msg, 'Date'),
+        'date_received_raw': extract_header_safe(msg, 'Received'),
+    }
+
+
+def _parse_received_date(date_received_raw):
+    """Extract the date portion from a Received header value."""
+    if date_received_raw and ';' in date_received_raw:
+        return date_received_raw.rsplit(';', 1)[-1].strip()
+    return date_received_raw
+
+
+def _build_attachment_meta(attachments):
+    """Build frontmatter-ready attachment metadata from raw attachment list."""
+    meta_list = []
+    for att in attachments:
+        meta = {
+            'filename': att['filename'],
+            'size': format_size(att['size']),
+            'content_hash': att['content_hash'],
+        }
+        if 'deduplicated_from' in att:
+            meta['deduplicated_from'] = att['deduplicated_from']
+        meta_list.append(meta)
+    return meta_list
+
+
+class _PipelineData(NamedTuple):
+    """Intermediate results from the email conversion pipeline."""
+    headers: Dict
+    date_sent: str
+    date_received: str
+    file_size: int
+    body: str
+    description: str
+    summary_method_used: str
+    attachment_meta: List[Dict]
+    attachments: List[Dict]
+    tokens_estimate: int
+
+
+def _add_header_fields(metadata, headers, date_sent, date_received):
+    """Populate email header fields in the metadata dict."""
+    metadata['from'] = headers['from']
+    metadata['to'] = headers['to']
+    if headers['cc']:
+        metadata['cc'] = headers['cc']
+    if headers['bcc']:
+        metadata['bcc'] = headers['bcc']
+    metadata['date_sent'] = date_sent
+    if date_received:
+        metadata['date_received'] = date_received
+    metadata['subject'] = headers['subject']
+    metadata['size'] = format_size(headers.get('_file_size', 0))
+    metadata['message_id'] = headers['message_id']
+    if headers['in_reply_to']:
+        metadata['in_reply_to'] = headers['in_reply_to']
+
+
+def _add_thread_fields(metadata, message_id, thread_map):
+    """Populate thread reconstruction fields in the metadata dict."""
+    if not (thread_map and message_id):
+        return
+    thread_id, thread_position, thread_length = reconstruct_thread(
+        message_id, thread_map)
+    if thread_id:
+        metadata['thread_id'] = thread_id
+        metadata['thread_position'] = thread_position
+        metadata['thread_length'] = thread_length
+
+
+def _build_metadata(pipe, opts):
+    """Assemble the ordered metadata dict for YAML frontmatter."""
+    from collections import OrderedDict
+    metadata = OrderedDict()
+    metadata['title'] = pipe.headers['subject']
+    metadata['description'] = pipe.description
+    metadata['summary_method'] = pipe.summary_method_used
+
+    # Store file_size in headers temporarily for _add_header_fields
+    pipe.headers['_file_size'] = pipe.file_size
+    _add_header_fields(metadata, pipe.headers, pipe.date_sent,
+                       pipe.date_received)
+
+    _add_thread_fields(metadata, pipe.headers['message_id'],
+                       opts.thread_map)
+
+    metadata['attachment_count'] = len(pipe.attachments)
+    metadata['attachments'] = pipe.attachment_meta
+    metadata['tokens_estimate'] = pipe.tokens_estimate
+
+    if opts.extract_entities:
+        entities = run_entity_extraction(pipe.body, method=opts.entity_method)
+        if entities:
+            metadata['entities'] = entities
+
+    return metadata
+
+
 def email_to_markdown(input_file, output_file=None, attachments_dir=None,
                       extract_entities=False, entity_method='auto',
                       summary_mode='auto', thread_map=None,
@@ -903,122 +1118,62 @@ def email_to_markdown(input_file, output_file=None, attachments_dir=None,
                        of written, and their frontmatter includes a
                        deduplicated_from field pointing to the canonical copy.
     """
+    # Pack options internally (public signature unchanged)
+    opts = ConvertOptions(
+        extract_entities=extract_entities,
+        entity_method=entity_method,
+        summary_mode=summary_mode,
+        thread_map=thread_map,
+        dedup_registry=dedup_registry,
+        no_normalise=no_normalise,
+    )
+
     input_path = Path(input_file)
+    msg = _parse_email_file(input_path)
 
-    # Determine file type
-    ext = input_path.suffix.lower()
-    if ext == '.eml':
-        msg = parse_eml(input_file)
-    elif ext == '.msg':
-        msg = parse_msg(input_file)
-    else:
-        print(f"ERROR: Unsupported file type: {ext}", file=sys.stderr)
-        print("Supported: .eml, .msg", file=sys.stderr)
-        sys.exit(1)
-
-    # Set default output paths
     if output_file is None:
         output_file = input_path.with_suffix('.md')
-
     if attachments_dir is None:
         attachments_dir = input_path.parent / f"{input_path.stem}_attachments"
 
-    # Extract all visible headers
-    from_addr = extract_header_safe(msg, 'From', 'Unknown')
-    to_addr = extract_header_safe(msg, 'To', 'Unknown')
-    cc_addr = extract_header_safe(msg, 'Cc')
-    bcc_addr = extract_header_safe(msg, 'Bcc')
-    subject = extract_header_safe(msg, 'Subject', 'No Subject')
-    message_id = extract_header_safe(msg, 'Message-ID')
-    in_reply_to = extract_header_safe(msg, 'In-Reply-To')
+    # Stage 1: Extract headers and dates
+    headers = _extract_headers(msg)
+    date_sent = parse_date_safe(headers['date_sent_raw'])
+    date_received = parse_date_safe(
+        _parse_received_date(headers['date_received_raw']))
 
-    # Parse dates
-    date_sent_raw = extract_header_safe(msg, 'Date')
-    date_received_raw = extract_header_safe(msg, 'Received')
-    # The Received header contains routing info; extract the date portion
-    if date_received_raw and ';' in date_received_raw:
-        date_received_raw = date_received_raw.rsplit(';', 1)[-1].strip()
-    date_sent = parse_date_safe(date_sent_raw)
-    date_received = parse_date_safe(date_received_raw)
-
-    # Get file size
-    file_size = get_file_size(input_file)
-
-    # Extract body and normalise email-specific sections
+    # Stage 2: Extract body and normalise
     body = get_email_body(msg)
-    if not no_normalise:
+    if not opts.no_normalise:
         body = normalise_email_sections(body)
 
-    # Extract attachments (with deduplication if registry provided)
-    attachments = extract_attachments(msg, attachments_dir, dedup_registry)
+    # Stage 3: Attachments
+    attachments = extract_attachments(msg, attachments_dir, opts.dedup_registry)
+    attachment_meta = _build_attachment_meta(attachments)
 
-    # Build attachment metadata for frontmatter (includes content_hash + dedup info)
-    attachment_meta = []
-    for att in attachments:
-        meta = {
-            'filename': att['filename'],
-            'size': format_size(att['size']),
-            'content_hash': att['content_hash'],
-        }
-        if 'deduplicated_from' in att:
-            meta['deduplicated_from'] = att['deduplicated_from']
-        attachment_meta.append(meta)
-
-    # Generate summary for description field (t1044.7)
-    description, summary_method_used = generate_summary(body, subject, summary_mode)
-
-    # Token estimate for the full converted content (body + frontmatter)
+    # Stage 4: Summary and tokens
+    description, summary_method_used = generate_summary(
+        body, headers['subject'], opts.summary_mode)
     tokens_estimate = estimate_tokens(body)
 
-    # Thread reconstruction
-    thread_id = ''
-    thread_position = 0
-    thread_length = 0
-    if thread_map and message_id:
-        thread_id, thread_position, thread_length = reconstruct_thread(message_id, thread_map)
+    # Stage 5: Assemble metadata and write
+    pipe = _PipelineData(
+        headers=headers,
+        date_sent=date_sent,
+        date_received=date_received,
+        file_size=get_file_size(input_file),
+        body=body,
+        description=description,
+        summary_method_used=summary_method_used,
+        attachment_meta=attachment_meta,
+        attachments=attachments,
+        tokens_estimate=tokens_estimate,
+    )
+    metadata = _build_metadata(pipe, opts)
 
-    # Build ordered metadata for frontmatter
-    from collections import OrderedDict
-    metadata = OrderedDict()
-    # markdown.new convention
-    metadata['title'] = subject
-    metadata['description'] = description
-    metadata['summary_method'] = summary_method_used
-    # Email headers
-    metadata['from'] = from_addr
-    metadata['to'] = to_addr
-    if cc_addr:
-        metadata['cc'] = cc_addr
-    if bcc_addr:
-        metadata['bcc'] = bcc_addr
-    metadata['date_sent'] = date_sent
-    if date_received:
-        metadata['date_received'] = date_received
-    metadata['subject'] = subject
-    metadata['size'] = format_size(file_size)
-    metadata['message_id'] = message_id
-    if in_reply_to:
-        metadata['in_reply_to'] = in_reply_to
-    # Thread reconstruction fields
-    if thread_id:
-        metadata['thread_id'] = thread_id
-        metadata['thread_position'] = thread_position
-        metadata['thread_length'] = thread_length
-    metadata['attachment_count'] = len(attachments)
-    metadata['attachments'] = attachment_meta
-    metadata['tokens_estimate'] = tokens_estimate
-
-    # Entity extraction (t1044.6)
-    if extract_entities:
-        entities = run_entity_extraction(body, method=entity_method)
-        if entities:
-            metadata['entities'] = entities
-
-    # Build markdown with YAML frontmatter
     frontmatter = build_frontmatter(metadata)
     md_content = f"{frontmatter}\n\n{body}"
 
-    # Write markdown file
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(md_content)
 
@@ -1029,114 +1184,146 @@ def email_to_markdown(input_file, output_file=None, attachments_dir=None,
     }
 
 
-def main():
+def _build_arg_parser():
+    """Build and return the CLI argument parser."""
     parser = argparse.ArgumentParser(
-        description='Convert .eml/.msg email files to markdown with attachment extraction and thread reconstruction'
+        description='Convert .eml/.msg email files to markdown with '
+                    'attachment extraction and thread reconstruction'
     )
-    parser.add_argument('input', help='Input email file (.eml or .msg) or directory for batch processing')
-    parser.add_argument('--output', '-o', help='Output markdown file (default: input.md)')
-    parser.add_argument('--attachments-dir', help='Directory for attachments (default: input_attachments/)')
+    parser.add_argument('input',
+                        help='Input email file (.eml or .msg) or directory '
+                             'for batch processing')
+    parser.add_argument('--output', '-o',
+                        help='Output markdown file (default: input.md)')
+    parser.add_argument('--attachments-dir',
+                        help='Directory for attachments '
+                             '(default: input_attachments/)')
     parser.add_argument('--extract-entities', action='store_true',
-                        help='Extract named entities (people, orgs, locations, dates) into frontmatter')
-    parser.add_argument('--entity-method', choices=['auto', 'spacy', 'ollama', 'regex'],
-                        default='auto', help='Entity extraction method (default: auto)')
-    parser.add_argument('--summary-mode', choices=['auto', 'heuristic', 'llm', 'off'],
+                        help='Extract named entities (people, orgs, '
+                             'locations, dates) into frontmatter')
+    parser.add_argument('--entity-method',
+                        choices=['auto', 'spacy', 'ollama', 'regex'],
                         default='auto',
-                        help='Summary generation mode: auto (default) routes by word count, '
-                             'heuristic (sentence extraction), llm (force LLM), off (160-char truncation)')
+                        help='Entity extraction method (default: auto)')
+    parser.add_argument('--summary-mode',
+                        choices=['auto', 'heuristic', 'llm', 'off'],
+                        default='auto',
+                        help='Summary generation mode: auto (default) '
+                             'routes by word count, heuristic (sentence '
+                             'extraction), llm (force LLM), '
+                             'off (160-char truncation)')
     parser.add_argument('--batch', action='store_true',
-                       help='Process all .eml/.msg files in input directory with thread reconstruction')
+                        help='Process all .eml/.msg files in input directory '
+                             'with thread reconstruction')
     parser.add_argument('--threads-index', action='store_true',
-                       help='Generate thread index files (requires --batch)')
-    parser.add_argument('--dedup-registry', help='Path to JSON dedup registry for cross-email attachment deduplication')
-    parser.add_argument('--no-normalise', '--no-normalize', action='store_true',
-                        help='Skip email section normalisation (quoted replies, signatures, forwards)')
+                        help='Generate thread index files (requires --batch)')
+    parser.add_argument('--dedup-registry',
+                        help='Path to JSON dedup registry for cross-email '
+                             'attachment deduplication')
+    parser.add_argument('--no-normalise', '--no-normalize',
+                        action='store_true',
+                        help='Skip email section normalisation (quoted '
+                             'replies, signatures, forwards)')
+    return parser
 
+
+def _run_batch(input_path, args, registry):
+    """Process all emails in a directory with thread reconstruction."""
+    if not input_path.is_dir():
+        print("ERROR: --batch requires input to be a directory",
+              file=sys.stderr)
+        sys.exit(1)
+
+    print("Building thread map...")
+    thread_map = build_thread_map(input_path)
+    print(f"Found {len(thread_map)} emails")
+
+    processed = 0
+    for _message_id, info in thread_map.items():
+        email_file = Path(info['file_path'])
+        try:
+            result = email_to_markdown(
+                email_file,
+                output_file=email_file.with_suffix('.md'),
+                extract_entities=args.extract_entities,
+                entity_method=args.entity_method,
+                summary_mode=args.summary_mode,
+                thread_map=thread_map,
+                dedup_registry=registry,
+                no_normalise=args.no_normalise,
+            )
+            processed += 1
+            print(f"Processed: {email_file.name} -> {result['markdown']}")
+        except Exception as e:
+            print(f"ERROR processing {email_file}: {e}", file=sys.stderr)
+
+    print(f"\nProcessed {processed}/{len(thread_map)} emails")
+
+    if args.threads_index:
+        print("\nGenerating thread index files...")
+        threads = generate_thread_index(thread_map, input_path)
+        print(f"Created {len(threads)} thread index files "
+              f"in {input_path}/threads/")
+
+
+def _run_single(input_path, args, registry):
+    """Process a single email file."""
+    if not input_path.is_file():
+        print(f"ERROR: Input file not found: {input_path}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    thread_map = None
+    if input_path.parent.exists():
+        try:
+            thread_map = build_thread_map(input_path.parent)
+            if thread_map:
+                print(f"Found {len(thread_map)} emails in directory "
+                      "for thread reconstruction")
+        except Exception:
+            pass  # Thread reconstruction is optional
+
+    result = email_to_markdown(
+        args.input, args.output, args.attachments_dir,
+        extract_entities=args.extract_entities,
+        entity_method=args.entity_method,
+        summary_mode=args.summary_mode,
+        thread_map=thread_map,
+        dedup_registry=registry,
+        no_normalise=args.no_normalise,
+    )
+
+    print(f"Created: {result['markdown']}")
+    if not result['attachments']:
+        return
+
+    deduped = sum(1 for a in result['attachments']
+                  if 'deduplicated_from' in a)
+    print(f"Extracted {len(result['attachments'])} attachment(s) "
+          f"to: {result['attachments_dir']}")
+    if deduped:
+        print(f"  ({deduped} deduplicated via symlink)")
+    for att in result['attachments']:
+        suffix = " [dedup]" if 'deduplicated_from' in att else ""
+        print(f"  - {att['filename']} "
+              f"({format_size(att['size'])}){suffix}")
+
+
+def main():
+    parser = _build_arg_parser()
     args = parser.parse_args()
 
-    # Load or create dedup registry for batch processing
     registry = None
     if args.dedup_registry:
         registry = load_dedup_registry(args.dedup_registry)
 
     input_path = Path(args.input)
 
-    # Batch processing mode
     if args.batch or input_path.is_dir():
-        if not input_path.is_dir():
-            print("ERROR: --batch requires input to be a directory", file=sys.stderr)
-            sys.exit(1)
-
-        # Build thread map for all emails
-        print("Building thread map...")
-        thread_map = build_thread_map(input_path)
-        print(f"Found {len(thread_map)} emails")
-
-        # Process each email
-        processed = 0
-        for message_id, info in thread_map.items():
-            email_file = Path(info['file_path'])
-            try:
-                result = email_to_markdown(
-                    email_file,
-                    output_file=email_file.with_suffix('.md'),
-                    extract_entities=args.extract_entities,
-                    entity_method=args.entity_method,
-                    summary_mode=args.summary_mode,
-                    thread_map=thread_map,
-                    dedup_registry=registry,
-                    no_normalise=args.no_normalise
-                )
-                processed += 1
-                print(f"Processed: {email_file.name} -> {result['markdown']}")
-            except Exception as e:
-                print(f"ERROR processing {email_file}: {e}", file=sys.stderr)
-
-        print(f"\nProcessed {processed}/{len(thread_map)} emails")
-
-        # Generate thread index if requested
-        if args.threads_index:
-            print("\nGenerating thread index files...")
-            threads = generate_thread_index(thread_map, input_path)
-            print(f"Created {len(threads)} thread index files in {input_path}/threads/")
-
-    # Single file mode
+        _run_batch(input_path, args, registry)
     else:
-        if not input_path.is_file():
-            print(f"ERROR: Input file not found: {input_path}", file=sys.stderr)
-            sys.exit(1)
+        _run_single(input_path, args, registry)
 
-        # For single file, optionally build thread map if parent dir has other emails
-        thread_map = None
-        if input_path.parent.exists():
-            try:
-                thread_map = build_thread_map(input_path.parent)
-                if thread_map:
-                    print(f"Found {len(thread_map)} emails in directory for thread reconstruction")
-            except Exception:
-                pass  # Thread reconstruction is optional
-
-        result = email_to_markdown(
-            args.input, args.output, args.attachments_dir,
-            extract_entities=args.extract_entities,
-            entity_method=args.entity_method,
-            summary_mode=args.summary_mode,
-            thread_map=thread_map,
-            dedup_registry=registry,
-            no_normalise=args.no_normalise
-        )
-
-        print(f"Created: {result['markdown']}")
-        if result['attachments']:
-            deduped = sum(1 for a in result['attachments'] if 'deduplicated_from' in a)
-            print(f"Extracted {len(result['attachments'])} attachment(s) to: {result['attachments_dir']}")
-            if deduped:
-                print(f"  ({deduped} deduplicated via symlink)")
-            for att in result['attachments']:
-                suffix = " [dedup]" if 'deduplicated_from' in att else ""
-                print(f"  - {att['filename']} ({format_size(att['size'])}){suffix}")
-
-    # Persist updated registry after processing
     if args.dedup_registry and registry is not None:
         save_dedup_registry(registry, args.dedup_registry)
 

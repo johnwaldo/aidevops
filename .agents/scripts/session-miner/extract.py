@@ -144,6 +144,93 @@ def classify_error(error_text: str) -> str:
     return "other"
 
 
+_AUTOMATED_PREFIXES = ("/full-loop", '"You are the supervisor')
+
+
+def _is_automated_or_short(text: Optional[str]) -> bool:
+    """Return True if *text* should be skipped (None, too short, or templated)."""
+    if not text or len(text) < 20:
+        return True
+    return any(text.startswith(prefix) for prefix in _AUTOMATED_PREFIXES)
+
+
+def _fetch_text_parts(conn: sqlite3.Connection, message_id: str) -> list[str]:
+    """Return all text-part strings for a given message."""
+    rows = conn.execute(
+        """SELECT json_extract(data, '$.text') as text
+           FROM part
+           WHERE message_id = ? AND json_extract(data, '$.type') = 'text'""",
+        (message_id,),
+    ).fetchall()
+    return [r["text"] for r in rows if r["text"]]
+
+
+def _fetch_preceding_assistant_text(
+    conn: sqlite3.Connection, session_id: str, before_time: Any,
+) -> str:
+    """Return the preceding assistant text (up to 500 chars), or ``""``."""
+    prev = conn.execute(
+        """SELECT json_extract(p.data, '$.text') as text
+           FROM part p
+           JOIN message m ON p.message_id = m.id
+           WHERE m.session_id = ?
+             AND m.time_created < ?
+             AND json_extract(m.data, '$.role') = 'assistant'
+             AND json_extract(p.data, '$.type') = 'text'
+           ORDER BY m.time_created DESC
+           LIMIT 1""",
+        (session_id, before_time),
+    ).fetchone()
+    if not prev or not prev["text"]:
+        return ""
+    return prev["text"][:500]
+
+
+def _classify_and_build_steerage(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    text: str,
+) -> Optional[dict]:
+    """Classify *text* and build a steerage record, or ``None`` if not steerage."""
+    classifications = classify_steerage(text)
+    if not classifications:
+        return None
+
+    return {
+        "type": "steerage",
+        "session_title": row["session_title"] or "",
+        "session_dir": _sanitize_path(row["session_dir"] or ""),
+        "timestamp": row["msg_time"],
+        "user_text": text[:2000],
+        "classifications": classifications,
+        "preceding_context": _fetch_preceding_assistant_text(
+            conn, row["session_id"], row["msg_time"],
+        ),
+    }
+
+
+def _collect_steerage_from_message(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    seen_texts: set[int],
+) -> list[dict]:
+    """Return steerage records found in a single user message's text parts."""
+    records = []
+    for text in _fetch_text_parts(conn, row["message_id"]):
+        if _is_automated_or_short(text):
+            continue
+
+        text_hash = hash(text[:200])
+        if text_hash in seen_texts:
+            continue
+        seen_texts.add(text_hash)
+
+        record = _classify_and_build_steerage(conn, row, text)
+        if record:
+            records.append(record)
+    return records
+
+
 def extract_steerage(conn: sqlite3.Connection, limit: Optional[int] = None) -> list[dict]:
     """Extract user steerage signals from sessions.
 
@@ -172,73 +259,80 @@ def extract_steerage(conn: sqlite3.Connection, limit: Optional[int] = None) -> l
     if limit:
         query += f" LIMIT {int(limit) * 10}"  # Oversample, filter later
 
-    steerage_records = []
-    seen_texts = set()
+    steerage_records: list[dict] = []
+    seen_texts: set[int] = set()
 
     for row in conn.execute(query):
-        # Get user text parts
-        parts = conn.execute(
-            """SELECT json_extract(data, '$.text') as text
-               FROM part
-               WHERE message_id = ? AND json_extract(data, '$.type') = 'text'""",
-            (row["message_id"],),
-        ).fetchall()
-
-        for part in parts:
-            text = part["text"]
-            if not text or len(text) < 20:
-                continue
-
-            # Skip automated/templated messages
-            if text.startswith("/full-loop") or text.startswith('"You are the supervisor'):
-                continue
-
-            # Skip exact duplicates (common with "Continue if you have next steps")
-            text_hash = hash(text[:200])
-            if text_hash in seen_texts:
-                continue
-            seen_texts.add(text_hash)
-
-            classifications = classify_steerage(text)
-            if not classifications:
-                continue
-
-            # Get preceding assistant message for context
-            prev_assistant = conn.execute(
-                """SELECT json_extract(p.data, '$.text') as text
-                   FROM part p
-                   JOIN message m ON p.message_id = m.id
-                   WHERE m.session_id = ?
-                     AND m.time_created < ?
-                     AND json_extract(m.data, '$.role') = 'assistant'
-                     AND json_extract(p.data, '$.type') = 'text'
-                   ORDER BY m.time_created DESC
-                   LIMIT 1""",
-                (row["session_id"], row["msg_time"]),
-            ).fetchone()
-
-            # Sanitize: strip repo-specific paths, keep only basename
-            sanitized_dir = _sanitize_path(row["session_dir"] or "")
-
-            record = {
-                "type": "steerage",
-                "session_title": row["session_title"] or "",
-                "session_dir": sanitized_dir,
-                "timestamp": row["msg_time"],
-                "user_text": text[:2000],  # Cap length
-                "classifications": classifications,
-                "preceding_context": (prev_assistant["text"][:500] if prev_assistant and prev_assistant["text"] else ""),
-            }
-            steerage_records.append(record)
-
-            if limit and len(steerage_records) >= limit:
-                break
+        new_records = _collect_steerage_from_message(conn, row, seen_texts)
+        steerage_records.extend(new_records)
 
         if limit and len(steerage_records) >= limit:
+            steerage_records = steerage_records[:limit]
             break
 
     print(f"  Found {len(steerage_records)} steerage signals", file=sys.stderr)
     return steerage_records
+
+
+def _parse_json_safe(raw: Any) -> dict:
+    """Parse a JSON string or pass through a dict; return ``{}`` on failure."""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _find_recovery(
+    conn: sqlite3.Connection, session_id: str, after_time: Any, tool_name: str,
+) -> Optional[dict]:
+    """Look at the next 3 tool calls; return recovery info if the same tool succeeded."""
+    next_tools = conn.execute(
+        """SELECT
+            json_extract(data, '$.tool') as tool,
+            json_extract(data, '$.state.status') as status,
+            json_extract(data, '$.state.input') as input_json
+           FROM part
+           WHERE session_id = ?
+             AND time_created > ?
+             AND json_extract(data, '$.type') = 'tool'
+           ORDER BY time_created ASC
+           LIMIT 3""",
+        (session_id, after_time),
+    ).fetchall()
+
+    for nt in next_tools:
+        if nt["tool"] == tool_name and nt["status"] == "completed":
+            recovery_input = _parse_json_safe(nt["input_json"])
+            return {
+                "tool": nt["tool"],
+                "approach": _summarize_tool_input(nt["tool"], recovery_input),
+            }
+    return None
+
+
+def _find_user_response_after(
+    conn: sqlite3.Connection, session_id: str, after_time: Any,
+) -> Optional[str]:
+    """Return the first user text message after *after_time*, or ``None``."""
+    user_after = conn.execute(
+        """SELECT json_extract(p2.data, '$.text') as text
+           FROM part p2
+           JOIN message m ON p2.message_id = m.id
+           WHERE m.session_id = ?
+             AND m.time_created > ?
+             AND json_extract(m.data, '$.role') = 'user'
+             AND json_extract(p2.data, '$.type') = 'text'
+           ORDER BY m.time_created ASC
+           LIMIT 1""",
+        (session_id, after_time),
+    ).fetchone()
+    if not user_after or not user_after["text"]:
+        return None
+    return user_after["text"][:500]
 
 
 def extract_errors(conn: sqlite3.Connection, limit: Optional[int] = None) -> list[dict]:
@@ -279,59 +373,7 @@ def extract_errors(conn: sqlite3.Connection, limit: Optional[int] = None) -> lis
     for row in conn.execute(query):
         error_text = row["error_text"] or ""
         tool_name = row["tool_name"] or "unknown"
-        error_category = classify_error(error_text)
-
-        # Parse tool input for context
-        tool_input = {}
-        if row["tool_input_json"]:
-            try:
-                tool_input = json.loads(row["tool_input_json"]) if isinstance(row["tool_input_json"], str) else row["tool_input_json"]
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # Get what happened next — did the same tool succeed?
-        next_tool = conn.execute(
-            """SELECT
-                json_extract(data, '$.tool') as tool,
-                json_extract(data, '$.state.status') as status,
-                json_extract(data, '$.state.input') as input_json
-               FROM part
-               WHERE session_id = ?
-                 AND time_created > ?
-                 AND json_extract(data, '$.type') = 'tool'
-               ORDER BY time_created ASC
-               LIMIT 3""",
-            (row["session_id"], row["time_created"]),
-        ).fetchall()
-
-        recovery = None
-        for nt in next_tool:
-            if nt["tool"] == tool_name and nt["status"] == "completed":
-                recovery_input = {}
-                if nt["input_json"]:
-                    try:
-                        recovery_input = json.loads(nt["input_json"]) if isinstance(nt["input_json"], str) else nt["input_json"]
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                recovery = {
-                    "tool": nt["tool"],
-                    "approach": _summarize_tool_input(nt["tool"], recovery_input),
-                }
-                break
-
-        # Get user message after error (if any, within 3 messages)
-        user_after = conn.execute(
-            """SELECT json_extract(p2.data, '$.text') as text
-               FROM part p2
-               JOIN message m ON p2.message_id = m.id
-               WHERE m.session_id = ?
-                 AND m.time_created > ?
-                 AND json_extract(m.data, '$.role') = 'user'
-                 AND json_extract(p2.data, '$.type') = 'text'
-               ORDER BY m.time_created ASC
-               LIMIT 1""",
-            (row["session_id"], row["time_created"]),
-        ).fetchone()
+        tool_input = _parse_json_safe(row["tool_input_json"])
 
         record = {
             "type": "error",
@@ -340,11 +382,11 @@ def extract_errors(conn: sqlite3.Connection, limit: Optional[int] = None) -> lis
             "timestamp": row["time_created"],
             "model": row["model_id"] or "unknown",
             "tool": tool_name,
-            "error_category": error_category,
+            "error_category": classify_error(error_text),
             "error_text": error_text[:500],
             "tool_input_summary": _summarize_tool_input(tool_name, tool_input),
-            "recovery": recovery,
-            "user_response": (user_after["text"][:500] if user_after and user_after["text"] else None),
+            "recovery": _find_recovery(conn, row["session_id"], row["time_created"], tool_name),
+            "user_response": _find_user_response_after(conn, row["session_id"], row["time_created"]),
         }
         error_records.append(record)
 
@@ -436,6 +478,63 @@ def _find_git_root(directory: str) -> Optional[str]:
     return None
 
 
+def _parse_commit_lines(raw_output: str) -> list[dict]:
+    """Parse ``git log --format=%H|%aI|%s`` output into commit dicts."""
+    commits = []
+    for line in raw_output.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split("|", 2)
+        if len(parts) < 3:
+            continue
+        commit_hash, timestamp, subject = parts
+        commits.append({
+            "hash": commit_hash[:12],
+            "timestamp": timestamp,
+            "subject": subject[:200],
+        })
+    return commits
+
+
+def _resolve_diff_base(repo_path: str, oldest_commit: str) -> str:
+    """Return the diff base ref: ``oldest~1`` or the empty-tree hash for root commits."""
+    parent_check = subprocess.run(
+        ["git", "-C", repo_path, "rev-parse", "--verify", "--quiet", f"{oldest_commit}^"],
+        capture_output=True,
+    )
+    if parent_check.returncode == 0:
+        return f"{oldest_commit}~1"
+    # Root commit — diff from git's canonical empty tree object.
+    return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _attach_aggregate_diff_stats(repo_path: str, commits: list[dict]) -> None:
+    """Compute aggregate diff stats for a commit range and attach to *commits[0]*."""
+    oldest_commit = commits[-1]["hash"]
+    newest_commit = commits[0]["hash"]
+    from_commit = _resolve_diff_base(repo_path, oldest_commit)
+
+    stat_result = subprocess.run(
+        ["git", "-C", repo_path, "diff", "--shortstat", from_commit, newest_commit],
+        capture_output=True, text=True, timeout=15,
+    )
+    if stat_result.returncode != 0 or not stat_result.stdout.strip():
+        return
+
+    stat_line = stat_result.stdout.strip()
+    files_m = re.search(r"(\d+) files? changed", stat_line)
+    ins_m = re.search(r"(\d+) insertions?", stat_line)
+    del_m = re.search(r"(\d+) deletions?", stat_line)
+
+    for commit in commits:
+        commit["_aggregate"] = True
+    commits[0]["diff_stats"] = {
+        "files_changed": int(files_m.group(1)) if files_m else 0,
+        "insertions": int(ins_m.group(1)) if ins_m else 0,
+        "deletions": int(del_m.group(1)) if del_m else 0,
+    }
+
+
 def _git_log_in_window(
     repo_path: str, start_epoch_ms: int, end_epoch_ms: int, buffer_minutes: int = 60,
 ) -> list[dict]:
@@ -450,14 +549,12 @@ def _git_log_in_window(
     Returns:
         List of commit dicts with hash, timestamp, subject, and diff stats.
     """
-    # Convert ms to seconds for git --after/--before (ISO 8601)
     start_ts = datetime.fromtimestamp(start_epoch_ms / 1000).isoformat()
     end_ts = datetime.fromtimestamp(
         end_epoch_ms / 1000 + buffer_minutes * 60
     ).isoformat()
 
     try:
-        # Get commit metadata
         result = subprocess.run(
             [
                 "git", "-C", repo_path, "log",
@@ -469,67 +566,71 @@ def _git_log_in_window(
         if result.returncode != 0 or not result.stdout.strip():
             return []
 
-        commits = []
-        for line in result.stdout.strip().split("\n"):
-            if not line:
-                continue
-            parts = line.split("|", 2)
-            if len(parts) < 3:
-                continue
-            commit_hash, timestamp, subject = parts
-            commits.append({
-                "hash": commit_hash[:12],
-                "timestamp": timestamp,
-                "subject": subject[:200],
-            })
-
+        commits = _parse_commit_lines(result.stdout)
         if not commits:
             return []
 
-        # Get aggregate diff stats for the commit range
-        hash_list = [c["hash"] for c in commits]
-        oldest_commit = hash_list[-1]
-        newest_commit = hash_list[0]
-
-        # Check if the oldest commit is a root commit (has no parent).
-        # If so, diff against the empty tree to capture initial-commit changes.
-        parent_check = subprocess.run(
-            ["git", "-C", repo_path, "rev-parse", "--verify", "--quiet", f"{oldest_commit}^"],
-            capture_output=True,
-        )
-        if parent_check.returncode == 0:
-            from_commit = f"{oldest_commit}~1"
-        else:
-            # Root commit — diff from git's canonical empty tree object.
-            from_commit = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
-        stat_result = subprocess.run(
-            [
-                "git", "-C", repo_path, "diff", "--shortstat",
-                from_commit,
-                newest_commit,
-            ],
-            capture_output=True, text=True, timeout=15,
-        )
-        if stat_result.returncode == 0 and stat_result.stdout.strip():
-            stat_line = stat_result.stdout.strip()
-            # Parse "N files changed, N insertions(+), N deletions(-)"
-            files_m = re.search(r"(\d+) files? changed", stat_line)
-            ins_m = re.search(r"(\d+) insertions?", stat_line)
-            del_m = re.search(r"(\d+) deletions?", stat_line)
-            for commit in commits:
-                commit["_aggregate"] = True  # Mark: stats are aggregate, not per-commit
-            if commits:
-                commits[0]["diff_stats"] = {
-                    "files_changed": int(files_m.group(1)) if files_m else 0,
-                    "insertions": int(ins_m.group(1)) if ins_m else 0,
-                    "deletions": int(del_m.group(1)) if del_m else 0,
-                }
-
+        _attach_aggregate_diff_stats(repo_path, commits)
         return commits
 
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return []
+
+
+def _extract_diff_stats(commits: list[dict]) -> tuple[int, int, int]:
+    """Pull aggregate diff stats from the first commit (if present).
+
+    Returns:
+        (files_changed, insertions, deletions)
+    """
+    if not commits or "diff_stats" not in commits[0]:
+        return 0, 0, 0
+    stats = commits[0]["diff_stats"]
+    return (
+        stats.get("files_changed", 0),
+        stats.get("insertions", 0),
+        stats.get("deletions", 0),
+    )
+
+
+def _build_correlation_record(row: sqlite3.Row, commits: list[dict]) -> dict:
+    """Build a single git-correlation record from a session row and its commits."""
+    user_msg_count = row["user_messages"] or 0
+    total_msg_count = row["total_messages"] or 0
+    commits_count = len(commits)
+    files_changed, insertions, deletions = _extract_diff_stats(commits)
+
+    commits_per_message = (
+        round(commits_count / user_msg_count, 3) if user_msg_count > 0 else 0
+    )
+    lines_per_message = (
+        round((insertions + deletions) / user_msg_count, 1)
+        if user_msg_count > 0 else 0
+    )
+    duration_min = round(
+        (row["session_end"] - row["session_start"]) / 1000 / 60, 1,
+    )
+
+    return {
+        "type": "git_correlation",
+        "session_title": row["session_title"] or "",
+        "session_dir": _sanitize_path(row["session_dir"] or ""),
+        "session_start": row["session_start"],
+        "session_end": row["session_end"],
+        "duration_minutes": duration_min,
+        "user_messages": user_msg_count,
+        "total_messages": total_msg_count,
+        "commits_count": commits_count,
+        "files_changed": files_changed,
+        "insertions": insertions,
+        "deletions": deletions,
+        "commits_per_message": commits_per_message,
+        "lines_per_message": lines_per_message,
+        "commits": [
+            {"hash": c["hash"], "subject": c["subject"]}
+            for c in commits
+        ] if commits else [],
+    }
 
 
 def extract_git_correlation(
@@ -583,60 +684,10 @@ def extract_git_correlation(
             skipped += 1
             continue
 
-        # Query git log for the session window
         commits = _git_log_in_window(
             git_root, row["session_start"], row["session_end"],
         )
-
-        user_msg_count = row["user_messages"] or 0
-        total_msg_count = row["total_messages"] or 0
-        commits_count = len(commits)
-
-        # Compute diff stats from the first commit (which has aggregate stats)
-        files_changed = 0
-        insertions = 0
-        deletions = 0
-        if commits and "diff_stats" in commits[0]:
-            stats = commits[0]["diff_stats"]
-            files_changed = stats.get("files_changed", 0)
-            insertions = stats.get("insertions", 0)
-            deletions = stats.get("deletions", 0)
-
-        # Productivity ratios (avoid division by zero)
-        commits_per_message = (
-            round(commits_count / user_msg_count, 3) if user_msg_count > 0 else 0
-        )
-        lines_per_message = (
-            round((insertions + deletions) / user_msg_count, 1)
-            if user_msg_count > 0 else 0
-        )
-
-        # Session duration in minutes
-        duration_min = round(
-            (row["session_end"] - row["session_start"]) / 1000 / 60, 1,
-        )
-
-        record = {
-            "type": "git_correlation",
-            "session_title": row["session_title"] or "",
-            "session_dir": _sanitize_path(session_dir),
-            "session_start": row["session_start"],
-            "session_end": row["session_end"],
-            "duration_minutes": duration_min,
-            "user_messages": user_msg_count,
-            "total_messages": total_msg_count,
-            "commits_count": commits_count,
-            "files_changed": files_changed,
-            "insertions": insertions,
-            "deletions": deletions,
-            "commits_per_message": commits_per_message,
-            "lines_per_message": lines_per_message,
-            "commits": [
-                {"hash": c["hash"], "subject": c["subject"]}
-                for c in commits
-            ] if commits else [],
-        }
-        correlations.append(record)
+        correlations.append(_build_correlation_record(row, commits))
 
     print(
         f"  Found {len(correlations)} sessions with git data "
@@ -663,32 +714,117 @@ def _sanitize_path(path: str) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else path
 
 
+def _summarize_file_tool(tool: str, tool_input: dict) -> str:
+    """Summarize a file-based tool call (edit/read/write)."""
+    fp = tool_input.get("filePath", "")
+    return f"{tool} {Path(fp).name}" if fp else tool
+
+
+def _summarize_bash_tool(_tool: str, tool_input: dict) -> str:
+    """Summarize a bash tool call."""
+    cmd = tool_input.get("command", "")
+    return f"bash: {cmd[:80].replace(chr(10), ' ')}" if cmd else "bash"
+
+
+# Dispatch table for tool summarization — avoids a long if/elif chain.
+_TOOL_SUMMARIZERS: dict[str, Any] = {
+    "edit": _summarize_file_tool,
+    "read": _summarize_file_tool,
+    "write": _summarize_file_tool,
+    "bash": _summarize_bash_tool,
+    "glob": lambda _t, inp: f"glob: {inp.get('pattern', '')}",
+    "grep": lambda _t, inp: f"grep: {inp.get('pattern', '')}",
+    "webfetch": lambda _t, inp: f"fetch: {inp.get('url', '')[:80]}",
+}
+
+
 def _summarize_tool_input(tool: str, tool_input: Any) -> str:
     """Create a brief summary of what a tool call was trying to do."""
     if not isinstance(tool_input, dict):
         return ""
 
-    if tool == "edit":
-        fp = tool_input.get("filePath", "")
-        return f"edit {Path(fp).name}" if fp else "edit"
-    elif tool == "read":
-        fp = tool_input.get("filePath", "")
-        return f"read {Path(fp).name}" if fp else "read"
-    elif tool == "write":
-        fp = tool_input.get("filePath", "")
-        return f"write {Path(fp).name}" if fp else "write"
-    elif tool == "bash":
-        cmd = tool_input.get("command", "")
-        # First 80 chars of command, strip newlines
-        return f"bash: {cmd[:80].replace(chr(10), ' ')}" if cmd else "bash"
-    elif tool == "glob":
-        return f"glob: {tool_input.get('pattern', '')}"
-    elif tool == "grep":
-        return f"grep: {tool_input.get('pattern', '')}"
-    elif tool == "webfetch":
-        return f"fetch: {tool_input.get('url', '')[:80]}"
+    summarizer = _TOOL_SUMMARIZERS.get(tool)
+    if summarizer:
+        return summarizer(tool, tool_input)
 
     return tool
+
+
+def _chunk_records(
+    records: list[dict],
+    chunk_type: str,
+    category: str,
+    chunks: list[dict],
+    max_chunk_bytes: int,
+) -> None:
+    """Split a list of records into size-bounded chunks, appending to *chunks*.
+
+    Each emitted chunk contains:
+    - chunk_id: ``{chunk_type}_{category}_{index}``
+    - chunk_type, category, record_count, records
+    """
+    current_chunk: list[dict] = []
+    current_size = 0
+
+    for record in records:
+        record_size = len(json.dumps(record).encode("utf-8"))
+
+        if current_size + record_size > max_chunk_bytes and current_chunk:
+            chunks.append({
+                "chunk_id": f"{chunk_type}_{category}_{len(chunks)}",
+                "chunk_type": chunk_type,
+                "category": category,
+                "record_count": len(current_chunk),
+                "records": current_chunk,
+            })
+            current_chunk = []
+            current_size = 0
+
+        current_chunk.append(record)
+        current_size += record_size
+
+    if current_chunk:
+        chunks.append({
+            "chunk_id": f"{chunk_type}_{category}_{len(chunks)}",
+            "chunk_type": chunk_type,
+            "category": category,
+            "record_count": len(current_chunk),
+            "records": current_chunk,
+        })
+
+
+def _build_git_summary_chunk(git_correlations: list[dict]) -> dict:
+    """Build an aggregate summary chunk for git correlation data."""
+    productive = [r for r in git_correlations if r["commits_count"] > 0]
+    total_sessions = len(git_correlations)
+
+    avg_duration = (
+        round(sum(r["duration_minutes"] for r in git_correlations) / total_sessions, 1)
+        if total_sessions > 0 else 0
+    )
+    avg_commits_per_msg = (
+        round(
+            sum(r["commits_per_message"] for r in productive) / len(productive), 3,
+        )
+        if productive else 0
+    )
+
+    return {
+        "chunk_id": "git_summary",
+        "chunk_type": "git_correlation",
+        "category": "summary",
+        "data": {
+            "total_sessions": total_sessions,
+            "productive_sessions": len(productive),
+            "unproductive_sessions": total_sessions - len(productive),
+            "productivity_rate": round(len(productive) / max(total_sessions, 1), 3),
+            "total_commits": sum(r["commits_count"] for r in git_correlations),
+            "total_insertions": sum(r["insertions"] for r in git_correlations),
+            "total_deletions": sum(r["deletions"] for r in git_correlations),
+            "avg_session_duration_min": avg_duration,
+            "avg_commits_per_message": avg_commits_per_msg,
+        },
+    }
 
 
 def build_chunks(steerage: list[dict], errors: list[dict], stats: dict,
@@ -701,7 +837,7 @@ def build_chunks(steerage: list[dict], errors: list[dict], stats: dict,
     - Enough context for the model to extract patterns
     - Metadata for deduplication
     """
-    chunks = []
+    chunks: list[dict] = []
 
     # Chunk 0: Summary statistics (always first)
     chunks.append({
@@ -711,147 +847,31 @@ def build_chunks(steerage: list[dict], errors: list[dict], stats: dict,
     })
 
     # Chunk steerage by category
-    by_category = defaultdict(list)
+    by_category: dict[str, list[dict]] = defaultdict(list)
     for record in steerage:
         for cls in record["classifications"]:
             by_category[cls["category"]].append(record)
 
     for category, records in by_category.items():
-        current_chunk = []
-        current_size = 0
-
-        for record in records:
-            record_json = json.dumps(record)
-            record_size = len(record_json.encode("utf-8"))
-
-            if current_size + record_size > max_chunk_bytes and current_chunk:
-                chunks.append({
-                    "chunk_id": f"steerage_{category}_{len(chunks)}",
-                    "chunk_type": "steerage",
-                    "category": category,
-                    "record_count": len(current_chunk),
-                    "records": current_chunk,
-                })
-                current_chunk = []
-                current_size = 0
-
-            current_chunk.append(record)
-            current_size += record_size
-
-        if current_chunk:
-            chunks.append({
-                "chunk_id": f"steerage_{category}_{len(chunks)}",
-                "chunk_type": "steerage",
-                "category": category,
-                "record_count": len(current_chunk),
-                "records": current_chunk,
-            })
+        _chunk_records(records, "steerage", category, chunks, max_chunk_bytes)
 
     # Chunk errors by category
-    errors_by_cat = defaultdict(list)
+    errors_by_cat: dict[str, list[dict]] = defaultdict(list)
     for record in errors:
         errors_by_cat[record["error_category"]].append(record)
 
     for category, records in errors_by_cat.items():
-        current_chunk = []
-        current_size = 0
-
-        for record in records:
-            record_json = json.dumps(record)
-            record_size = len(record_json.encode("utf-8"))
-
-            if current_size + record_size > max_chunk_bytes and current_chunk:
-                chunks.append({
-                    "chunk_id": f"error_{category}_{len(chunks)}",
-                    "chunk_type": "error",
-                    "category": category,
-                    "record_count": len(current_chunk),
-                    "records": current_chunk,
-                })
-                current_chunk = []
-                current_size = 0
-
-            current_chunk.append(record)
-            current_size += record_size
-
-        if current_chunk:
-            chunks.append({
-                "chunk_id": f"error_{category}_{len(chunks)}",
-                "chunk_type": "error",
-                "category": category,
-                "record_count": len(current_chunk),
-                "records": current_chunk,
-            })
+        _chunk_records(records, "error", category, chunks, max_chunk_bytes)
 
     # Chunk git correlations (split productive vs non-productive)
     if git_correlations:
+        chunks.append(_build_git_summary_chunk(git_correlations))
+
         productive = [r for r in git_correlations if r["commits_count"] > 0]
         unproductive = [r for r in git_correlations if r["commits_count"] == 0]
 
-        # Productivity summary (always included, small)
-        total_sessions = len(git_correlations)
-        total_commits = sum(r["commits_count"] for r in git_correlations)
-        total_insertions = sum(r["insertions"] for r in git_correlations)
-        total_deletions = sum(r["deletions"] for r in git_correlations)
-        avg_duration = (
-            round(sum(r["duration_minutes"] for r in git_correlations) / total_sessions, 1)
-            if total_sessions > 0 else 0
-        )
-        avg_commits_per_msg = (
-            round(
-                sum(r["commits_per_message"] for r in productive) / len(productive), 3,
-            )
-            if productive else 0
-        )
-
-        chunks.append({
-            "chunk_id": "git_summary",
-            "chunk_type": "git_correlation",
-            "category": "summary",
-            "data": {
-                "total_sessions": total_sessions,
-                "productive_sessions": len(productive),
-                "unproductive_sessions": len(unproductive),
-                "productivity_rate": round(len(productive) / max(total_sessions, 1), 3),
-                "total_commits": total_commits,
-                "total_insertions": total_insertions,
-                "total_deletions": total_deletions,
-                "avg_session_duration_min": avg_duration,
-                "avg_commits_per_message": avg_commits_per_msg,
-            },
-        })
-
-        # Chunk productive sessions (these have the interesting data)
         for batch_name, batch in [("productive", productive), ("unproductive", unproductive)]:
-            current_chunk = []
-            current_size = 0
-
-            for record in batch:
-                record_json = json.dumps(record)
-                record_size = len(record_json.encode("utf-8"))
-
-                if current_size + record_size > max_chunk_bytes and current_chunk:
-                    chunks.append({
-                        "chunk_id": f"git_{batch_name}_{len(chunks)}",
-                        "chunk_type": "git_correlation",
-                        "category": batch_name,
-                        "record_count": len(current_chunk),
-                        "records": current_chunk,
-                    })
-                    current_chunk = []
-                    current_size = 0
-
-                current_chunk.append(record)
-                current_size += record_size
-
-            if current_chunk:
-                chunks.append({
-                    "chunk_id": f"git_{batch_name}_{len(chunks)}",
-                    "chunk_type": "git_correlation",
-                    "category": batch_name,
-                    "record_count": len(current_chunk),
-                    "records": current_chunk,
-                })
+            _chunk_records(batch, "git", batch_name, chunks, max_chunk_bytes)
 
     return chunks
 
