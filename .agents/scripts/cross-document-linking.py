@@ -28,6 +28,38 @@ from typing import Optional
 # Frontmatter parsing
 # ---------------------------------------------------------------------------
 
+def _parse_inline_list(value: str) -> list[str]:
+    """Parse a YAML inline list like [item1, item2, item3]."""
+    items = value.strip()[1:-1].split(",")
+    return [item.strip() for item in items if item.strip()]
+
+
+def _split_key_value(line: str) -> tuple[str, str]:
+    """Split a YAML line into key and value parts."""
+    if ": " in line:
+        key, value = line.split(": ", 1)
+    else:
+        key = line.rstrip(":")
+        value = ""
+    return key.strip(), value
+
+
+def _process_yaml_value(fm_dict: dict, key: str, value: str) -> Optional[str]:
+    """Process a YAML value, returning the current_key if expecting list items.
+    
+    Returns the key to track for subsequent list items, or None if value was stored.
+    """
+    stripped = value.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        fm_dict[key] = _parse_inline_list(stripped)
+        return None
+    if stripped:
+        fm_dict[key] = stripped
+        return None
+    # Empty value — keep key for potential list items
+    return key
+
+
 def parse_frontmatter(content: str) -> tuple[dict, str, str]:
     """Parse YAML frontmatter from markdown content.
     
@@ -43,10 +75,9 @@ def parse_frontmatter(content: str) -> tuple[dict, str, str]:
     fm_text = content[4:end]
     body = content[end + 4:].lstrip()
     
-    # Simple YAML parsing (good enough for our needs)
-    fm_dict = {}
-    current_key = None
-    current_list = []
+    fm_dict: dict = {}
+    current_key: Optional[str] = None
+    current_list: list[str] = []
     
     for line in fm_text.split("\n"):
         # List item
@@ -56,32 +87,16 @@ def parse_frontmatter(content: str) -> tuple[dict, str, str]:
             continue
         
         # Key-value pair (handle both "key: value" and "key:")
-        if ":" in line and not line.startswith(" "):
-            # Save previous list if any
-            if current_key and current_list:
-                fm_dict[current_key] = current_list
-                current_list = []
-            
-            if ": " in line:
-                key, value = line.split(": ", 1)
-            else:
-                # Just "key:" with no space
-                key = line.rstrip(":")
-                value = ""
-            
-            current_key = key.strip()
-            
-            # Handle inline lists
-            if value.strip().startswith("[") and value.strip().endswith("]"):
-                # Parse inline list: [item1, item2, item3]
-                items = value.strip()[1:-1].split(",")
-                fm_dict[current_key] = [item.strip() for item in items if item.strip()]
-                current_key = None
-            elif value.strip():
-                # Has a value, save it and clear current_key
-                fm_dict[current_key] = value.strip()
-                current_key = None
-            # else: empty value, keep current_key for list items
+        if ":" not in line or line.startswith(" "):
+            continue
+        
+        # Save previous list if any
+        if current_key and current_list:
+            fm_dict[current_key] = current_list
+            current_list = []
+        
+        key, value = _split_key_value(line)
+        current_key = _process_yaml_value(fm_dict, key, value)
     
     # Save final list if any
     if current_key and current_list:
@@ -90,29 +105,40 @@ def parse_frontmatter(content: str) -> tuple[dict, str, str]:
     return (fm_dict, fm_text, body)
 
 
+def _serialize_nested_dict(key: str, value: dict) -> list[str]:
+    """Serialize a nested dict (like related_docs) to YAML lines."""
+    lines = [f"{key}:"]
+    for subkey, subvalue in value.items():
+        if isinstance(subvalue, list):
+            if not subvalue:
+                continue
+            lines.append(f"  {subkey}:")
+            for item in subvalue:
+                lines.append(f"    - {item}")
+        else:
+            lines.append(f"  {subkey}: {subvalue}")
+    return lines
+
+
+def _serialize_list(key: str, value: list) -> list[str]:
+    """Serialize a list value to YAML lines."""
+    if not value:
+        return []
+    lines = [f"{key}:"]
+    for item in value:
+        lines.append(f"  - {item}")
+    return lines
+
+
 def serialize_frontmatter(fm_dict: dict) -> str:
     """Convert frontmatter dict back to YAML text."""
-    lines = []
+    lines: list[str] = []
     
     for key, value in fm_dict.items():
         if isinstance(value, dict):
-            # Nested dict (like related_docs)
-            lines.append(f"{key}:")
-            for subkey, subvalue in value.items():
-                if isinstance(subvalue, list):
-                    if not subvalue:
-                        continue
-                    lines.append(f"  {subkey}:")
-                    for item in subvalue:
-                        lines.append(f"    - {item}")
-                else:
-                    lines.append(f"  {subkey}: {subvalue}")
+            lines.extend(_serialize_nested_dict(key, value))
         elif isinstance(value, list):
-            if not value:
-                continue
-            lines.append(f"{key}:")
-            for item in value:
-                lines.append(f"  - {item}")
+            lines.extend(_serialize_list(key, value))
         else:
             lines.append(f"{key}: {value}")
     
@@ -216,6 +242,35 @@ def find_attachment_documents(doc: Document) -> list[Path]:
 # Relationship building
 # ---------------------------------------------------------------------------
 
+def _find_thread_parent(doc: Document, by_message_id: dict) -> None:
+    """Link doc to its parent via in_reply_to."""
+    if not doc.in_reply_to or doc.in_reply_to not in by_message_id:
+        return
+    parent = by_message_id[doc.in_reply_to]
+    rel_path = parent.path.relative_to(doc.path.parent)
+    doc.related_docs["thread_parent"].append(str(rel_path))
+
+
+def _find_thread_replies(doc: Document, documents: list[Document]) -> None:
+    """Link doc to documents that reply to it."""
+    if not doc.message_id:
+        return
+    for other in documents:
+        if other.in_reply_to == doc.message_id and other.path != doc.path:
+            rel_path = other.path.relative_to(doc.path.parent)
+            doc.related_docs["thread_replies"].append(str(rel_path))
+
+
+def _find_thread_siblings(doc: Document, by_thread_id: dict) -> None:
+    """Link doc to sibling documents in the same thread."""
+    if not doc.thread_id or doc.thread_id not in by_thread_id:
+        return
+    for sibling in by_thread_id[doc.thread_id]:
+        if sibling.path != doc.path:
+            rel_path = sibling.path.relative_to(doc.path.parent)
+            doc.related_docs["thread_siblings"].append(str(rel_path))
+
+
 def build_thread_relationships(documents: list[Document]) -> None:
     """Build thread relationships between documents."""
     # Index by message_id for quick lookup
@@ -228,52 +283,37 @@ def build_thread_relationships(documents: list[Document]) -> None:
             by_thread_id[doc.thread_id].append(doc)
     
     for doc in documents:
-        # Find parent (in_reply_to)
-        if doc.in_reply_to and doc.in_reply_to in by_message_id:
-            parent = by_message_id[doc.in_reply_to]
-            rel_path = parent.path.relative_to(doc.path.parent)
-            doc.related_docs["thread_parent"].append(str(rel_path))
-        
-        # Find children (documents that reply to this one)
-        if doc.message_id:
-            for other in documents:
-                if other.in_reply_to == doc.message_id and other.path != doc.path:
-                    rel_path = other.path.relative_to(doc.path.parent)
-                    doc.related_docs["thread_replies"].append(str(rel_path))
-        
-        # Find thread siblings (same thread_id)
-        if doc.thread_id and doc.thread_id in by_thread_id:
-            siblings = by_thread_id[doc.thread_id]
-            for sibling in siblings:
-                if sibling.path != doc.path:
-                    rel_path = sibling.path.relative_to(doc.path.parent)
-                    doc.related_docs["thread_siblings"].append(str(rel_path))
+        _find_thread_parent(doc, by_message_id)
+        _find_thread_replies(doc, documents)
+        _find_thread_siblings(doc, by_thread_id)
+
+
+def _count_shared_entities(doc: Document, by_entity: dict) -> dict:
+    """Count how many entities each other document shares with doc."""
+    doc_entities = doc.get_all_entities()
+    shared_counts: dict = defaultdict(int)
+    for entity in doc_entities:
+        for other in by_entity[entity]:
+            if other.path != doc.path:
+                shared_counts[other] += 1
+    return shared_counts
 
 
 def build_entity_relationships(documents: list[Document], min_shared: int = 2) -> None:
     """Build relationships based on shared entities."""
     # Index documents by entity
-    by_entity = defaultdict(list)
+    by_entity: dict = defaultdict(list)
     
     for doc in documents:
         for entity in doc.get_all_entities():
             by_entity[entity].append(doc)
     
-    # For each document, find others with shared entities
     for doc in documents:
-        doc_entities = doc.get_all_entities()
-        if not doc_entities:
+        if not doc.get_all_entities():
             continue
         
-        # Count shared entities with each other document
-        shared_counts = defaultdict(int)
+        shared_counts = _count_shared_entities(doc, by_entity)
         
-        for entity in doc_entities:
-            for other in by_entity[entity]:
-                if other.path != doc.path:
-                    shared_counts[other] += 1
-        
-        # Add documents with enough shared entities
         for other, count in shared_counts.items():
             if count >= min_shared:
                 rel_path = other.path.relative_to(doc.path.parent)

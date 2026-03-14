@@ -413,6 +413,65 @@ def validate_vat(
 # Confidence scoring
 # ---------------------------------------------------------------------------
 
+def _get_field_rules(
+    document_type: DocumentType,
+) -> tuple[list[str], list[str], list[str]]:
+    """Return (required, date_fields, amount_fields) for a document type."""
+    if document_type in (DocumentType.PURCHASE_INVOICE, DocumentType.SALES_INVOICE):
+        return (
+            ["vendor_name", "invoice_number", "invoice_date", "total"],
+            ["invoice_date", "due_date"],
+            ["subtotal", "vat_amount", "total"],
+        )
+    if document_type == DocumentType.EXPENSE_RECEIPT:
+        return (
+            ["merchant_name", "date", "total"],
+            ["date"],
+            ["subtotal", "vat_amount", "total"],
+        )
+    if document_type == DocumentType.CREDIT_NOTE:
+        return (
+            ["vendor_name", "credit_note_number", "date", "total"],
+            ["date"],
+            ["subtotal", "vat_amount", "total"],
+        )
+    return (["total"], ["date"], ["total"])
+
+
+def _is_positive_number(value) -> bool:
+    """Check if value is a positive number."""
+    try:
+        return float(value) > 0 if value is not None else False
+    except (ValueError, TypeError):
+        return False
+
+
+def _score_field(
+    key: str,
+    value,
+    required: list[str],
+    date_fields: list[str],
+    amount_fields: list[str],
+) -> FieldConfidence:
+    """Compute confidence score for a single field."""
+    str_val = str(value) if value is not None else ""
+    conf = 0.7 if (value is not None and str_val.strip()) else 0.1
+
+    if key in date_fields and _is_valid_date(str_val):
+        conf += 0.2
+    if key in amount_fields and _is_positive_number(value):
+        conf += 0.2
+    if key in required and conf >= 0.7:
+        conf += 0.1
+
+    return FieldConfidence(
+        field=key,
+        value=str_val[:100],
+        confidence=round(min(conf, 1.0), 2),
+        source="llm",
+    )
+
+
 def compute_confidence(
     data: dict,
     document_type: DocumentType,
@@ -424,69 +483,88 @@ def compute_confidence(
     - Field matches expected format: +0.2
     - Field is a required field and present: +0.1
     """
-    scores: list[FieldConfidence] = []
+    required, date_fields, amount_fields = _get_field_rules(document_type)
+    skip_keys = {"document_type", "line_items", "items"}
 
-    if document_type in (DocumentType.PURCHASE_INVOICE, DocumentType.SALES_INVOICE):
-        required = ["vendor_name", "invoice_number", "invoice_date", "total"]
-        date_fields = ["invoice_date", "due_date"]
-        amount_fields = ["subtotal", "vat_amount", "total"]
-    elif document_type == DocumentType.EXPENSE_RECEIPT:
-        required = ["merchant_name", "date", "total"]
-        date_fields = ["date"]
-        amount_fields = ["subtotal", "vat_amount", "total"]
-    elif document_type == DocumentType.CREDIT_NOTE:
-        required = ["vendor_name", "credit_note_number", "date", "total"]
-        date_fields = ["date"]
-        amount_fields = ["subtotal", "vat_amount", "total"]
-    else:
-        required = ["total"]
-        date_fields = ["date"]
-        amount_fields = ["total"]
-
-    for key, value in data.items():
-        if key in ("document_type", "line_items", "items"):
-            continue
-
-        conf = 0.0
-        str_val = str(value) if value is not None else ""
-
-        # Base: field present and non-empty
-        if value is not None and str_val.strip():
-            conf = 0.7
-        else:
-            conf = 0.1
-
-        # Format bonus for dates
-        if key in date_fields and _is_valid_date(str_val):
-            conf += 0.2
-
-        # Format bonus for amounts (positive numbers)
-        if key in amount_fields:
-            try:
-                num = float(value) if value is not None else 0
-                if num > 0:
-                    conf += 0.2
-            except (ValueError, TypeError):
-                pass
-
-        # Required field bonus
-        if key in required and conf >= 0.7:
-            conf += 0.1
-
-        conf = min(conf, 1.0)
-        scores.append(FieldConfidence(
-            field=key,
-            value=str_val[:100],
-            confidence=round(conf, 2),
-            source="llm",
-        ))
-
-    return scores
+    return [
+        _score_field(key, value, required, date_fields, amount_fields)
+        for key, value in data.items()
+        if key not in skip_keys
+    ]
 
 
 # ---------------------------------------------------------------------------
 # Full validation pipeline
 # ---------------------------------------------------------------------------
+
+def _extract_line_item_dicts(data: dict) -> list[dict]:
+    """Extract line item dicts from data, filtering non-dict entries."""
+    line_items_raw = data.get("line_items", data.get("items", []))
+    if not line_items_raw:
+        return []
+    return [item for item in line_items_raw if isinstance(item, dict)]
+
+
+def _validate_total_check(subtotal: float, vat_amount: float, total: float) -> str:
+    """Check if subtotal + vat_amount equals total."""
+    if total <= 0 or subtotal <= 0:
+        return "not_applicable"
+    expected = subtotal + vat_amount
+    return "fail" if abs(expected - total) > _VAT_TOLERANCE else "pass"
+
+
+def _validate_date_field(data: dict, warnings: list[str]) -> bool:
+    """Validate date field and append warning if invalid. Returns date_valid."""
+    date_field = data.get("invoice_date") or data.get("date") or ""
+    if not date_field:
+        return False
+    date_valid = _is_valid_date(date_field)
+    if not date_valid:
+        warnings.append(f"Date '{date_field}' is not valid YYYY-MM-DD format")
+    return date_valid
+
+
+def _validate_currency(data: dict, warnings: list[str]) -> str:
+    """Validate currency code and return normalised value."""
+    currency = data.get("currency", "GBP")
+    if currency and len(currency) != 3:
+        warnings.append(f"Currency '{currency}' is not a valid ISO 4217 code")
+        return "GBP"
+    return currency
+
+
+def _needs_review(
+    vat_status: str,
+    total_check: str,
+    date_valid: bool,
+    overall: float,
+    confidence_scores: list[FieldConfidence],
+) -> bool:
+    """Determine if extraction requires manual review."""
+    return (
+        vat_status == "fail"
+        or total_check == "fail"
+        or not date_valid
+        or overall < 0.7
+        or any(s.confidence < 0.5 for s in confidence_scores)
+    )
+
+
+def _auto_categorise_line_items(
+    data: dict,
+    document_type: DocumentType,
+    line_items_dicts: list[dict],
+) -> None:
+    """Auto-assign nominal codes to line items missing them."""
+    if document_type not in (DocumentType.PURCHASE_INVOICE, DocumentType.CREDIT_NOTE):
+        return
+    vendor = data.get("vendor_name", "")
+    for item in line_items_dicts:
+        if not item.get("nominal_code"):
+            desc = item.get("description", "")
+            code, _cat = categorise_nominal(vendor, desc)
+            item["nominal_code"] = code
+
 
 def validate_extraction(
     data: dict,
@@ -504,41 +582,21 @@ def validate_extraction(
     vat_amount = float(data.get("vat_amount", data.get("tax_amount", 0)) or 0)
     total = float(data.get("total", 0) or 0)
     vendor_vat = data.get("vendor_vat_number") or data.get("merchant_vat_number")
-
-    line_items_raw = data.get("line_items", data.get("items", []))
-    line_items_dicts = []
-    if line_items_raw:
-        for item in line_items_raw:
-            if isinstance(item, dict):
-                line_items_dicts.append(item)
+    line_items_dicts = _extract_line_item_dicts(data)
 
     vat_status, vat_warnings = validate_vat(
         subtotal, vat_amount, total, line_items_dicts, vendor_vat
     )
     warnings.extend(vat_warnings)
 
-    # 2. Total check (subtotal + vat = total)
-    total_check = "pass"
-    if total > 0 and subtotal > 0:
-        expected = subtotal + vat_amount
-        if abs(expected - total) > _VAT_TOLERANCE:
-            total_check = "fail"
-        else:
-            total_check = "pass"
-    else:
-        total_check = "not_applicable"
+    # 2. Total check
+    total_check = _validate_total_check(subtotal, vat_amount, total)
 
     # 3. Date validation
-    date_field = data.get("invoice_date") or data.get("date") or ""
-    date_valid = _is_valid_date(date_field) if date_field else False
-    if date_field and not date_valid:
-        warnings.append(f"Date '{date_field}' is not valid YYYY-MM-DD format")
+    date_valid = _validate_date_field(data, warnings)
 
     # 4. Currency detection
-    currency = data.get("currency", "GBP")
-    if currency and len(currency) != 3:
-        warnings.append(f"Currency '{currency}' is not a valid ISO 4217 code")
-        currency = "GBP"
+    currency = _validate_currency(data, warnings)
 
     # 5. Confidence scoring
     confidence_scores = compute_confidence(data, document_type)
@@ -550,12 +608,8 @@ def validate_extraction(
         )
 
     # 6. Determine if review is needed
-    requires_review = (
-        vat_status == "fail"
-        or total_check == "fail"
-        or not date_valid
-        or overall < 0.7
-        or any(s.confidence < 0.5 for s in confidence_scores)
+    requires_review = _needs_review(
+        vat_status, total_check, date_valid, overall, confidence_scores
     )
 
     if requires_review and "Requires manual review" not in warnings:
@@ -567,14 +621,8 @@ def validate_extraction(
                 f"Low confidence fields: {', '.join(low_conf_fields)}"
             )
 
-    # 7. Auto-categorise nominal codes for line items without them
-    if document_type in (DocumentType.PURCHASE_INVOICE, DocumentType.CREDIT_NOTE):
-        vendor = data.get("vendor_name", "")
-        for item in line_items_dicts:
-            if not item.get("nominal_code"):
-                desc = item.get("description", "")
-                code, _cat = categorise_nominal(vendor, desc)
-                item["nominal_code"] = code
+    # 7. Auto-categorise nominal codes
+    _auto_categorise_line_items(data, document_type, line_items_dicts)
 
     validation = ValidationResult(
         vat_check=vat_status,
@@ -730,17 +778,11 @@ def cmd_categorise(args: list[str]) -> int:
     return 0
 
 
-def cmd_extract(args: list[str]) -> int:
-    """Extract structured data from a file (requires Docling + ExtractThinker)."""
-    if not args:
-        print("Usage: extraction_pipeline.py extract <file> [--schema auto|purchase-invoice|expense-receipt|credit-note] [--privacy local|cloud]", file=sys.stderr)
-        return 1
-
+def _parse_extract_options(args: list[str]) -> tuple[str, str, str]:
+    """Parse cmd_extract CLI options. Returns (input_file, schema, privacy)."""
     input_file = args[0]
     schema = "auto"
     privacy = "local"
-
-    # Parse options
     i = 1
     while i < len(args):
         if args[i] == "--schema" and i + 1 < len(args):
@@ -751,13 +793,51 @@ def cmd_extract(args: list[str]) -> int:
             i += 2
         else:
             i += 1
+    return input_file, schema, privacy
 
-    # Check file exists
+
+_PRIVACY_BACKENDS = {
+    "local": "ollama/llama3.2",
+    "cloud": "openai/gpt-4o",
+}
+
+_SCHEMA_TYPE_MAP = {
+    "purchase-invoice": DocumentType.PURCHASE_INVOICE,
+    "purchase_invoice": DocumentType.PURCHASE_INVOICE,
+    "expense-receipt": DocumentType.EXPENSE_RECEIPT,
+    "expense_receipt": DocumentType.EXPENSE_RECEIPT,
+    "credit-note": DocumentType.CREDIT_NOTE,
+    "credit_note": DocumentType.CREDIT_NOTE,
+    "invoice": DocumentType.SALES_INVOICE,
+    "receipt": DocumentType.GENERIC_RECEIPT,
+}
+
+
+def _auto_classify_file(input_file: str) -> DocumentType:
+    """Read file and auto-classify its document type."""
+    try:
+        from docling.document_converter import DocumentConverter
+        converter = DocumentConverter()
+        doc_result = converter.convert(input_file)
+        text = doc_result.document.export_to_markdown()
+    except ImportError:
+        text = Path(input_file).read_text(encoding="utf-8", errors="replace")
+    doc_type, _scores = classify_document(text)
+    return doc_type
+
+
+def cmd_extract(args: list[str]) -> int:
+    """Extract structured data from a file (requires Docling + ExtractThinker)."""
+    if not args:
+        print("Usage: extraction_pipeline.py extract <file> [--schema auto|purchase-invoice|expense-receipt|credit-note] [--privacy local|cloud]", file=sys.stderr)
+        return 1
+
+    input_file, schema, privacy = _parse_extract_options(args)
+
     if not Path(input_file).is_file():
         print(f"ERROR: File not found: {input_file}", file=sys.stderr)
         return 1
 
-    # Try to import extraction dependencies
     try:
         from extract_thinker import Extractor
     except ImportError:
@@ -767,48 +847,14 @@ def cmd_extract(args: list[str]) -> int:
         )
         return 1
 
-    # Determine LLM backend
-    if privacy == "local":
-        llm_backend = "ollama/llama3.2"
-    elif privacy == "cloud":
-        llm_backend = "openai/gpt-4o"
-    else:
-        llm_backend = "ollama/llama3.2"
-
-    # Schema mapping
-    schema_type_map = {
-        "purchase-invoice": DocumentType.PURCHASE_INVOICE,
-        "purchase_invoice": DocumentType.PURCHASE_INVOICE,
-        "expense-receipt": DocumentType.EXPENSE_RECEIPT,
-        "expense_receipt": DocumentType.EXPENSE_RECEIPT,
-        "credit-note": DocumentType.CREDIT_NOTE,
-        "credit_note": DocumentType.CREDIT_NOTE,
-        "invoice": DocumentType.SALES_INVOICE,
-        "receipt": DocumentType.GENERIC_RECEIPT,
-    }
-
-    # Auto-classify if needed
-    if schema == "auto":
-        # Read file text for classification
-        try:
-            from docling.document_converter import DocumentConverter
-            converter = DocumentConverter()
-            doc_result = converter.convert(input_file)
-            text = doc_result.document.export_to_markdown()
-        except ImportError:
-            # Fallback: try reading as text
-            text = Path(input_file).read_text(encoding="utf-8", errors="replace")
-
-        doc_type, _scores = classify_document(text)
-    else:
-        doc_type = schema_type_map.get(schema, DocumentType.PURCHASE_INVOICE)
+    llm_backend = _PRIVACY_BACKENDS.get(privacy, "ollama/llama3.2")
+    doc_type = _auto_classify_file(input_file) if schema == "auto" else _SCHEMA_TYPE_MAP.get(schema, DocumentType.PURCHASE_INVOICE)
 
     schema_cls = get_schema_class(doc_type)
     if not schema_cls:
         print(f"No schema available for type: {doc_type.value}", file=sys.stderr)
         return 1
 
-    # Run extraction
     print(f"Extracting from {input_file} (type={doc_type.value}, llm={llm_backend})...", file=sys.stderr)
 
     extractor = Extractor()
@@ -822,7 +868,6 @@ def cmd_extract(args: list[str]) -> int:
         print(f"Extraction error: {e}", file=sys.stderr)
         return 1
 
-    # Validate
     output = parse_and_validate(raw_data, doc_type, input_file)
     _print_json(output)
     return 0 if not output.validation.requires_review else 2

@@ -91,7 +91,7 @@ function extractContrastData() {
       return { r: 0, g: 0, b: 0, a: 0 };
     }
 
-    // Handle rgba(r, g, b, a)
+    // Try rgba first, then hex, fall back to null
     const rgbaMatch = colorStr.match(
       /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/
     );
@@ -104,49 +104,45 @@ function extractContrastData() {
       };
     }
 
-    // Handle hex colors (shouldn't appear in computed styles, but just in case)
     const hexMatch = colorStr.match(/^#([0-9a-f]{3,8})$/i);
-    if (hexMatch) {
-      const hex = hexMatch[1];
-      if (hex.length === 3) {
-        return {
-          r: parseInt(hex[0] + hex[0], 16),
-          g: parseInt(hex[1] + hex[1], 16),
-          b: parseInt(hex[2] + hex[2], 16),
-          a: 1,
-        };
-      }
-      if (hex.length === 6) {
-        return {
-          r: parseInt(hex.substring(0, 2), 16),
-          g: parseInt(hex.substring(2, 4), 16),
-          b: parseInt(hex.substring(4, 6), 16),
-          a: 1,
-        };
-      }
-      if (hex.length === 8) {
-        return {
-          r: parseInt(hex.substring(0, 2), 16),
-          g: parseInt(hex.substring(2, 4), 16),
-          b: parseInt(hex.substring(4, 6), 16),
-          a: parseInt(hex.substring(6, 8), 16) / 255,
-        };
-      }
-    }
+    if (!hexMatch) return null;
 
-    return null;
+    const hex = hexMatch[1];
+    const hexParsers = {
+      3: () => ({
+        r: parseInt(hex[0] + hex[0], 16),
+        g: parseInt(hex[1] + hex[1], 16),
+        b: parseInt(hex[2] + hex[2], 16),
+        a: 1,
+      }),
+      6: () => ({
+        r: parseInt(hex.substring(0, 2), 16),
+        g: parseInt(hex.substring(2, 4), 16),
+        b: parseInt(hex.substring(4, 6), 16),
+        a: 1,
+      }),
+      8: () => ({
+        r: parseInt(hex.substring(0, 2), 16),
+        g: parseInt(hex.substring(2, 4), 16),
+        b: parseInt(hex.substring(4, 6), 16),
+        a: parseInt(hex.substring(6, 8), 16) / 255,
+      }),
+    };
+    const parser = hexParsers[hex.length];
+    return parser ? parser() : null;
   }
 
   // Alpha-composite foreground over background (both RGBA)
   function alphaComposite(fg, bg) {
     const a = fg.a + bg.a * (1 - fg.a);
-    if (a === 0) return { r: 0, g: 0, b: 0, a: 0 };
-    return {
-      r: Math.round((fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a),
-      g: Math.round((fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a),
-      b: Math.round((fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a),
-      a,
-    };
+    return a === 0
+      ? { r: 0, g: 0, b: 0, a: 0 }
+      : {
+          r: Math.round((fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a),
+          g: Math.round((fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a),
+          b: Math.round((fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a),
+          a,
+        };
   }
 
   // WCAG relative luminance
@@ -187,8 +183,7 @@ function extractContrastData() {
       let selector = current.tagName.toLowerCase();
 
       if (current.id) {
-        selector = `#${CSS.escape(current.id)}`;
-        parts.unshift(selector);
+        parts.unshift(`#${CSS.escape(current.id)}`);
         break;
       }
 
@@ -203,7 +198,6 @@ function extractContrastData() {
         }
       }
 
-      // Add nth-child if needed for disambiguation
       const parent = current.parentElement;
       if (parent) {
         const siblings = [...parent.children].filter(
@@ -225,7 +219,6 @@ function extractContrastData() {
 
   // Walk ancestors to find effective background color (resolve transparent)
   function getEffectiveBackground(el) {
-    let bg = { r: 255, g: 255, b: 255, a: 1 }; // Default: white
     const ancestors = [];
     let current = el;
 
@@ -236,7 +229,7 @@ function extractContrastData() {
     }
 
     // Process from root (body) down to element, compositing backgrounds
-    bg = { r: 255, g: 255, b: 255, a: 1 }; // Start with white (page default)
+    let bg = { r: 255, g: 255, b: 255, a: 1 }; // Start with white (page default)
     for (let i = ancestors.length - 1; i >= 0; i--) {
       const style = window.getComputedStyle(ancestors[i]);
       const bgColor = parseColor(style.backgroundColor);
@@ -279,32 +272,36 @@ function extractContrastData() {
     return flags.length > 0 ? [...new Set(flags)] : null;
   }
 
-  // Check if element is visible
+  // Check if element is visible (single-return form)
   function isVisible(el) {
-    if (!el.offsetParent && el.tagName !== 'BODY' && el.tagName !== 'HTML') {
-      return false;
-    }
+    const hasOffsetParent = el.offsetParent || el.tagName === 'BODY' || el.tagName === 'HTML';
+    if (!hasOffsetParent) return false;
     const style = window.getComputedStyle(el);
-    if (
-      style.display === 'none' ||
-      style.visibility === 'hidden' ||
-      parseFloat(style.opacity) === 0
-    ) {
-      return false;
-    }
+    const isHidden = style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0;
+    if (isHidden) return false;
     const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) return false;
-    return true;
+    return rect.width > 0 || rect.height > 0;
   }
 
   // Check if element contains direct text content
   function hasDirectText(el) {
-    for (const node of el.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0) {
-        return true;
-      }
-    }
-    return false;
+    return [...el.childNodes].some(
+      (node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0
+    );
+  }
+
+  // Tags to skip during extraction
+  const SKIP_TAGS = new Set(['script', 'style', 'meta', 'link', 'noscript', 'br', 'hr']);
+
+  // Check if element should be analysed for contrast
+  function shouldAnalyseElement(el, seen) {
+    if (!isVisible(el) || !hasDirectText(el)) return null;
+    const tag = el.tagName.toLowerCase();
+    if (SKIP_TAGS.has(tag)) return null;
+    const selector = getSelector(el);
+    const isNew = !seen.has(selector);
+    if (isNew) seen.add(selector);
+    return isNew ? { tag, selector } : null;
   }
 
   // --- Main extraction ---
@@ -314,26 +311,16 @@ function extractContrastData() {
   const seen = new Set(); // Deduplicate by selector
 
   for (const el of allElements) {
-    // Skip non-visible elements
-    if (!isVisible(el)) continue;
-
-    // Skip elements without direct text content (we care about text contrast)
-    if (!hasDirectText(el)) continue;
-
-    // Skip script, style, meta elements
-    const tag = el.tagName.toLowerCase();
-    if (['script', 'style', 'meta', 'link', 'noscript', 'br', 'hr'].includes(tag)) {
-      continue;
-    }
-
-    const selector = getSelector(el);
-    if (seen.has(selector)) continue;
-    seen.add(selector);
+    const elementInfo = shouldAnalyseElement(el, seen);
+    if (!elementInfo) continue;
 
     const style = window.getComputedStyle(el);
+
+    // Parse foreground color
     const fgColor = parseColor(style.color);
     if (!fgColor) continue;
 
+    // Resolve effective background and check for complex backgrounds
     const bgColor = getEffectiveBackground(el);
     const complexBg = hasComplexBackground(el);
 
@@ -353,23 +340,20 @@ function extractContrastData() {
     const bgLum = relativeLuminance(finalBg.r, finalBg.g, finalBg.b);
     const ratio = contrastRatio(fgLum, bgLum);
 
-    // Determine text size category
+    // Determine text size category and thresholds
+    const { tag, selector } = elementInfo;
     const fontSize = style.fontSize;
     const fontWeight = style.fontWeight;
     const largeText = isLargeText(fontSize, fontWeight);
-
-    // WCAG thresholds
     const aaThreshold = largeText ? 3.0 : 4.5;
     const aaaThreshold = largeText ? 4.5 : 7.0;
 
-    // Get a text snippet for context
-    let textSnippet = '';
-    for (const node of el.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        textSnippet += node.textContent.trim() + ' ';
-      }
-    }
-    textSnippet = textSnippet.trim().substring(0, 80);
+    // Get text snippet from direct text nodes
+    const textSnippet = [...el.childNodes]
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent.trim())
+      .join(' ')
+      .substring(0, 80);
 
     results.push({
       selector,
@@ -404,13 +388,44 @@ function extractContrastData() {
 // Output Formatters
 // ============================================================================
 
-function formatSummary(results, level) {
-  const failures = results.filter(
-    (r) => !(level === 'AAA' ? r.aaa.pass : r.aa.pass)
-  );
-  const passes = results.length - failures.length;
-  const complexBgCount = results.filter((r) => r.complexBackground).length;
+function getThresholdForLevel(element, level) {
+  return level === 'AAA' ? element.aaa.threshold : element.aa.threshold;
+}
 
+function getCriterionForLevel(element, level) {
+  return level === 'AAA' ? element.aaa.criterion : element.aa.criterion;
+}
+
+function isFailingAtLevel(element, level) {
+  return !(level === 'AAA' ? element.aaa.pass : element.aa.pass);
+}
+
+function formatFailureDetail(f, level) {
+  const threshold = getThresholdForLevel(f, level);
+  const criterion = getCriterionForLevel(f, level);
+  const lines = [];
+  lines.push(`  ${f.selector}`);
+  lines.push(
+    `    Ratio: ${f.ratio}:1 (need ${threshold}:1) — SC ${criterion}`
+  );
+  lines.push(`    FG: ${f.foreground} | BG: ${f.background}`);
+  lines.push(
+    `    Size: ${f.fontSize} weight: ${f.fontWeight}${f.isLargeText ? ' (large text)' : ''}`
+  );
+  if (f.text) {
+    lines.push(`    Text: "${f.text}"`);
+  }
+  if (f.complexBackground) {
+    lines.push(
+      `    WARNING: ${f.complexBackground.join(', ')} — manual review needed`
+    );
+  }
+  lines.push('');
+  return lines;
+}
+
+function formatSummaryHeader(results, failures, complexBgCount, level) {
+  const passes = results.length - failures.length;
   const lines = [];
   lines.push('');
   lines.push('--- Playwright Contrast Extraction ---');
@@ -423,51 +438,54 @@ function formatSummary(results, level) {
     );
   }
   lines.push('');
+  return lines;
+}
+
+function formatComplexBackgrounds(results) {
+  const complexElements = results.filter((r) => r.complexBackground);
+  if (complexElements.length === 0) return [];
+  const lines = [];
+  lines.push('--- Elements with Complex Backgrounds ---');
+  for (const r of complexElements) {
+    lines.push(
+      `  ${r.selector} — ${r.complexBackground.join(', ')} (ratio: ${r.ratio}:1)`
+    );
+  }
+  lines.push('');
+  return lines;
+}
+
+function formatSummary(results, level) {
+  const failures = results.filter((r) => isFailingAtLevel(r, level));
+  const complexBgCount = results.filter((r) => r.complexBackground).length;
+
+  const lines = formatSummaryHeader(results, failures, complexBgCount, level);
 
   if (failures.length > 0) {
     lines.push(`--- Failing Elements (WCAG ${level}) ---`);
     for (const f of failures) {
-      const threshold =
-        level === 'AAA' ? f.aaa.threshold : f.aa.threshold;
-      const criterion =
-        level === 'AAA' ? f.aaa.criterion : f.aa.criterion;
-      lines.push(`  ${f.selector}`);
-      lines.push(
-        `    Ratio: ${f.ratio}:1 (need ${threshold}:1) — SC ${criterion}`
-      );
-      lines.push(`    FG: ${f.foreground} | BG: ${f.background}`);
-      lines.push(
-        `    Size: ${f.fontSize} weight: ${f.fontWeight}${f.isLargeText ? ' (large text)' : ''}`
-      );
-      if (f.text) {
-        lines.push(`    Text: "${f.text}"`);
-      }
-      if (f.complexBackground) {
-        lines.push(
-          `    WARNING: ${f.complexBackground.join(', ')} — manual review needed`
-        );
-      }
-      lines.push('');
+      lines.push(...formatFailureDetail(f, level));
     }
   }
 
-  if (complexBgCount > 0) {
-    lines.push('--- Elements with Complex Backgrounds ---');
-    for (const r of results.filter((r) => r.complexBackground)) {
-      lines.push(
-        `  ${r.selector} — ${r.complexBackground.join(', ')} (ratio: ${r.ratio}:1)`
-      );
-    }
-    lines.push('');
-  }
+  lines.push(...formatComplexBackgrounds(results));
 
   return lines.join('\n');
 }
 
+function formatMarkdownFailureRow(f, level) {
+  const threshold = getThresholdForLevel(f, level);
+  const criterion = getCriterionForLevel(f, level);
+  const sizeInfo = `${f.fontSize} ${f.fontWeight}${f.isLargeText ? ' (L)' : ''}`;
+  const selectorShort =
+    f.selector.length > 40
+      ? f.selector.substring(0, 37) + '...'
+      : f.selector;
+  return `| \`${selectorShort}\` | ${f.ratio}:1 | ${threshold}:1 | ${f.foreground} | ${f.background} | ${sizeInfo} | SC ${criterion} |`;
+}
+
 function formatMarkdown(results, level) {
-  const failures = results.filter(
-    (r) => !(level === 'AAA' ? r.aaa.pass : r.aa.pass)
-  );
+  const failures = results.filter((r) => isFailingAtLevel(r, level));
   const passes = results.length - failures.length;
 
   const lines = [];
@@ -490,18 +508,7 @@ function formatMarkdown(results, level) {
       `|---------|-------|----------|----|----|------|------|`
     );
     for (const f of failures) {
-      const threshold =
-        level === 'AAA' ? f.aaa.threshold : f.aa.threshold;
-      const criterion =
-        level === 'AAA' ? f.aaa.criterion : f.aa.criterion;
-      const sizeInfo = `${f.fontSize} ${f.fontWeight}${f.isLargeText ? ' (L)' : ''}`;
-      const selectorShort =
-        f.selector.length > 40
-          ? f.selector.substring(0, 37) + '...'
-          : f.selector;
-      lines.push(
-        `| \`${selectorShort}\` | ${f.ratio}:1 | ${threshold}:1 | ${f.foreground} | ${f.background} | ${sizeInfo} | SC ${criterion} |`
-      );
+      lines.push(formatMarkdownFailureRow(f, level));
     }
     lines.push('');
   }
@@ -545,9 +552,7 @@ async function main() {
     // Apply filters
     let filtered = results;
     if (options.failOnly) {
-      filtered = results.filter(
-        (r) => !(options.level === 'AAA' ? r.aaa.pass : r.aa.pass)
-      );
+      filtered = results.filter((r) => isFailingAtLevel(r, options.level));
     }
     if (options.limit > 0) {
       filtered = filtered.slice(0, options.limit);
@@ -568,9 +573,7 @@ async function main() {
     }
 
     // Exit code: 1 if any failures at the requested level
-    const hasFailures = results.some(
-      (r) => !(options.level === 'AAA' ? r.aaa.pass : r.aa.pass)
-    );
+    const hasFailures = results.some((r) => isFailingAtLevel(r, options.level));
 
     await browser.close().catch(() => {});
     process.exit(hasFailures ? 1 : 0);

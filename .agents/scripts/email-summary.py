@@ -159,46 +159,46 @@ word_count = _word_count
 # Heuristic summariser (short emails)
 # ---------------------------------------------------------------------------
 
-def _extract_first_sentences(text: str, max_sentences: int = 2) -> str:
-    """Extract the first N meaningful sentences from text.
+_GREETING_PATTERN = re.compile(
+    r'^(hi|hello|hey|dear|good\s+(morning|afternoon|evening))\b',
+    re.IGNORECASE,
+)
+_LIST_ITEM_PATTERN = re.compile(r'^(\d+[.)]\s+|[-*+]\s+)')
+_SIGNATURE_PATTERN = re.compile(
+    r'^(--|best\s+regards|kind\s+regards|regards|thanks|cheers|sincerely)',
+    re.IGNORECASE,
+)
 
-    Skips greeting lines (Hi, Hello, Dear) and empty lines.
-    Uses a sentence boundary detector that handles common
-    abbreviations (Mr., Dr., etc.) and decimal numbers.
-    """
-    # Split into lines first to skip greetings, lists, and signatures
-    lines = text.split('\n')
-    meaningful_lines = []
-    for line in lines:
+_SENTENCE_END = re.compile(
+    r'(?<!Mr)(?<!Mrs)(?<!Ms)(?<!Dr)(?<!Prof)(?<!Inc)(?<!Ltd)(?<!Corp)'
+    r'(?<!Jr)(?<!Sr)(?<!vs)(?<!etc)(?<!e\.g)(?<!i\.e)'
+    r'[.!?]\s+(?=[A-Z])',
+    re.MULTILINE,
+)
+
+
+def _filter_meaningful_lines(text: str) -> list[str]:
+    """Filter text lines to meaningful content, skipping greetings/lists/signatures."""
+    meaningful = []
+    for line in text.split('\n'):
         stripped = line.strip()
         if not stripped:
             continue
-        # Skip common email greetings
-        if re.match(r'^(hi|hello|hey|dear|good\s+(morning|afternoon|evening))\b',
-                     stripped, re.IGNORECASE):
+        if _GREETING_PATTERN.match(stripped):
             continue
-        # Skip numbered/bulleted list items (detail, not summary)
-        if re.match(r'^(\d+[.)]\s+|[-*+]\s+)', stripped):
+        if _LIST_ITEM_PATTERN.match(stripped):
             continue
-        # Skip signature indicators
-        if re.match(r'^(--|best\s+regards|kind\s+regards|regards|thanks|cheers|sincerely)',
-                     stripped, re.IGNORECASE):
+        if _SIGNATURE_PATTERN.match(stripped):
             break
-        meaningful_lines.append(stripped)
+        meaningful.append(stripped)
+    return meaningful
 
-    # Rejoin and split into sentences
-    text_block = ' '.join(meaningful_lines)
-    # Sentence boundary: period/exclamation/question followed by space+uppercase
-    # Negative lookbehind for common abbreviations
-    abbrevs = r'(?<!Mr)(?<!Mrs)(?<!Ms)(?<!Dr)(?<!Prof)(?<!Inc)(?<!Ltd)(?<!Corp)(?<!Jr)(?<!Sr)(?<!vs)(?<!etc)(?<!e\.g)(?<!i\.e)'
-    sentence_end = re.compile(
-        abbrevs + r'[.!?]\s+(?=[A-Z])',
-        re.MULTILINE
-    )
 
+def _split_sentences(text_block: str, max_sentences: int) -> list[str]:
+    """Split text into sentences using abbreviation-aware boundary detection."""
     result_sentences = []
     start = 0
-    for match in sentence_end.finditer(text_block):
+    for match in _SENTENCE_END.finditer(text_block):
         end = match.end()
         sentence = text_block[start:end].strip()
         if sentence:
@@ -207,21 +207,36 @@ def _extract_first_sentences(text: str, max_sentences: int = 2) -> str:
             break
         start = end
 
-    # If we didn't find enough sentence boundaries, take what we have
     if len(result_sentences) < max_sentences:
         remaining = text_block[start:].strip()
         if remaining:
             result_sentences.append(remaining)
 
+    return result_sentences
+
+
+def _truncate_to_limit(text: str, limit: int) -> str:
+    """Truncate text at word boundary with ellipsis if over limit."""
+    if len(text) <= limit:
+        return text
+    truncated = text[:limit].rsplit(' ', 1)[0]
+    if not truncated.endswith(('.', '!', '?')):
+        truncated += '...'
+    return truncated
+
+
+def _extract_first_sentences(text: str, max_sentences: int = 2) -> str:
+    """Extract the first N meaningful sentences from text.
+
+    Skips greeting lines (Hi, Hello, Dear) and empty lines.
+    Uses a sentence boundary detector that handles common
+    abbreviations (Mr., Dr., etc.) and decimal numbers.
+    """
+    meaningful_lines = _filter_meaningful_lines(text)
+    text_block = ' '.join(meaningful_lines)
+    result_sentences = _split_sentences(text_block, max_sentences)
     result = ' '.join(result_sentences)
-
-    # Truncate at word boundary if too long
-    if len(result) > MAX_DESCRIPTION_LEN:
-        result = result[:MAX_DESCRIPTION_LEN].rsplit(' ', 1)[0]
-        if not result.endswith(('.', '!', '?')):
-            result += '...'
-
-    return result
+    return _truncate_to_limit(result, MAX_DESCRIPTION_LEN)
 
 
 def summarise_heuristic(body: str) -> str:
@@ -359,6 +374,36 @@ def _parse_summary_response(response: str) -> str:
 _clean_llm_summary = _parse_summary_response
 
 
+def _prepare_ollama_input(body: str) -> Optional[str]:
+    """Prepare cleaned and truncated text for Ollama. Returns None if empty."""
+    text = _strip_signature(body)
+    cleaned = _strip_markdown(text)
+    if not cleaned:
+        return None
+    if len(cleaned) > OLLAMA_MAX_CHARS:
+        cleaned = cleaned[:OLLAMA_MAX_CHARS] + "\n[... truncated ...]"
+    return cleaned
+
+
+def _run_ollama(model: str, prompt: str) -> str:
+    """Run Ollama and return parsed response, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            ["ollama", "run", model, prompt],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            print(f"WARNING: Ollama summarisation failed: {result.stderr}",
+                  file=sys.stderr)
+            return ""
+        return _parse_summary_response(result.stdout)
+    except subprocess.TimeoutExpired:
+        print("WARNING: Ollama summarisation timed out (60s)", file=sys.stderr)
+        return ""
+    except FileNotFoundError:
+        return ""
+
+
 def summarise_ollama(body: str) -> str:
     """Generate a summary using Ollama LLM.
 
@@ -369,40 +414,28 @@ def summarise_ollama(body: str) -> str:
     if model is None:
         return ""
 
-    # Strip signature before sending to LLM
-    text = _strip_signature(body)
-    cleaned = _strip_markdown(text)
+    cleaned = _prepare_ollama_input(body)
     if not cleaned:
         return ""
 
-    # Truncate very long texts to avoid context overflow
-    if len(cleaned) > OLLAMA_MAX_CHARS:
-        cleaned = cleaned[:OLLAMA_MAX_CHARS] + "\n[... truncated ...]"
-
     prompt = _OLLAMA_SUMMARY_PROMPT.format(text=cleaned)
-
-    try:
-        result = subprocess.run(
-            ["ollama", "run", model, prompt],
-            capture_output=True, text=True, timeout=60
-        )
-        if result.returncode != 0:
-            print(f"WARNING: Ollama summarisation failed: {result.stderr}",
-                  file=sys.stderr)
-            return ""
-
-        return _parse_summary_response(result.stdout)
-
-    except subprocess.TimeoutExpired:
-        print("WARNING: Ollama summarisation timed out (60s)", file=sys.stderr)
-        return ""
-    except FileNotFoundError:
-        return ""
+    return _run_ollama(model, prompt)
 
 
 # ---------------------------------------------------------------------------
 # Main summarisation orchestrator
 # ---------------------------------------------------------------------------
+
+def _summarise_with_ollama_fallback(body: str, wc: int = 0) -> str:
+    """Try Ollama summarisation, fall back to heuristic on failure."""
+    summary = summarise_ollama(body)
+    if summary:
+        return summary
+    if wc > 0:
+        print(f"INFO: Using heuristic summary for {wc}-word email "
+              f"(Ollama unavailable)", file=sys.stderr)
+    return summarise_heuristic(body)
+
 
 def generate_summary(body: str, method: str = "auto") -> str:
     """Generate a 1-2 sentence summary for an email body.
@@ -417,30 +450,23 @@ def generate_summary(body: str, method: str = "auto") -> str:
     if not body or not body.strip():
         return ""
 
-    cleaned = _strip_markdown(body)
-    wc = _word_count(cleaned)
-
     if method == "heuristic":
         return summarise_heuristic(body)
 
     if method == "ollama":
-        summary = summarise_ollama(body)
-        if summary:
-            return summary
-        # Fall back to heuristic if Ollama/LLM fails
-        return summarise_heuristic(body)
+        return _summarise_with_ollama_fallback(body)
 
     # Auto mode: use word count to decide
+    cleaned = _strip_markdown(body)
+    wc = _word_count(cleaned)
+
     if wc <= WORD_COUNT_THRESHOLD:
         return summarise_heuristic(body)
 
-    # Long email: try Ollama, fall back to heuristic
+    # Long email: try Ollama if available, fall back to heuristic
     if _check_ollama():
-        summary = summarise_ollama(body)
-        if summary:
-            return summary
+        return _summarise_with_ollama_fallback(body, wc)
 
-    # Ollama unavailable or failed — use heuristic as fallback
     print(f"INFO: Using heuristic summary for {wc}-word email "
           f"(Ollama unavailable)", file=sys.stderr)
     return summarise_heuristic(body)
@@ -563,8 +589,8 @@ def update_frontmatter_description(file_path: str, description: str) -> bool:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    """CLI entry point."""
+def _build_cli_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
     parser = argparse.ArgumentParser(
         description="Generate auto-summaries for converted email markdown (t1053.7)"
     )
@@ -582,7 +608,39 @@ def main() -> int:
         "--json", action="store_true",
         help="Output summary as JSON with metadata"
     )
+    return parser
 
+
+def _handle_update_frontmatter(
+    summary: str, input_file: str, method: str, wc: int, method_used: str,
+) -> int:
+    """Handle --update-frontmatter output mode. Returns exit code."""
+    if summary and update_description(input_file, method=method):
+        print(f"Updated description in {input_file}")
+        print(f"  Words: {wc}, Method: {method_used}")
+        print(f"  Summary: {summary[:120]}{'...' if len(summary) > 120 else ''}")
+        return 0
+    if not summary:
+        print(f"No summary generated for {input_file}", file=sys.stderr)
+    else:
+        print(f"Could not update frontmatter in {input_file}", file=sys.stderr)
+    return 1
+
+
+def _handle_json_output(summary: str, wc: int, method_used: str) -> None:
+    """Handle --json output mode."""
+    output = {
+        "summary": summary,
+        "word_count": wc,
+        "method": method_used,
+        "char_count": len(summary),
+    }
+    print(json.dumps(output, indent=2, ensure_ascii=False))
+
+
+def main() -> int:
+    """CLI entry point."""
+    parser = _build_cli_parser()
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -604,26 +662,9 @@ def main() -> int:
     method_used = "heuristic" if wc <= WORD_COUNT_THRESHOLD else "ollama"
 
     if args.update_frontmatter:
-        # Try update_description first (handles reading/writing in one call)
-        if summary and update_description(args.input, method=args.method):
-            print(f"Updated description in {args.input}")
-            print(f"  Words: {wc}, Method: {method_used}")
-            print(f"  Summary: {summary[:120]}{'...' if len(summary) > 120 else ''}")
-        else:
-            if not summary:
-                print(f"No summary generated for {args.input}", file=sys.stderr)
-            else:
-                print(f"Could not update frontmatter in {args.input}",
-                      file=sys.stderr)
-            return 1
-    elif args.json:
-        output = {
-            "summary": summary,
-            "word_count": wc,
-            "method": method_used,
-            "char_count": len(summary),
-        }
-        print(json.dumps(output, indent=2, ensure_ascii=False))
+        return _handle_update_frontmatter(summary, args.input, args.method, wc, method_used)
+    if args.json:
+        _handle_json_output(summary, wc, method_used)
     else:
         print(summary)
 

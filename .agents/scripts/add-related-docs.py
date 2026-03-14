@@ -57,22 +57,24 @@ def find_attachments(md_file: Path, frontmatter: Dict) -> List[str]:
     
     Returns list of relative paths to attachment files.
     """
-    attachments = []
+    att_field = frontmatter.get('attachments')
+    if not isinstance(att_field, list):
+        return []
     
-    # Check for attachments field in frontmatter
-    if 'attachments' in frontmatter and isinstance(frontmatter['attachments'], list):
-        # Assume attachments are in a subdirectory named <filename>_attachments/
-        base_name = md_file.stem
-        attachments_dir = md_file.parent / f"{base_name}_attachments"
-        
-        if attachments_dir.exists():
-            for att_meta in frontmatter['attachments']:
-                if isinstance(att_meta, dict) and 'filename' in att_meta:
-                    att_file = attachments_dir / att_meta['filename']
-                    if att_file.exists():
-                        # Store relative path from md_file location
-                        rel_path = os.path.relpath(att_file, md_file.parent)
-                        attachments.append(rel_path)
+    base_name = md_file.stem
+    attachments_dir = md_file.parent / f"{base_name}_attachments"
+    if not attachments_dir.exists():
+        return []
+    
+    attachments = []
+    for att_meta in att_field:
+        if not isinstance(att_meta, dict) or 'filename' not in att_meta:
+            continue
+        att_file = attachments_dir / att_meta['filename']
+        if not att_file.exists():
+            continue
+        rel_path = os.path.relpath(att_file, md_file.parent)
+        attachments.append(rel_path)
     
     return attachments
 
@@ -113,28 +115,29 @@ def find_thread_siblings(md_file: Path, frontmatter: Dict, all_docs: Dict[Path, 
     return siblings
 
 
+def _flatten_entities(entities_dict: Dict) -> Set[str]:
+    """Flatten an entities dict into a set of entity strings."""
+    result: Set[str] = set()
+    for entity_list in entities_dict.values():
+        if isinstance(entity_list, list):
+            result.update(entity_list)
+    return result
+
+
 def find_entity_matches(md_file: Path, frontmatter: Dict, all_docs: Dict[Path, Dict], min_overlap: int = 1) -> List[Dict]:
     """Find documents that mention the same entities.
     
     Returns: List of {'path': rel_path, 'entities': [shared_entities], 'title': doc_title}
     """
-    matches = []
-    
-    # Get entities from current document
     current_entities = frontmatter.get('entities', {})
     if not current_entities or not isinstance(current_entities, dict):
-        return matches
+        return []
     
-    # Flatten current entities to a set
-    current_entity_set = set()
-    for entity_type, entity_list in current_entities.items():
-        if isinstance(entity_list, list):
-            current_entity_set.update(entity_list)
-    
+    current_entity_set = _flatten_entities(current_entities)
     if not current_entity_set:
-        return matches
+        return []
     
-    # Compare with other documents
+    matches = []
     for doc_path, doc_meta in all_docs.items():
         if doc_path == md_file:
             continue
@@ -143,13 +146,7 @@ def find_entity_matches(md_file: Path, frontmatter: Dict, all_docs: Dict[Path, D
         if not doc_entities or not isinstance(doc_entities, dict):
             continue
         
-        # Flatten doc entities
-        doc_entity_set = set()
-        for entity_type, entity_list in doc_entities.items():
-            if isinstance(entity_list, list):
-                doc_entity_set.update(entity_list)
-        
-        # Find overlap
+        doc_entity_set = _flatten_entities(doc_entities)
         shared = current_entity_set & doc_entity_set
         if len(shared) >= min_overlap:
             rel_path = os.path.relpath(doc_path, md_file.parent)
@@ -159,9 +156,7 @@ def find_entity_matches(md_file: Path, frontmatter: Dict, all_docs: Dict[Path, D
                 'title': doc_meta.get('title', doc_path.stem)
             })
     
-    # Sort by number of shared entities (descending)
     matches.sort(key=lambda x: len(x['entities']), reverse=True)
-    
     return matches
 
 
@@ -233,6 +228,48 @@ def scan_directory(directory: Path) -> Dict[Path, Dict]:
     return all_docs
 
 
+def _collect_related_docs(md_file: Path, frontmatter: Dict, all_docs: Dict[Path, Dict]) -> Dict:
+    """Collect all related document references for a markdown file."""
+    related_docs: Dict = {}
+    
+    attachments = find_attachments(md_file, frontmatter)
+    if attachments:
+        related_docs['attachments'] = attachments
+    
+    thread_siblings = find_thread_siblings(md_file, frontmatter, all_docs)
+    if thread_siblings['previous'] or thread_siblings['next']:
+        related_docs['thread_siblings'] = thread_siblings
+    
+    entity_matches = find_entity_matches(md_file, frontmatter, all_docs)
+    if entity_matches:
+        related_docs['entity_matches'] = entity_matches
+    
+    return related_docs
+
+
+def _print_dry_run(md_file: Path, related_docs: Dict, navigation: str) -> None:
+    """Print dry-run output for a file update."""
+    print(f"\n{'='*60}")
+    print(f"File: {md_file}")
+    print(f"{'='*60}")
+    print("Related docs that would be added:")
+    print(yaml.dump(related_docs, default_flow_style=False, allow_unicode=True))
+    print("\nNavigation section:")
+    print(navigation)
+
+
+def _write_updated_file(md_file: Path, new_content: str) -> bool:
+    """Write updated content to file. Returns True on success."""
+    try:
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+        print(f"Updated: {md_file}")
+        return True
+    except Exception as e:
+        print(f"Error writing {md_file}: {e}", file=sys.stderr)
+        return False
+
+
 def add_related_docs(md_file: Path, all_docs: Optional[Dict[Path, Dict]] = None, dry_run: bool = False) -> bool:
     """Add related_docs frontmatter and navigation links to a markdown file.
     
@@ -243,7 +280,6 @@ def add_related_docs(md_file: Path, all_docs: Optional[Dict[Path, Dict]] = None,
     
     Returns: True if file was modified, False otherwise
     """
-    # Read file
     try:
         with open(md_file, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -251,69 +287,31 @@ def add_related_docs(md_file: Path, all_docs: Optional[Dict[Path, Dict]] = None,
         print(f"Error reading {md_file}: {e}", file=sys.stderr)
         return False
     
-    # Parse frontmatter
     frontmatter, body = parse_frontmatter(content)
     if not frontmatter:
         print(f"Skipping {md_file}: No frontmatter found", file=sys.stderr)
         return False
     
-    # If all_docs not provided, scan the directory
     if all_docs is None:
         all_docs = scan_directory(md_file.parent)
     
-    # Build related_docs
-    related_docs = {}
-    
-    # Find attachments
-    attachments = find_attachments(md_file, frontmatter)
-    if attachments:
-        related_docs['attachments'] = attachments
-    
-    # Find thread siblings
-    thread_siblings = find_thread_siblings(md_file, frontmatter, all_docs)
-    if thread_siblings['previous'] or thread_siblings['next']:
-        related_docs['thread_siblings'] = thread_siblings
-    
-    # Find entity matches
-    entity_matches = find_entity_matches(md_file, frontmatter, all_docs)
-    if entity_matches:
-        related_docs['entity_matches'] = entity_matches
-    
-    # If no related docs found, skip
+    related_docs = _collect_related_docs(md_file, frontmatter, all_docs)
     if not related_docs:
         print(f"No related documents found for {md_file}")
         return False
     
-    # Add related_docs to frontmatter
     frontmatter['related_docs'] = related_docs
-    
-    # Remove existing navigation section if present
     body_clean = re.sub(r'\n---\n\n## Related Documents\n.*$', '', body, flags=re.DOTALL)
     
-    # Build new content
     new_frontmatter = build_frontmatter_yaml(frontmatter)
     navigation = build_navigation_section(related_docs, frontmatter)
     new_content = f"{new_frontmatter}\n\n{body_clean.strip()}{navigation}\n"
     
     if dry_run:
-        print(f"\n{'='*60}")
-        print(f"File: {md_file}")
-        print(f"{'='*60}")
-        print("Related docs that would be added:")
-        print(yaml.dump(related_docs, default_flow_style=False, allow_unicode=True))
-        print("\nNavigation section:")
-        print(navigation)
+        _print_dry_run(md_file, related_docs, navigation)
         return True
     
-    # Write file
-    try:
-        with open(md_file, 'w', encoding='utf-8') as f:
-            f.write(new_content)
-        print(f"Updated: {md_file}")
-        return True
-    except Exception as e:
-        print(f"Error writing {md_file}: {e}", file=sys.stderr)
-        return False
+    return _write_updated_file(md_file, new_content)
 
 
 def main():
