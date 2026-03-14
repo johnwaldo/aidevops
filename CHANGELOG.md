@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.173.0] - 2026-03-14
+
+### Added
+
+- add ripgrep (rg) to required dependencies in setup (#4892)
+
+### Changed
+
+- Documentation: add pulse model constraint to model-routing.md — sonnet only, openai unreliable for orchestration
+- Documentation: note pulse supervisor requires Anthropic sonnet, OpenAI unreliable for orchestration
+
+### Fixed
+
+- remove ssh from required deps in setup-modules/core.sh (#4899)
+
 ## [2.172.29] - 2026-03-14
 
 ### Fixed
