@@ -318,7 +318,6 @@ check_dedup() {
 			echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
 			return 0
 		fi
-
 		if [[ "$setup_pid" == "$$" ]]; then
 			# We wrote this ourselves — proceed
 			return 0
@@ -342,7 +341,6 @@ check_dedup() {
 			echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
 			return 0
 		fi
-
 		# SETUP wrapper is alive but we hold the instance lock — it's a zombie
 		# from a previous cycle. Kill it and proceed.
 		echo "[pulse-wrapper] check_dedup: killing zombie SETUP wrapper $setup_pid" >>"$LOGFILE"
@@ -547,13 +545,16 @@ prefetch_state() {
 
 	# Wait for all parallel fetches with a hard timeout (t1482).
 	# Each repo does 3 gh API calls (pr list, pr list --state all, issue list).
-	# Normal completion: <30s. Timeout at 120s catches hung gh connections.
+	# Normal completion: <30s. Timeout at 60s catches hung gh connections.
+	# Must be well under launchd's 120s StartInterval — the wrapper spends
+	# ~20s on cleanup/normalize before reaching prefetch, so 60s leaves ~40s
+	# for sub-helpers and pulse launch.
 	# Uses poll-based approach (kill -0) instead of blocking wait — wait $pid
 	# blocks until the process exits, so a timeout check between waits is
 	# ineffective when a single wait hangs for minutes.
 	local wait_elapsed=0
 	local all_done=false
-	while [[ "$all_done" != "true" ]] && [[ "$wait_elapsed" -lt 120 ]]; do
+	while [[ "$all_done" != "true" ]] && [[ "$wait_elapsed" -lt 60 ]]; do
 		all_done=true
 		for pid in "${pids[@]}"; do
 			if kill -0 "$pid" 2>/dev/null; then
@@ -618,11 +619,14 @@ prefetch_state() {
 
 	# Append repo hygiene data for LLM triage (t1417)
 	# This includes pr-salvage-helper.sh which iterates all repos sequentially
-	# and can hang on gh API calls. Give it 120s since it does 8 repos.
+	# and can hang on gh API calls. 30s timeout — if it can't finish fast,
+	# the pulse proceeds without hygiene data (degraded but functional).
+	# Total prefetch budget: 60s (parallel) + 30s + 30s + 30s = 150s max,
+	# well within the 600s stage timeout.
 	local hygiene_tmp
 	hygiene_tmp=$(mktemp)
-	run_cmd_with_timeout 120 prefetch_hygiene >"$hygiene_tmp" 2>/dev/null || {
-		echo "[pulse-wrapper] prefetch_hygiene timed out after 120s (non-fatal)" >>"$LOGFILE"
+	run_cmd_with_timeout 30 prefetch_hygiene >"$hygiene_tmp" 2>/dev/null || {
+		echo "[pulse-wrapper] prefetch_hygiene timed out after 30s (non-fatal)" >>"$LOGFILE"
 	}
 	cat "$hygiene_tmp" >>"$STATE_FILE"
 	rm -f "$hygiene_tmp"
@@ -630,8 +634,8 @@ prefetch_state() {
 	# Append CI failure patterns from notification mining (GH#4480)
 	local ci_tmp
 	ci_tmp=$(mktemp)
-	run_cmd_with_timeout 90 prefetch_ci_failures >"$ci_tmp" 2>/dev/null || {
-		echo "[pulse-wrapper] prefetch_ci_failures timed out after 90s (non-fatal)" >>"$LOGFILE"
+	run_cmd_with_timeout 30 prefetch_ci_failures >"$ci_tmp" 2>/dev/null || {
+		echo "[pulse-wrapper] prefetch_ci_failures timed out after 30s (non-fatal)" >>"$LOGFILE"
 	}
 	cat "$ci_tmp" >>"$STATE_FILE"
 	rm -f "$ci_tmp"
@@ -648,8 +652,8 @@ prefetch_state() {
 	# Append failed-notification systemic summary (t3960)
 	local ghfail_tmp
 	ghfail_tmp=$(mktemp)
-	run_cmd_with_timeout 90 prefetch_gh_failure_notifications >"$ghfail_tmp" 2>/dev/null || {
-		echo "[pulse-wrapper] prefetch_gh_failure_notifications timed out after 90s (non-fatal)" >>"$LOGFILE"
+	run_cmd_with_timeout 30 prefetch_gh_failure_notifications >"$ghfail_tmp" 2>/dev/null || {
+		echo "[pulse-wrapper] prefetch_gh_failure_notifications timed out after 30s (non-fatal)" >>"$LOGFILE"
 	}
 	cat "$ghfail_tmp" >>"$STATE_FILE"
 	rm -f "$ghfail_tmp"
