@@ -102,6 +102,10 @@ Tasks with no open blockers - ready to work on. Use `/ready` to refresh this lis
 
 ## Backlog
 
+### SEO/GEO Agent Intelligence
+
+- [ ] t1536 Add site: query optimization intelligence to GEO agents — update query-fanout-research.md, geo-strategy.md, sro-grounding.md, ai-search-readiness.md, and aeo-geo-patterns.md with GPT-5.4 site: operator retrieval patterns: 3-stage retrieval model (broad discovery -> site-specific deep-dive -> third-party validation), site-searchable content architecture, review platform citation strategy (G2/Capterra), UTM citation attribution tracking #feature #seo #geo ~4h model:sonnet logged:2026-03-16 -> [todo/tasks/t1536-brief.md]
+
 ### Email System — Phase 1: Foundation (IMAP/SMTP + Composition)
 
 - [x] t1492 Email provider config templates and privacy ratings — configs/email-providers.json.txt with 15+ providers (Cloudron, Gmail, Google Workspace, Outlook, ProtonMail, Fastmail, mailbox.org, Tutanota, etc.), IMAP/SMTP/JMAP settings, privacy ratings, default folder name mappings, shared mailbox patterns, POP vs IMAP guidance #feature #email #auto-dispatch ~3h model:sonnet logged:2026-03-16 -> [todo/tasks/t1492-brief.md] pr:#5010 completed:2026-03-16
