@@ -100,6 +100,8 @@ Tasks with no open blockers - ready to work on. Use `/ready` to refresh this lis
 - [x] t1534 fix: worker-watchdog.sh --install crashes on Linux (launchd-only) — `cmd_install()`, `cmd_uninstall()`, and `cmd_status()` only support macOS launchd. Add OS detection (`uname -s`) and cron fallback for Linux. Pattern: `cron-helper.sh sync_crontab()`. Core `--check` works fine on Linux — only scheduler management is broken. #bugfix #linux #auto-dispatch ~2h model:sonnet ref:GH#5084 logged:2026-03-16 pr:#5087 completed:2026-03-16
 - [x] t1535 fix: aidevops pulse start silently succeeds on Linux without scheduler installed — `pulse-session-helper.sh` `cmd_start()` creates flag file but never verifies scheduler exists. Hardcoded "launchd" strings at lines 207, 209, 445. Add `check_scheduler()` function, warn on missing scheduler, use OS-appropriate terminology. #bugfix #linux #auto-dispatch ~2h model:sonnet ref:GH#5085 logged:2026-03-16 pr:#5086 completed:2026-03-16
 
+- [ ] t1540 fix: gh auth token missing workflow scope blocks CI workflow PRs — Workers that modify `.github/workflows/` cannot push because the `gh` OAuth token lacks the `workflow` scope. Add `workflow` to required scopes in setup.sh auth flow, add pre-push detection in headless-runtime-helper.sh to warn early when changed files include workflows and token lacks scope, update docs. #bugfix #auth #ci #auto-dispatch ~2h model:sonnet ref:GH#5138 logged:2026-03-17 -> [todo/tasks/t1540-brief.md]
+
 ## Backlog
 
 ### SEO/GEO Agent Intelligence
