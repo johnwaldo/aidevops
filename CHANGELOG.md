@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-03-18
+
+### Added
+
+- pattern-driven model tier downgrade using historical success data (GH#5148) (#5156)
+- add local email address verifier with RCPT TO probing and disposable domain detection (#5133) (#5135)
+- add email address verification tasks (t1538, t1539)
+
+### Changed
+
+- Refactor: simplify dispatch example variable assignment (#5201) (#5207)
+- Refactor: simplify off-peak guard in run_daily_quality_sweep (#5188)
+- Maintenance: simplify redundant two-grep pipeline in loop-common.sh (#5183)
+- Refactor: centralize CSV quoting in printf for email-export-helper (#5178)
+- Maintenance: mark t1542 complete (pr:#5157 completed:2026-03-17) [skip ci]
+- Maintenance: add t1542 TODO entry for GH#5155 orphaned archived scripts
+- Maintenance: claim t1542
+- Maintenance: claim t1541
+- Maintenance: mark t1540 complete (pr:#5139 completed:2026-03-17) [skip ci]
+- Maintenance: add t1540 TODO entry and brief for GH#5138 (workflow scope fix)
+- Maintenance: claim t1540
+- Maintenance: mark t1539 complete (pr:#5135 completed:2026-03-17) [skip ci]
+- Maintenance: mark t1538 complete (pr:#5134 completed:2026-03-17) [skip ci]
+- Documentation: t1538 research findings — Outscraper email_validation API coverage verified (#5134)
+- Maintenance: claim t1539
+- Maintenance: claim t1538
+
+### Fixed
+
+- quote default value in AGENTS_DIR parameter expansion (#5208)
+- wp-helper.sh SSH commands silently failing due to argument concatenation (#5199)
+- add fallback default for paths.agents_dir in dispatch example (#5196)
+- extract last digit sequence from branch name for issue number (#5191) (#5194)
+- address PR #5116 review feedback (#5187)
+- simplify trailing newline check in ensure_trailing_newline() (#5186)
+- use silent _has_crontab check in cmd_status to avoid redundant stderr (#5185)
+- use exact label matching for status:blocked check in pulse-wrapper (#5184)
+- expand tilde in HELPER variable assignment to prevent literal ~ in paths (#5182)
+- comment out fullPage: true example in playwriter.md (#5181)
+- use --argjson instead of printf pipe in backfill-closure-labels.sh (#5180)
+- use precise 90-day window instead of ambiguous 'last quarter' (#5177)
+- remove blanket 2>/dev/null suppression in migrate_orphaned_supervisor (GH#5159) (#5175)
+- remove redundant empty-string check from is_framework_task() (#5174)
+- add 14 orphaned archived scripts to cleanup_deprecated_paths() (#5157)
+- add framework-issue-helper.sh to enforce self-improvement repo routing (GH#5149) (#5154)
+- add structural enforcement for self-improvement repo routing (t1541) (#5152)
+- extend screenshot size guardrails to all Playwright paths (GH#5143) (#5144)
+- add terminal blocker detection to pulse dispatch logic (GH#5141) (#5142)
+- add workflow scope to gh auth flow and pre-push detection (t1540) (#5139)
+- use neutral PULSE_DIR to prevent session accumulation on pulse:false repos (#5137)
+
 ## [3.0.12] - 2026-03-16
 
 ### Changed
