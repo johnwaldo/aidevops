@@ -1737,6 +1737,8 @@ t193,setup.sh fails in non-interactive supervisor deploy step,,bugfix|setup,1h,4
 
 ## In Progress
 
+- [ ] t1543 feat: OAuth multi-account pool plugin for provider credential rotation — add pool module to opencode-aidevops plugin enabling multiple Anthropic OAuth accounts with automatic rotation on rate limits (429). Uses existing plugin auth hook + custom fetch wrapper. Includes /model-accounts-pool tool for account management. #feature #plugin #auth ~4h ref:GH#5243 started:2026-03-19
+
 - [x] t1410 fix review-bot-gate status fallback: CodeRabbit context mismatch — any_bot_has_success_status() greps for 'coderabbitai' but CodeRabbit posts commit status with context 'CodeRabbit'. Grep doesn't match, fallback never triggers, gate fails on rate-limited PRs. Fix: use 'coderabbit' prefix match. After fix, re-run Wait for AI Review Bots on PRs #2989 and #2979. #bugfix #ci ~30m ref:GH#3007 logged:2026-03-06 pr:#3008 completed:2026-03-06
 - [x] t1409 refactor: memory-pressure-monitor — remove runtime alerts for app processes, keep RSS monitoring only. Classify processes as app vs tool; skip runtime checks for apps (Claude, Electron, ShipIt, OpenCode); raise session count threshold to 8. #refactor #monitoring ~1h ref:GH#2992 started:2026-03-06 pr:#2998 completed:2026-03-06
 
