@@ -15,6 +15,8 @@ tools:
 
 Log an issue with the aidevops framework to GitHub.
 
+**This is the recommended way to report issues.** It produces higher-quality reports than the web form because the AI assistant gathers diagnostics, checks for duplicates, and validates the report before submission. All issues from external contributors (non-collaborators) are gated behind maintainer triage (`needs-triage` label) regardless of filing method — a maintainer must approve them before the development pipeline picks them up.
+
 **Arguments**: Optional issue title in quotes, e.g., `/log-issue-aidevops "Update check not working"`
 
 ## Purpose
@@ -23,8 +25,9 @@ When users encounter problems with aidevops (bugs, unexpected behavior, missing 
 
 1. Gathers diagnostic information automatically
 2. Helps the user describe the issue clearly
-3. Creates a GitHub issue on `marcusquinn/aidevops`
-4. Provides the issue URL for tracking
+3. Checks for duplicate issues
+4. Creates a well-structured GitHub issue on `marcusquinn/aidevops`
+5. Provides the issue URL for tracking
 
 ## Workflow
 
