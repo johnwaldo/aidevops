@@ -42,14 +42,6 @@ const AUTH_FAILURE_COOLDOWN_MS = 300_000;
 /** Cooldown after a 429 on the token endpoint (ms) — 5 minutes */
 const TOKEN_ENDPOINT_COOLDOWN_MS = 300_000;
 
-/** Max retry attempts per request across pool accounts */
-const MAX_ROTATION_ATTEMPTS = 5;
-
-const REQUIRED_BETAS = [
-  "oauth-2025-04-20",
-  "interleaved-thinking-2025-05-14",
-];
-
 // ---------------------------------------------------------------------------
 // Token endpoint helpers
 // ---------------------------------------------------------------------------
@@ -90,7 +82,7 @@ async function fetchTokenEndpoint(body, context) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "User-Agent": "claude-cli/2.1.2 (external, cli)",
+      "User-Agent": "claude-cli/2.1.80 (external, cli)",
     },
     body,
   });
@@ -114,8 +106,6 @@ async function fetchTokenEndpoint(body, context) {
 
   return response;
 }
-
-const TOOL_PREFIX = "mcp_";
 
 // ---------------------------------------------------------------------------
 // PKCE helpers (no external dependency — pure crypto)
@@ -370,341 +360,114 @@ function pickNextAccount(provider, excludeEmail) {
 }
 
 // ---------------------------------------------------------------------------
-// Request transformation (matches built-in anthropic auth plugin)
+// ---------------------------------------------------------------------------
+// Auth hook (registers the pool provider for account management only)
 // ---------------------------------------------------------------------------
 
 /**
- * Build request headers for an OAuth API call.
- * Merges incoming headers, sets Bearer auth, required betas, user-agent.
- * @param {any} input - fetch input (string, URL, or Request)
- * @param {any} init - fetch init options
- * @param {string} accessToken
- * @returns {Headers}
- */
-function buildOAuthHeaders(input, init, accessToken) {
-  const requestHeaders = new Headers();
-
-  if (input instanceof Request) {
-    input.headers.forEach((value, key) => {
-      requestHeaders.set(key, value);
-    });
-  }
-
-  const initHeaders = init?.headers;
-  if (initHeaders) {
-    if (initHeaders instanceof Headers) {
-      initHeaders.forEach((value, key) => {
-        requestHeaders.set(key, value);
-      });
-    } else if (Array.isArray(initHeaders)) {
-      for (const [key, value] of initHeaders) {
-        if (typeof value !== "undefined") {
-          requestHeaders.set(key, String(value));
-        }
-      }
-    } else {
-      for (const [key, value] of Object.entries(initHeaders)) {
-        if (typeof value !== "undefined") {
-          requestHeaders.set(key, String(value));
-        }
-      }
-    }
-  }
-
-  // Merge beta headers
-  const incomingBeta = requestHeaders.get("anthropic-beta") || "";
-  const incomingBetasList = incomingBeta
-    .split(",")
-    .map((b) => b.trim())
-    .filter(Boolean);
-  const mergedBetas = [
-    ...new Set([...REQUIRED_BETAS, ...incomingBetasList]),
-  ].join(",");
-
-  requestHeaders.set("authorization", `Bearer ${accessToken}`);
-  requestHeaders.set("anthropic-beta", mergedBetas);
-  requestHeaders.set("user-agent", "claude-cli/2.1.2 (external, cli)");
-  requestHeaders.delete("x-api-key");
-
-  return requestHeaders;
-}
-
-/**
- * Transform request body: prefix tool names with mcp_, sanitize system prompt.
- * Matches the built-in anthropic auth plugin behaviour.
- * @param {string|undefined} body
- * @returns {string|undefined}
- */
-function transformRequestBody(body) {
-  if (!body || typeof body !== "string") return body;
-  try {
-    const parsed = JSON.parse(body);
-
-    // Sanitize system prompt — Anthropic server blocks "OpenCode" string
-    if (parsed.system && Array.isArray(parsed.system)) {
-      parsed.system = parsed.system.map((item) => {
-        if (item.type === "text" && item.text) {
-          return {
-            ...item,
-            text: item.text
-              .replace(/OpenCode/g, "Claude Code")
-              .replace(/opencode/gi, "Claude"),
-          };
-        }
-        return item;
-      });
-    }
-
-    // Prefix tool definitions
-    if (parsed.tools && Array.isArray(parsed.tools)) {
-      parsed.tools = parsed.tools.map((tool) => ({
-        ...tool,
-        name: tool.name ? `${TOOL_PREFIX}${tool.name}` : tool.name,
-      }));
-    }
-
-    // Prefix tool_use blocks in messages
-    if (parsed.messages && Array.isArray(parsed.messages)) {
-      parsed.messages = parsed.messages.map((msg) => {
-        if (msg.content && Array.isArray(msg.content)) {
-          msg.content = msg.content.map((block) => {
-            if (block.type === "tool_use" && block.name) {
-              return { ...block, name: `${TOOL_PREFIX}${block.name}` };
-            }
-            return block;
-          });
-        }
-        return msg;
-      });
-    }
-
-    return JSON.stringify(parsed);
-  } catch {
-    return body;
-  }
-}
-
-/**
- * Transform response: strip mcp_ prefix from tool names in streaming response.
- * @param {Response} response
- * @returns {Response}
- */
-function transformResponse(response) {
-  if (!response.body) return response;
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-
-  const stream = new ReadableStream({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
-      }
-      let text = decoder.decode(value, { stream: true });
-      text = text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"');
-      controller.enqueue(encoder.encode(text));
-    },
-  });
-
-  return new Response(stream, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
-/**
- * Add ?beta=true to /v1/messages requests if not already present.
- * @param {any} input
- * @returns {{ input: any, url: URL|null }}
- */
-function maybeAddBetaParam(input) {
-  let requestUrl = null;
-  try {
-    if (typeof input === "string" || input instanceof URL) {
-      requestUrl = new URL(input.toString());
-    } else if (input instanceof Request) {
-      requestUrl = new URL(input.url);
-    }
-  } catch {
-    requestUrl = null;
-  }
-
-  if (
-    requestUrl &&
-    requestUrl.pathname === "/v1/messages" &&
-    !requestUrl.searchParams.has("beta")
-  ) {
-    requestUrl.searchParams.set("beta", "true");
-    const newInput =
-      input instanceof Request
-        ? new Request(requestUrl.toString(), input)
-        : requestUrl;
-    return { input: newInput, url: requestUrl };
-  }
-
-  return { input, url: requestUrl };
-}
-
-// ---------------------------------------------------------------------------
-// Pool fetch wrapper (the core rotation logic)
-// ---------------------------------------------------------------------------
-
-/**
- * Create a fetch function that rotates through pool accounts on rate limits.
- * @param {string} provider
- * @returns {(input: any, init?: any) => Promise<Response>}
- */
-function createPoolFetch(provider) {
-  return async function poolFetch(input, init) {
-    let currentAccount = pickAccount(provider);
-    if (!currentAccount) {
-      // No accounts available — fall through to default fetch (will likely fail)
-      return fetch(input, init);
-    }
-
-    for (let attempt = 0; attempt < MAX_ROTATION_ATTEMPTS; attempt++) {
-      const accessToken = await ensureValidToken(provider, currentAccount);
-      if (!accessToken) {
-        // Token refresh failed — try next account
-        currentAccount = pickNextAccount(provider, currentAccount.email);
-        if (!currentAccount) break;
-        continue;
-      }
-
-      // Mark as used
-      patchAccount(provider, currentAccount.email, {
-        lastUsed: new Date().toISOString(),
-        status: "active",
-      });
-
-      // Build the request
-      const headers = buildOAuthHeaders(input, init, accessToken);
-      const body = transformRequestBody(init?.body);
-      const { input: finalInput } = maybeAddBetaParam(input);
-
-      const response = await fetch(finalInput, {
-        ...init,
-        body,
-        headers,
-      });
-
-      // Success — transform and return
-      if (response.ok || (response.status >= 200 && response.status < 400)) {
-        return transformResponse(response);
-      }
-
-      // Rate limited — rotate to next account
-      if (response.status === 429) {
-        const retryAfter = response.headers.get("retry-after");
-        const cooldownMs = retryAfter
-          ? parseInt(retryAfter, 10) * 1000
-          : RATE_LIMIT_COOLDOWN_MS;
-
-        patchAccount(provider, currentAccount.email, {
-          status: "rate-limited",
-          cooldownUntil: Date.now() + cooldownMs,
-        });
-
-        const next = pickNextAccount(provider, currentAccount.email);
-        if (!next) {
-          // All accounts exhausted — return the 429 response
-          return transformResponse(response);
-        }
-        currentAccount = next;
-        continue;
-      }
-
-      // Auth error — mark and rotate
-      if (response.status === 401 || response.status === 403) {
-        patchAccount(provider, currentAccount.email, {
-          status: "auth-error",
-          cooldownUntil: Date.now() + AUTH_FAILURE_COOLDOWN_MS,
-        });
-
-        const next = pickNextAccount(provider, currentAccount.email);
-        if (!next) {
-          return transformResponse(response);
-        }
-        currentAccount = next;
-        continue;
-      }
-
-      // Other error — return as-is (don't rotate on 4xx/5xx that aren't rate/auth)
-      return transformResponse(response);
-    }
-
-    // All attempts exhausted — make a plain fetch as last resort
-    return fetch(input, init);
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Auth hook (registers the pool provider)
-// ---------------------------------------------------------------------------
-
-/**
- * Seed a placeholder auth entry for the pool provider in OpenCode's auth.json.
- * Required because OpenCode only shows providers in the connect dialog if they
- * have an auth entry or exist on models.dev.
+ * Inject a pool token into the built-in "anthropic" provider's auth.json entry.
+ * On session start, picks the least-recently-used account and writes its token
+ * so the built-in provider uses it with all its SDK magic (headers, streaming, etc).
+ * Also seeds a placeholder for the "anthropic-pool" provider (auth flow only).
  * @param {any} client - OpenCode SDK client
  */
 export async function initPoolAuth(client) {
+  // Seed the pool provider entry (for "Add Account" OAuth flow)
   try {
     const existing = await client.auth.get({ path: { id: "anthropic-pool" } });
-    if (existing?.data) return;
+    if (!existing?.data) {
+      await client.auth.set({
+        path: { id: "anthropic-pool" },
+        body: { type: "pending", refresh: "", access: "", expires: 0 },
+      });
+      console.error("[aidevops] OAuth pool: seeded auth entry for anthropic-pool");
+    }
   } catch {
-    // No entry — proceed to seed
+    try {
+      await client.auth.set({
+        path: { id: "anthropic-pool" },
+        body: { type: "pending", refresh: "", access: "", expires: 0 },
+      });
+      console.error("[aidevops] OAuth pool: seeded auth entry for anthropic-pool");
+    } catch (err) {
+      console.error(`[aidevops] OAuth pool: failed to seed auth entry: ${err.message}`);
+    }
   }
+
+  // Inject pool token into built-in anthropic provider
+  await injectPoolToken(client);
+}
+
+/**
+ * Pick the best pool account and inject its token into the built-in "anthropic"
+ * provider's auth.json entry. The built-in provider handles all SDK magic.
+ * @param {any} client - OpenCode SDK client
+ * @param {string} [skipEmail] - email to skip (for rotation on 429)
+ * @returns {boolean} true if a token was injected
+ */
+export async function injectPoolToken(client, skipEmail) {
+  const accounts = getAccounts("anthropic");
+  if (accounts.length === 0) return false;
+
+  // Pick least-recently-used account, optionally skipping one
+  let account = null;
+  const sorted = [...accounts]
+    .filter((a) => a.status === "active" && a.email !== skipEmail)
+    .sort((a, b) => new Date(a.lastUsed || 0) - new Date(b.lastUsed || 0));
+
+  if (sorted.length === 0) {
+    // All accounts skipped or inactive — try any active account
+    account = accounts.find((a) => a.status === "active");
+  } else {
+    account = sorted[0];
+  }
+
+  if (!account) return false;
+
+  // Ensure token is valid (refresh if needed)
+  const accessToken = await ensureValidToken("anthropic", account);
+  if (!accessToken) {
+    console.error(`[aidevops] OAuth pool: failed to get valid token for ${account.email}`);
+    return false;
+  }
+
+  // Write to built-in anthropic provider's auth entry
   try {
     await client.auth.set({
-      path: { id: "anthropic-pool" },
-      body: { type: "pending", refresh: "", access: "", expires: 0 },
+      path: { id: "anthropic" },
+      body: {
+        type: "oauth",
+        refresh: account.refresh,
+        access: account.access,
+        expires: account.expires,
+      },
     });
-    console.error("[aidevops] OAuth pool: seeded auth entry for anthropic-pool");
+
+    // Mark as used
+    patchAccount("anthropic", account.email, {
+      lastUsed: new Date().toISOString(),
+      status: "active",
+    });
+
+    console.error(`[aidevops] OAuth pool: injected token for ${account.email} into built-in anthropic provider`);
+    return true;
   } catch (err) {
-    console.error(`[aidevops] OAuth pool: failed to seed auth entry: ${err.message}`);
+    console.error(`[aidevops] OAuth pool: failed to inject token: ${err.message}`);
+    return false;
   }
 }
 
 /**
  * Create the auth hook for the anthropic-pool provider.
- * This is a SEPARATE provider from the built-in "anthropic" — it does not
- * override or interfere with the built-in auth plugin.
+ * This provider exists solely for the "Add Account to Pool" OAuth flow.
+ * It has no models — users select models from the built-in "anthropic" provider,
+ * which uses pool tokens injected into auth.json by initPoolAuth/injectPoolToken.
  * @param {any} client - OpenCode SDK client
  * @returns {import('@opencode-ai/plugin').AuthHook}
  */
 export function createPoolAuthHook(client) {
   return {
     provider: "anthropic-pool",
-
-    /**
-     * Loader: called when OpenCode needs credentials for this provider.
-     * Returns pool fetch wrapper if accounts exist, empty otherwise.
-     */
-    async loader(getAuth, provider) {
-      const accounts = getAccounts("anthropic");
-      if (accounts.length === 0) {
-        return {};
-      }
-
-      // Zero out costs for OAuth (Max plan pricing)
-      for (const model of Object.values(provider.models)) {
-        model.cost = {
-          input: 0,
-          output: 0,
-          cache: { read: 0, write: 0 },
-        };
-      }
-
-      return {
-        apiKey: "",
-        fetch: createPoolFetch("anthropic"),
-      };
-    },
 
     methods: [
       {
@@ -790,7 +553,7 @@ export function createPoolAuthHook(client) {
                     const profileResp = await fetch(endpoint, {
                       headers: {
                         "Authorization": `Bearer ${json.access_token}`,
-                        "User-Agent": "claude-cli/2.1.2 (external, cli)",
+                        "User-Agent": "claude-cli/2.1.80 (external, cli)",
                       },
                       redirect: "follow",
                     });
@@ -829,6 +592,9 @@ export function createPoolAuthHook(client) {
                 `[aidevops] OAuth pool: added ${resolvedEmail} (${totalAccounts} account${totalAccounts === 1 ? "" : "s"} total)`,
               );
 
+              // Inject the new token into the built-in anthropic provider
+              await injectPoolToken(client);
+
               return {
                 type: "success",
                 refresh: json.refresh_token,
@@ -844,8 +610,10 @@ export function createPoolAuthHook(client) {
 }
 
 /**
- * Register the anthropic-pool provider with explicit model definitions.
- * Required because models.dev doesn't know about custom providers.
+ * Register the anthropic-pool provider (auth-only, no models).
+ * This provider exists solely to provide the "Add Account to Pool" OAuth flow.
+ * Models are served by the built-in "anthropic" provider, which uses pool tokens
+ * injected into auth.json.
  * @param {any} config - OpenCode config object
  * @returns {number} 1 if registered, 0 if already exists
  */
@@ -854,38 +622,10 @@ export function registerPoolProvider(config) {
   if (config.provider["anthropic-pool"]) return 0;
 
   config.provider["anthropic-pool"] = {
-    name: "Anthropic Pool",
+    name: "Anthropic Pool (Account Management)",
     npm: "@ai-sdk/anthropic",
     api: "https://api.anthropic.com/v1",
-    models: {
-      "claude-opus-4-6": {
-        name: "Claude Opus 4.6",
-        attachment: true, reasoning: true, tool_call: true,
-        temperature: true, interleaved: true,
-        modalities: { input: ["text", "image", "pdf"], output: ["text"] },
-        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-        limit: { context: 200000, output: 32000 },
-        family: "claude-4",
-      },
-      "claude-sonnet-4-6": {
-        name: "Claude Sonnet 4.6",
-        attachment: true, reasoning: true, tool_call: true,
-        temperature: true, interleaved: true,
-        modalities: { input: ["text", "image", "pdf"], output: ["text"] },
-        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-        limit: { context: 200000, output: 16000 },
-        family: "claude-4",
-      },
-      "claude-haiku-4-5": {
-        name: "Claude Haiku 4.5",
-        attachment: true, tool_call: true, temperature: true,
-        modalities: { input: ["text", "image", "pdf"], output: ["text"] },
-        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-        limit: { context: 200000, output: 8192 },
-        family: "claude-4",
-      },
-
-    },
+    models: {},
   };
 
   return 1;
@@ -897,13 +637,15 @@ export function registerPoolProvider(config) {
 
 /**
  * Create the model-accounts-pool tool definition.
+ * @param {any} client - OpenCode SDK client (for token injection)
  * @returns {import('@opencode-ai/plugin').ToolDefinition}
  */
-export function createPoolTool() {
+export function createPoolTool(client) {
   return {
     description:
       "Manage OAuth account pool for provider credential rotation. " +
       "Use 'list' to see all accounts and their status, " +
+      "'rotate' to switch to the next pool account, " +
       "'remove <email>' to remove an account, " +
       "'status' for rotation statistics. " +
       "The agent should route natural language requests about managing " +
@@ -1028,8 +770,30 @@ export function createPoolTool() {
           return `Reset: ${parts.join(", ")}. Token endpoint requests will proceed on next attempt.`;
         }
 
+        case "rotate": {
+          if (accounts.length < 2) {
+            return `Cannot rotate: only ${accounts.length} account(s) in pool. Add more accounts via Ctrl+A → Anthropic Pool.`;
+          }
+
+          // Find which account is currently injected (most recently used)
+          const current = [...accounts].sort(
+            (a, b) => new Date(b.lastUsed || 0) - new Date(a.lastUsed || 0),
+          )[0];
+
+          const injected = await injectPoolToken(client, current?.email);
+          if (injected) {
+            // Find which account was injected
+            const nowAccounts = getAccounts(provider);
+            const newest = [...nowAccounts].sort(
+              (a, b) => new Date(b.lastUsed || 0) - new Date(a.lastUsed || 0),
+            )[0];
+            return `Rotated: now using ${newest?.email || "unknown"}. Previous: ${current?.email || "unknown"}.`;
+          }
+          return "Rotation failed — no other active accounts available.";
+        }
+
         default:
-          return `Unknown action: ${args.action}. Available: list, remove, status, reset-cooldowns`;
+          return `Unknown action: ${args.action}. Available: list, rotate, remove, status, reset-cooldowns`;
       }
     },
   };

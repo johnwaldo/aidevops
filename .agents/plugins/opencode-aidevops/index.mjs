@@ -1078,7 +1078,7 @@ export async function AidevopsPlugin({ directory, client }) {
     runMarkdownQualityPipeline,
     scanForSecrets,
   });
-  baseTools["model-accounts-pool"] = createPoolTool();
+  baseTools["model-accounts-pool"] = createPoolTool(client);
 
   return {
     // Phase 1+2: Lightweight agent index + MCP registration
