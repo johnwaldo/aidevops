@@ -484,28 +484,36 @@ setup_opencode_plugins() {
 		return 0
 	fi
 
-	local opencode_config
-	if ! opencode_config=$(find_opencode_config); then
-		print_skip "OpenCode plugins" "OpenCode config not found" "Run 'opencode' once to create config, then re-run setup"
-		setup_track_deferred "OpenCode plugins" "Run 'opencode' once to create config"
-		return 0
-	fi
-
-	if ! command -v jq &>/dev/null; then
-		print_skip "OpenCode plugins" "jq not installed" "Install jq: brew install jq (macOS) or apt install jq"
-		setup_track_deferred "OpenCode plugins" "Install jq"
-		return 0
-	fi
-
 	# Prerequisites met — proceed with setup
 	print_info "Setting up OpenCode plugins..."
 
-	# Setup aidevops compaction plugin (local file plugin)
-	local aidevops_plugin_path="$HOME/.aidevops/agents/plugins/opencode-aidevops/index.mjs"
+	# Setup aidevops plugin via local plugin directory (not opencode.json plugin array).
+	# OpenCode's plugin array is npm-only. Local plugins must be symlinked to:
+	#   ~/.config/opencode/plugins/  (global)
+	#   .opencode/plugins/           (project-level)
+	# See: https://opencode.ai/docs/plugins/
+	local plugins_dir="$HOME/.config/opencode/plugins"
+	local aidevops_plugin_src="$HOME/.aidevops/agents/plugins/opencode-aidevops"
+	local aidevops_plugin_dst="$plugins_dir/opencode-aidevops"
 	local pool_plugin_registered="false"
-	if [[ -f "$aidevops_plugin_path" ]]; then
-		add_opencode_plugin "file://$HOME/.aidevops" "file://${aidevops_plugin_path}" "$opencode_config"
-		print_success "aidevops compaction plugin registered (preserves context across compaction)"
+
+	if [[ ! -f "$aidevops_plugin_src/index.mjs" ]]; then
+		print_skip "OpenCode plugins" "aidevops plugin not found at $aidevops_plugin_src"
+		setup_track_deferred "OpenCode plugins" "Install/restore aidevops"
+		return 0
+	fi
+
+	# Create plugins directory if needed
+	mkdir -p "$plugins_dir"
+
+	# Symlink if not already registered
+	if [[ -L "$aidevops_plugin_dst" || -d "$aidevops_plugin_dst" ]]; then
+		print_success "aidevops plugin already registered at ~/.config/opencode/plugins/"
+		setup_track_configured "OpenCode plugins"
+		pool_plugin_registered="true"
+	else
+		ln -sf "$aidevops_plugin_src" "$aidevops_plugin_dst"
+		print_success "aidevops plugin registered at ~/.config/opencode/plugins/"
 		setup_track_configured "OpenCode plugins"
 		pool_plugin_registered="true"
 	fi
