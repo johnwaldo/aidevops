@@ -47,8 +47,29 @@ source "${SCRIPT_DIR}/shared-constants.sh"
 #   windsurf:               Windsurf process
 #   aider:                  aider (Python process)
 
+# Get system RAM in GB (used as default session threshold).
+# Each session uses ~100-400 MB, so RAM in GB is a reasonable max.
+get_system_ram_gb() {
+	local ram_gb=16
+	if [[ "$(uname)" == "Darwin" ]]; then
+		local ram_bytes
+		ram_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
+		if [[ "$ram_bytes" -gt 0 ]]; then
+			ram_gb=$((ram_bytes / 1073741824))
+		fi
+	elif [[ -f /proc/meminfo ]]; then
+		local ram_kb
+		ram_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo "0")
+		if [[ "$ram_kb" -gt 0 ]]; then
+			ram_gb=$((ram_kb / 1048576))
+		fi
+	fi
+	echo "$ram_gb"
+	return 0
+}
+
 # Get the configured maximum session count.
-# Priority: env var > JSONC config > default (5)
+# Priority: env var > JSONC config > default (system RAM in GB)
 get_max_sessions() {
 	# Environment variable override (highest priority)
 	if [[ -n "${AIDEVOPS_MAX_SESSIONS:-}" ]]; then
@@ -59,13 +80,16 @@ get_max_sessions() {
 	# JSONC config system
 	if type config_get &>/dev/null; then
 		local val
-		val=$(config_get "safety.max_interactive_sessions" "5")
-		echo "$val"
-		return 0
+		val=$(config_get "safety.max_interactive_sessions" "")
+		if [[ -n "$val" && "$val" != "5" ]]; then
+			# User explicitly configured a value (not the old default)
+			echo "$val"
+			return 0
+		fi
 	fi
 
-	# Default
-	echo "5"
+	# Default: system RAM in GB (e.g., 64 GB RAM = threshold of 64)
+	get_system_ram_gb
 	return 0
 }
 
