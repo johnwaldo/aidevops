@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.17] - 2026-03-20
+
+### Changed
+
+- Documentation: fix cross-repo task creation workflow to prevent duplicate issues
+- Maintenance: add issue refs for t1546 (GH#5311), t1547 (GH#5314)
+- Maintenance: add t1546, t1547 — runtime parity tasks for Claude Code CLI + OAuth pool setup
+- Maintenance: claim t1547
+- Maintenance: claim t1546
+
 ## [3.1.16] - 2026-03-20
 
 ### Changed
