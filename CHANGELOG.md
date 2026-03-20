@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.19] - 2026-03-20
+
+### Added
+
+- re-implement anthropic provider auth independent of bundled plugin
+
 ## [3.1.18] - 2026-03-20
 
 ### Added
