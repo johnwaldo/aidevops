@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.18] - 2026-03-20
+
+### Added
+
+- deploy primary-agent slash commands with Claude/OpenCode parity (#5316)
+
+### Changed
+
+- Refactor: OAuth pool injects tokens into built-in provider instead of custom fetch
+- Maintenance: mark t1546 complete (pr:#5315 completed:2026-03-20) [skip ci]
+- Maintenance: mark t1547 complete (pr:#5316 completed:2026-03-20) [skip ci]
+
 ## [3.1.17] - 2026-03-20
 
 ### Changed
