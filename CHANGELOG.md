@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.41] - 2026-03-21
+
+### Fixed
+
+- install profile update job whenever gh is available, not only when profile repo exists (#5409)
+
 ## [3.1.40] - 2026-03-21
 
 ### Added
