@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.72] - 2026-03-23
+
+### Fixed
+
+- pool injection idle status + headless dispatch timing race (#5541)
+- restore cmd_rotate (auth.json), cmd_status, cmd_assign_pending lost in PR #5535 merge (#5536)
+
 ## [3.1.71] - 2026-03-23
 
 ### Changed
