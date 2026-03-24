@@ -204,7 +204,15 @@ cmd_recall() {
 		fi
 	done
 	set +f # Re-enable globbing
-	local escaped_query="$tokenised_query"
+	# Escape tokenised_query for use in `.param set :query "${param_query}"`.
+	# sqlite3 `.param set` with a double-quoted VALUE treats it as a string
+	# literal. Apostrophes pass through double quotes safely (O'Reilly works).
+	# We must escape: (1) backslashes, (2) double quotes — because the FTS5
+	# token quoting uses double quotes ("word") which would otherwise be
+	# consumed by the heredoc's double-quote expansion.
+	# Ref: https://sqlite.org/cli.html (.param set), GH#5683
+	local param_query="${tokenised_query//\\/\\\\}"
+	param_query="${param_query//\"/\\\"}"
 
 	# Build filters with validation
 	local extra_filters=""
@@ -259,7 +267,7 @@ cmd_recall() {
 	local results
 	results=$(
 		db -json "$MEMORY_DB" <<EOF
-.param set :query "$escaped_query"
+.param set :query "${param_query}"
 SELECT 
     learnings.id,
     learnings.content,
@@ -316,6 +324,7 @@ EOF
 		if [[ -f "$global_db" ]]; then
 			shared_results=$(
 				db -json "$global_db" <<EOF
+.param set :query "${param_query}"
 SELECT 
     learnings.id,
     learnings.content,
@@ -328,7 +337,8 @@ SELECT
     bm25(learnings) as score
 FROM learnings
 LEFT JOIN learning_access ON learnings.id = learning_access.id
-WHERE learnings MATCH '$escaped_query' $extra_filters
+$entity_fts_join
+WHERE learnings MATCH :query $extra_filters $auto_join_filter $entity_fts_where
 ORDER BY score
 LIMIT $limit;
 EOF
