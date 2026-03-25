@@ -1,8 +1,8 @@
 # Chapter 18: CRO Case Studies and Implementation Playbook
 
-This chapter continues from the foundational CRO concepts covered in Chapters 1-12 of SKILL.md. Here you'll find detailed case studies from real-world CRO implementations across e-commerce, SaaS, and B2B services, followed by a comprehensive implementation playbook to help you execute CRO initiatives in your organization.
+This chapter continues from the foundational CRO concepts covered in [Chapter 1](./CHAPTER-01.md) through [Chapter 12](./CHAPTER-12.md). Here you'll find detailed case studies from real-world CRO implementations across e-commerce, SaaS, and B2B services, followed by a comprehensive implementation playbook to help you execute CRO initiatives in your organization.
 
-## 13.1 E-commerce CRO Case Study: Fashion Retailer
+## 18.1 E-commerce CRO Case Study: Fashion Retailer
 
 **Company:** Online fashion retailer ($50M annual revenue)
 **Challenge:** High traffic, low conversion (1.2%), high cart abandonment (72%)
@@ -60,7 +60,7 @@ This chapter continues from the foundational CRO concepts covered in Chapters 1-
 
 **Annual Impact:** $5.5M additional revenue
 
-## 13.2 SaaS CRO Case Study: B2B Platform
+## 18.2 SaaS CRO Case Study: B2B Platform
 
 **Company:** Project management SaaS ( freemium model)
 **Challenge:** Low trial-to-paid conversion (8%), high churn
@@ -117,7 +117,7 @@ This chapter continues from the foundational CRO concepts covered in Chapters 1-
 
 **Annual Impact:** $864K additional revenue + improved retention
 
-## 13.3 Lead Generation Case Study: B2B Services
+## 18.3 Lead Generation Case Study: B2B Services
 
 **Company:** Consulting firm ($20M annual revenue)
 **Challenge:** Low lead quality, high cost per lead
@@ -174,7 +174,7 @@ This chapter continues from the foundational CRO concepts covered in Chapters 1-
 
 **Annual Impact:** $33.6M additional pipeline
 
-## 13.4 Implementation Playbook
+## 18.4 Implementation Playbook
 
 ### Phase 1: Foundation (Weeks 1-4)
 

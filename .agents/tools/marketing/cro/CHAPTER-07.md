@@ -1187,8 +1187,5 @@ AR shopping experiences:
 
 New CTA paradigms for immersive experiences.
 
----
-
-*[Continuing with remaining sections to reach 100,000 words...]*
 
 

@@ -951,7 +951,15 @@ Style for better aesthetics:
 
 ```css
 input[type="checkbox"] {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .checkbox-label::before {
@@ -1336,7 +1344,7 @@ Changes:
 - Reduced required fields from 11 to 3
 - Changed generic fields to more engaging question
 - Made phone optional
-- Removed newsletter checkbox (auto-subscribe everyone, they can unsubscribe)
+- Added clear opt-in newsletter checkbox (unchecked by default, with explicit consent language and easy unsubscribe)
 - Rest of data collected via progressive profiling and enrichment
 
 Conversion Rate: 9.7%

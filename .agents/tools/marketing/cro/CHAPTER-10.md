@@ -778,6 +778,7 @@ After: [Order Confirmed ✓] → Redirects to confirmation page
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const button = form.querySelector('button[type="submit"]');
+  const formData = new FormData(form);
   
   // Disable and show loading
   button.disabled = true;

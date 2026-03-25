@@ -1,6 +1,6 @@
 # Chapter 21: CRO Testing Masterclass
 
-## 17.1 Hypothesis Development
+## 21.1 Hypothesis Development
 
 ### The Hypothesis Framework
 
@@ -30,7 +30,7 @@ Every test should start with a clear hypothesis following this structure:
 | Resource Requirements | 25% | 6 | 1.5 |
 | **Total** | | | **7.55** |
 
-## 17.2 Advanced Test Design
+## 21.2 Advanced Test Design
 
 ### Factorial Experiments
 
@@ -68,7 +68,7 @@ Dynamic allocation of traffic to winning variations during the test.
 - Long-running campaigns
 - Seasonal adjustments
 
-## 17.3 Statistical Rigor
+## 21.3 Statistical Rigor
 
 ### Type I and Type II Errors
 
@@ -94,7 +94,7 @@ Stop tests early when significance is reached.
 - Pocock boundaries
 - Always Valid P-values
 
-## 17.4 Test Analysis Deep Dive
+## 21.4 Test Analysis Deep Dive
 
 ### Segment-Level Analysis
 

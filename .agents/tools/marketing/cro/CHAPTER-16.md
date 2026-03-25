@@ -307,7 +307,7 @@ def calculate_rfm_scores(df):
     """
     Calculate RFM scores (1-5 scale)
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
     
     # Calculate metrics
     snapshot_date = df['purchase_date'].max() + timedelta(days=1)
@@ -410,6 +410,7 @@ def create_cohort_table(df, period='M'):
     """
     Create cohort retention table
     """
+    from operator import attrgetter
     # Get first purchase date for each customer
     df['first_purchase'] = df.groupby('customer_id')['purchase_date'].transform('min')
     
@@ -524,7 +525,7 @@ channels = ['paid_social', 'paid_search', 'organic', 'referral']
 
 for channel in channels:
     customers = get_customers_by_channel(channel)
-    avg_ltv = predict_ltv(customers).mean()
+    avg_ltv = predict_ltv(customers, model).mean()
     cac = get_customer_acquisition_cost(channel)
     
     roi = (avg_ltv - cac) / cac

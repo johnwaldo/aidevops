@@ -290,9 +290,7 @@ Most important nav items visible, rest hidden in ☰.
 - **Limit Top-Level Items**: 5-7 maximum
 - **Search Prominent**: Mobile users often search rather than browse
 - **Sticky Header**: Keeps nav accessible as user scrolls
-- **Clear Icons**: If using icon-only, make them
-
- universally recognizable
+- **Clear Icons**: If using icon-only, make them universally recognizable
 - **Fast Performance**: Mobile nav should load instantly
 
 **Search Optimization**:

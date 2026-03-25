@@ -57,7 +57,7 @@ Detect IP on server, render appropriate content.
 - Cloudflare Workers (edge personalization)
 - MaxMind GeoIP
 - ipapi.co
-- Google Optimize (with geo-targeting)
+- AB Tasty, Optimizely, or VWO (with geo-targeting, GA4-compatible)
 
 **Real Example - Booking.com**:
 Shows prices in local currency, highlights nearby properties, displays local payment methods.
@@ -435,7 +435,7 @@ Overall lift: 23% vs standard A/B test (which showed 8% lift).
 ### Personalization Tools
 
 **Free/Built-In**:
-- Google Optimize (free, basic personalization)
+- AB Tasty, Optimizely, or VWO (GA4-compatible A/B testing and personalization)
 - WordPress plugins (Geotargeting WP, If-So)
 - Custom JavaScript (DIY approach)
 
@@ -572,7 +572,7 @@ Machine learning models that predict:
 - What testimonial will resonate
 - Optimal time to show popup
 
-**Example**: Google Optimize now uses ML to automatically allocate traffic to best-performing variants.
+**Example**: Modern A/B testing platforms (AB Tasty, Optimizely, VWO) use ML to automatically allocate traffic to best-performing variants.
 
 **Predictive Personalization**:
 Anticipate what user needs before they ask.

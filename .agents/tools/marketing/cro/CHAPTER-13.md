@@ -422,5 +422,5 @@ Analytics answer "how much."
 
 ---
 
-*This comprehensive deep dive into CRO continues with Landing Page Teardowns and Personalization in the next sections...*
+*This deep dive continues in [Chapter 14: Landing Page Teardowns](./CHAPTER-14.md) and [Chapter 15: Personalization](./CHAPTER-15.md).*
 

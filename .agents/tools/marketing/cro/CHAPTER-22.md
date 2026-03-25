@@ -1,6 +1,6 @@
 # Chapter 22: E-commerce CRO Deep Dive
 
-## 18.1 Product Page Optimization
+## 22.1 Product Page Optimization
 
 ### High-Converting Product Page Elements
 
@@ -37,7 +37,7 @@
 - Alt text for accessibility
 - Zoom functionality
 
-## 18.2 Cart and Checkout Optimization
+## 22.2 Cart and Checkout Optimization
 
 ### Cart Page Best Practices
 
@@ -75,7 +75,7 @@
 4. Clear error messaging
 5. Order summary sidebar
 
-## 18.3 Mobile Commerce Optimization
+## 22.3 Mobile Commerce Optimization
 
 ### Mobile-Specific Considerations
 
@@ -110,7 +110,7 @@
 - Clear security indicators
 - Quick confirmation
 
-## 18.4 Personalization for E-commerce
+## 22.4 Personalization for E-commerce
 
 ### Product Recommendations
 
@@ -143,7 +143,7 @@
 - Member-exclusive pricing
 - Flash deals
 
-## 18.5 Category and Search Optimization
+## 22.5 Category and Search Optimization
 
 ### Category Page CRO
 
@@ -173,7 +173,7 @@
 - Results count
 - Related searches
 
-## 18.6 Post-Purchase Optimization
+## 22.6 Post-Purchase Optimization
 
 ### Order Confirmation
 

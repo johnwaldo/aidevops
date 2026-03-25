@@ -1,6 +1,6 @@
 # Chapter 23: SaaS CRO Optimization
 
-## 19.1 Trial-to-Paid Conversion
+## 23.1 Trial-to-Paid Conversion
 
 ### The SaaS Trial Challenge
 
@@ -41,7 +41,7 @@ Standard 14-day trials aren't optimal for all products.
 - Require specific actions to extend
 - Use as conversion opportunity
 
-## 19.2 Pricing Page Optimization
+## 23.2 Pricing Page Optimization
 
 ### Pricing Page Best Practices
 
@@ -69,7 +69,7 @@ Standard 14-day trials aren't optimal for all products.
 - Team size adjustments
 - Feature toggles
 
-## 19.3 Product-Led Growth CRO
+## 23.3 Product-Led Growth CRO
 
 ### PLG Principles
 
@@ -105,7 +105,7 @@ Standard 14-day trials aren't optimal for all products.
 - Team size growth
 - Usage milestone
 
-## 19.4 B2B SaaS Specifics
+## 23.4 B2B SaaS Specifics
 
 ### Multi-Stakeholder Conversion
 

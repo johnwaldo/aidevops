@@ -1408,7 +1408,7 @@ Let's analyze pricing pages from successful companies across industries, identif
 2. Multi-month discounts (not just first box)
 3. Annual plan option
 4. Customer meal photos (UGC)
-✓ Comparison: "vs grocery store + time"
+5. Comparison: "vs grocery store + time"
 
 **#13 - Spotify**
 **URL**: spotify.com/premium
@@ -2177,7 +2177,7 @@ Let's analyze pricing pages from successful companies across industries, identif
 4. Testimonials/case studies per tier
 5. Show time saved with async video
 
-**#42 - Canva (See #39)**
+**#42 - Canva** *(Cross-reference: see #39 above for Canva teardown)*
 
 **#43 - Evernote**
 **URL**: evernote.com/compare-plans

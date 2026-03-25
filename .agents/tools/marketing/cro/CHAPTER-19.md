@@ -1,6 +1,6 @@
 # Chapter 19: Advanced CRO Tactics
 
-## 14.1 Behavioral Economics in CRO
+## 19.1 Behavioral Economics in CRO
 
 ### Cognitive Biases to Leverage
 
@@ -27,7 +27,7 @@ Present options to guide decision-making without restricting choice.
 **Feedback Loops:**
 Provide immediate feedback on user actions.
 
-## 14.2 Advanced Personalization
+## 19.2 Advanced Personalization
 
 ### Real-Time Personalization
 
@@ -58,7 +58,7 @@ Suggest products or content based on:
 **Predictive Content:**
 Show content predicted to drive conversion based on similar user patterns.
 
-## 14.3 Mobile CRO Deep Dive
+## 19.3 Mobile CRO Deep Dive
 
 ### Mobile-Specific Optimization
 
