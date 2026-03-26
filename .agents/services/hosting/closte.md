@@ -169,6 +169,12 @@ Add this snippet **before** `/* That's all, stop editing! */` in `wp-config.php`
  * Cloudflare proxy: trust X-Forwarded-Proto so WordPress detects HTTPS correctly.
  * Without this, WordPress redirect-loops when Cloudflare proxies the request
  * because is_ssl() returns false (Cloudflare terminates TLS, origin sees HTTP).
+ *
+ * Security: this trusts the header unconditionally. On Closte (managed GCP),
+ * the platform firewall restricts origin access so only Cloudflare can reach
+ * the server. On self-managed hosts, restrict origin access to Cloudflare IPs
+ * via firewall rules or validate $_SERVER['REMOTE_ADDR'] against
+ * https://www.cloudflare.com/ips/ before trusting the header.
  */
 if (
     isset($_SERVER['HTTP_X_FORWARDED_PROTO'])
@@ -177,6 +183,8 @@ if (
     $_SERVER['HTTPS'] = 'on';
 }
 ```
+
+**Security note:** This snippet trusts `X-Forwarded-Proto` unconditionally. On Closte, the managed platform firewall restricts direct origin access, making this safe. On self-managed infrastructure, either restrict origin access to [Cloudflare IPs](https://www.cloudflare.com/ips/) via firewall rules, or add an IP validation check before trusting the header.
 
 **For multisite:** This goes in the shared `wp-config.php` — it applies to all sites in the network.
 
