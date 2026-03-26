@@ -64,14 +64,13 @@ Run `testing-setup-helper.sh discover .` to scan the project for existing test t
 
 | Category | What to find | How |
 |----------|-------------|-----|
-| Test runners | jest, vitest, pytest, cargo test, go test, bats | `package.json` scripts/devDeps, `pyproject.toml`, `Cargo.toml`, `go.mod`, `*.bats` files |
+| Test runners | jest, vitest, pytest, cargo test, go test, bats | `package.json` scripts/devDeps, `pyproject.toml`, `requirements*.txt`, `Cargo.toml`, `go.mod`, `*.bats` files |
 | Test directories | `tests/`, `test/`, `__tests__/`, `spec/`, `*_test.go` | Directory/file existence |
 | Test configs | `jest.config.*`, `vitest.config.*`, `pytest.ini`, `.bats` | File glob |
 | CI pipelines | `.github/workflows/`, `.gitlab-ci.yml` | File existence, grep for test steps |
-| Linter configs | `.eslintrc*`, `.prettierrc*`, `tsconfig.json`, `.shellcheckrc` | File glob |
+| Linter configs | `.eslintrc*`, `.prettierrc*`, `tsconfig.json`, `.shellcheckrc`, `.secretlintrc*`, `.markdownlint*`, `.hadolint.yaml` | File glob |
 | Coverage configs | `.nycrc`, `coverage/`, `jest --coverage`, `c8`, `istanbul` | Config files, package.json scripts |
 | E2E/integration | `playwright.config.*`, `cypress.config.*`, `*.spec.ts` | File glob |
-| Quality gates | `linters-local.sh` integration, pre-commit hooks | File existence |
 
 Display results as a status table:
 

@@ -44,7 +44,6 @@ else
 		echo "INFO: $*" >&2
 		return 0
 	}
-	readonly ERROR_UNKNOWN_COMMAND="Unknown command"
 fi
 
 set -euo pipefail
@@ -54,6 +53,7 @@ set -euo pipefail
 # =============================================================================
 
 readonly TESTING_CONFIG_FILE=".aidevops-testing.json"
+readonly ERROR_UNKNOWN_COMMAND="Unknown command"
 
 # =============================================================================
 # Utility Functions
@@ -145,15 +145,29 @@ discover_runners() {
 			'. + [{"name":"vitest","source":"package.json devDependencies","configured":($c == "true")}]')
 	fi
 
-	# Pytest
-	if { [[ -f "${project_dir}/pyproject.toml" ]] || [[ -f "${project_dir}/setup.py" ]]; } &&
-		command -v pip >/dev/null 2>&1 && pip show pytest >/dev/null 2>&1; then
+	# Pytest — detect via project declarations, not caller's pip environment
+	# Avoids false positives (global pytest) and false negatives (venv not activated)
+	local pytest_declared="false"
+	if [[ -f "${project_dir}/pyproject.toml" ]] &&
+		grep -q 'pytest' "${project_dir}/pyproject.toml" 2>/dev/null; then
+		pytest_declared="true"
+	elif [[ -f "${project_dir}/requirements.txt" ]] &&
+		grep -q '^pytest' "${project_dir}/requirements.txt" 2>/dev/null; then
+		pytest_declared="true"
+	elif [[ -f "${project_dir}/requirements-dev.txt" ]] &&
+		grep -q '^pytest' "${project_dir}/requirements-dev.txt" 2>/dev/null; then
+		pytest_declared="true"
+	elif [[ -f "${project_dir}/setup.cfg" ]] &&
+		grep -q 'pytest' "${project_dir}/setup.cfg" 2>/dev/null; then
+		pytest_declared="true"
+	fi
+	if [[ "$pytest_declared" == "true" ]]; then
 		local configured="false"
 		if [[ -f "${project_dir}/pytest.ini" ]] || [[ -f "${project_dir}/pyproject.toml" ]]; then
 			configured="true"
 		fi
 		runners=$(echo "$runners" | jq --arg c "$configured" \
-			'. + [{"name":"pytest","source":"pip package","configured":($c == "true")}]')
+			'. + [{"name":"pytest","source":"project declarations","configured":($c == "true")}]')
 	fi
 
 	# Cargo test (Rust)
@@ -169,8 +183,10 @@ discover_runners() {
 	fi
 
 	# Bats (Bash testing)
-	if has_file "$project_dir" "*.bats" || { has_dir "$project_dir" "test" &&
-		ls "${project_dir}"/test/*.bats >/dev/null 2>&1; }; then
+	# Explicit grouping: check for .bats files at root OR .bats files inside test/
+	if has_file "$project_dir" "*.bats" ||
+		{ has_dir "$project_dir" "test" &&
+			compgen -G "${project_dir}/test/*.bats" >/dev/null 2>&1; }; then
 		runners=$(echo "$runners" | jq \
 			'. + [{"name":"bats","source":".bats files","configured":true}]')
 	fi
@@ -658,6 +674,29 @@ cmd_verify() {
 				fail_count=$((fail_count + 1))
 			fi
 			;;
+		bats)
+			if command -v bats >/dev/null 2>&1; then
+				local bats_errors=0
+				local bats_files=0
+				while IFS= read -r bats_file; do
+					[[ -f "$bats_file" ]] || continue
+					bats_files=$((bats_files + 1))
+					if ! bats --tap "$bats_file" >/dev/null 2>&1; then
+						bats_errors=$((bats_errors + 1))
+					fi
+				done < <(find "$project_dir" -name "*.bats" -not -path "*/.git/*" 2>/dev/null)
+				if [[ "$bats_errors" -eq 0 ]]; then
+					echo "  [pass] bats (${bats_files} test files)"
+					pass_count=$((pass_count + 1))
+				else
+					echo "  [fail] bats (${bats_errors} files failed)"
+					fail_count=$((fail_count + 1))
+				fi
+			else
+				echo "  [skip] bats (not installed)"
+				skip_count=$((skip_count + 1))
+			fi
+			;;
 		agent-tests)
 			echo "  [skip] agent-tests (requires interactive CLI)"
 			skip_count=$((skip_count + 1))
@@ -723,6 +762,57 @@ cmd_verify() {
 				fi
 			else
 				echo "  [skip] shellcheck (not installed)"
+				skip_count=$((skip_count + 1))
+			fi
+			;;
+		secretlint)
+			if command -v secretlint >/dev/null 2>&1 ||
+				(cd "$project_dir" && npx --no-install secretlint --version >/dev/null 2>&1); then
+				if (cd "$project_dir" && npx secretlint "**/*" 2>/dev/null); then
+					echo "  [pass] secretlint"
+					pass_count=$((pass_count + 1))
+				else
+					echo "  [fail] secretlint"
+					fail_count=$((fail_count + 1))
+				fi
+			else
+				echo "  [skip] secretlint (not installed)"
+				skip_count=$((skip_count + 1))
+			fi
+			;;
+		markdownlint)
+			if command -v markdownlint-cli2 >/dev/null 2>&1 ||
+				(cd "$project_dir" && npx --no-install markdownlint-cli2 --version >/dev/null 2>&1); then
+				if (cd "$project_dir" && npx markdownlint-cli2 "**/*.md" 2>/dev/null); then
+					echo "  [pass] markdownlint"
+					pass_count=$((pass_count + 1))
+				else
+					echo "  [fail] markdownlint"
+					fail_count=$((fail_count + 1))
+				fi
+			else
+				echo "  [skip] markdownlint (not installed)"
+				skip_count=$((skip_count + 1))
+			fi
+			;;
+		hadolint)
+			if command -v hadolint >/dev/null 2>&1; then
+				local hl_errors=0
+				while IFS= read -r dockerfile; do
+					[[ -f "$dockerfile" ]] || continue
+					if ! hadolint "$dockerfile" >/dev/null 2>&1; then
+						hl_errors=$((hl_errors + 1))
+					fi
+				done < <(find "$project_dir" -name "Dockerfile*" -not -path "*/.git/*" 2>/dev/null)
+				if [[ "$hl_errors" -eq 0 ]]; then
+					echo "  [pass] hadolint"
+					pass_count=$((pass_count + 1))
+				else
+					echo "  [fail] hadolint (${hl_errors} Dockerfiles with issues)"
+					fail_count=$((fail_count + 1))
+				fi
+			else
+				echo "  [skip] hadolint (not installed)"
 				skip_count=$((skip_count + 1))
 			fi
 			;;
