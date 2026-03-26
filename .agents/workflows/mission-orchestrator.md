@@ -17,335 +17,155 @@ tools:
 
 <!-- AI-CONTEXT-START -->
 
-## Quick Reference
+**Purpose**: Drive `active` mission → `completed` — sequential milestones, parallel features, validation, re-planning on failure. Input: `mission.md` state file. Output: completed project, milestones validated, budget reconciled, retrospective written.
 
-- **Purpose**: Drive an active mission from `active` status to `completed` — executing milestones sequentially, dispatching features as workers, validating results, and re-planning on failure
-- **Input**: A `mission.md` state file (created by `/mission` command)
-- **Output**: Completed project with all milestones validated, budget reconciled, and retrospective written
-- **Invoked by**: Pulse supervisor (detects `status: active` missions) or user (`/mission resume`)
+**Key files**: `templates/mission-template.md` · `scripts/commands/mission.md` · `scripts/commands/pulse.md` · `scripts/commands/full-loop.md` · `scripts/mission-dashboard-helper.sh`
 
-**Key files**:
+**Lifecycle**: `/mission` creates state file → orchestrator drives execution → milestone validation → completion or re-plan.
 
-| File | Purpose |
-|------|---------|
-| `templates/mission-template.md` | State file format |
-| `scripts/commands/mission.md` | `/mission` command (scoping + creation) |
-| `scripts/commands/dashboard.md` | `/dashboard` command |
-| `scripts/commands/pulse.md` | Supervisor dispatch |
-| `scripts/commands/full-loop.md` | Worker execution per feature |
-| `scripts/mission-dashboard-helper.sh` | CLI + browser dashboard (t1362) |
+**Pulse**: lightweight (re-dispatch dead workers, record completions, budget tracking). Orchestrator: heavyweight (re-planning, validation, research). Features tagged `mission:{id}` in TODO.
 
-**Lifecycle**: `/mission` creates the state file (planning) → orchestrator drives execution (active) → milestone validation → completion or re-plan
-
-**Pulse integration**: Pulse handles lightweight operations (dispatching pending features, detecting milestone completion, advancing milestones, budget tracking). Orchestrator handles heavyweight operations (re-planning on failure, validation design, research). Mission features are regular TODO entries tagged `mission:{id}` (e.g., `mission:m001`).
-
-**Self-organisation principle**: Create what you need as you discover needs — not upfront. Every created artifact is temporary (draft tier) unless promoted.
+**Self-organisation**: Create artifacts only when you have content. Draft tier unless promoted.
 
 <!-- AI-CONTEXT-END -->
 
 ## How to Think
 
-You are a project manager that reads a mission state file, understands the current phase, and takes the next correct action. You are not a script executor.
+Read the mission state file, understand the current phase, take the next correct action. Not a script executor.
 
-**One orchestrator layer.** Dispatch workers for features. Workers do not spawn sub-orchestrators. If a feature is too large, use `task-decompose-helper.sh` (t1408.2) to decompose it.
-
-**Serial milestones, parallel features.** Milestones execute sequentially — each must pass validation before the next begins. Features within a milestone can run in parallel (up to `max_parallel_workers`).
-
-**State lives in git.** The mission state file is the single source of truth. Commit and push after every significant action.
-
-**Autonomous by default, pause when uncertain:**
-- **Proceed**: Dispatching features, monitoring progress, recording completions, advancing milestones, re-dispatching transient failures
-- **Pause and report**: Budget threshold exceeded, same milestone failed 3 times, fundamental approach failure, external dependency needs human action
-- **Never pause for**: Style choices, library selection between equivalent options, minor scope questions — make the call, document it, move on
+- **One orchestrator layer.** Decompose large features via `task-decompose-helper.sh`; workers don't spawn sub-orchestrators.
+- **Serial milestones, parallel features.** Each milestone must pass validation before the next. Features within a milestone run in parallel (up to `max_parallel_workers`).
+- **State lives in git.** Commit and push after every significant action.
+- **Proceed**: dispatching, monitoring, recording completions, advancing milestones, re-dispatching transient failures.
+- **Pause**: budget threshold exceeded, same milestone failed 3×, fundamental failure, external dependency needs human.
+- **Never pause for**: style, equivalent library selection, minor scope — decide, document, move on.
 
 ## Execution Loop
 
-### Phase 1: Activate Mission
+### Phase 1: Activate
 
-**When**: `status: planning` and user or supervisor triggers start.
-
-1. Read the full mission state file
-2. Verify the first milestone's features have task IDs (Full mode) or are listed in the state file (POC mode)
-3. Set `status: active` and `started: {ISO date}` in frontmatter
-4. Set Milestone 1 status to `active`
-5. Commit, push, proceed to Phase 2
+`status: planning` + start triggered: read state → verify first milestone features have IDs → set `status: active`, `started: {ISO}`, Milestone 1 → `active` → commit, push.
 
 ### Phase 2: Dispatch Features
 
-**When**: A milestone is `active` and has `pending` features.
+When milestone `active` with `pending` features. For each:
 
-For each pending feature:
-1. Check if a worker is already running (`ps axo command | grep '/full-loop' | grep '{task_id}'`)
-2. Check if an open PR already exists (Full mode: `gh pr list --search '{task_id}'`)
-3. **Classify before dispatch (t1408.2):** If composite, decompose into sub-features, update mission state and TODO.md, set parent to `blocked`, dispatch leaf sub-features instead.
-4. Dispatch and verify startup:
+1. Check worker running: `ps axo command | grep '/full-loop' | grep '{task_id}'`
+2. Check open PR (Full): `gh pr list --search '{task_id}'`
+3. If composite → decompose via `task-decompose-helper.sh`, dispatch leaf sub-features
 
-**Full mode:**
+**Full mode** (`--agent` for non-code features):
+
 ```bash
-opencode run --dir {repo_path} --title "Mission {mission_id} - {feature_title}" \
-  "/full-loop Implement {task_id} -- {feature_description}. Mission context: {mission_goal}. Milestone: {milestone_name}." &
-worker_pid=$!
-kill -0 "$worker_pid" 2>/dev/null || { echo "Dispatch failed for {task_id}"; exit 1; }
+headless-runtime-helper.sh run --dir {repo_path} --title "Mission {id} - {title}" \
+  --prompt "/full-loop Implement {task_id} -- {desc}. Mission: {goal}. Milestone: {name}." &
+worker_pid=$!; kill -0 "$worker_pid" 2>/dev/null || { echo "Dispatch failed"; exit 1; }
 ```
-
-Route non-code features with `--agent` (Content, Research, etc. — see AGENTS.md "Agent Routing").
 
 **POC mode:**
+
 ```bash
-opencode run --dir {repo_path} --title "Mission {mission_id} - {feature_title}" \
-  "/full-loop --poc {feature_description}. Mission context: {mission_goal}. Commit directly, skip ceremony." &
+headless-runtime-helper.sh run --dir {repo_path} --title "Mission {id} - {title}" \
+  --prompt "/full-loop --poc {desc}. Mission: {goal}. Commit directly, skip ceremony." &
 ```
 
-5. Update feature status to `dispatched`, record `worker_pid`
-6. Respect `max_parallel_workers` by counting currently alive PIDs
+Update → `dispatched`, record `worker_pid`. Respect `max_parallel_workers`.
 
-### Phase 3: Monitor Progress
+### Phase 3: Monitor
 
-**Full mode**: Check for merged PRs matching feature task IDs. Merged PR = feature complete.
-**POC mode**: Check for commits with trailer `Completes-feature: {feature_id}`.
+**Full**: merged PR = complete. **POC**: commit with `Completes-feature: {id}` = complete. Update status, record cost.
 
-For each completed feature: update status to `completed`, record time/cost in budget tracking, check if all milestone features are complete.
-
-For stuck features (dispatched, no progress in 2+ hours): check if `worker_pid` is alive. If dead with no PR/commits, mark `failed` and re-dispatch. If running, leave it.
+Stuck (2+ hours, `worker_pid` dead, no PR/commits) → `failed`, re-dispatch.
 
 ### Phase 4: Milestone Validation
 
-**When**: All features in a milestone are `completed`.
+When all features `completed`:
 
 ```bash
-# Basic validation
 ~/.aidevops/agents/scripts/milestone-validation-worker.sh "$MISSION_FILE" "$MILESTONE_NUM"
-
-# With browser tests (project has playwright.config.ts)
-~/.aidevops/agents/scripts/milestone-validation-worker.sh "$MISSION_FILE" "$MILESTONE_NUM" \
-  --browser-tests --browser-url http://localhost:3000
-
-# With browser QA (visual smoke test, no test suite needed)
-~/.aidevops/agents/scripts/milestone-validation-worker.sh "$MISSION_FILE" "$MILESTONE_NUM" \
-  --browser-qa --browser-url http://localhost:3000
+# Flags: --browser-tests --browser-url URL  |  --browser-qa --browser-url URL
 ```
 
-**What the worker checks:**
-1. Dependencies installed (auto-installs if missing)
-2. Tests pass (auto-detects: `npm test`, `pytest`, `cargo test`, `go test`, `shellcheck`)
-3. Build succeeds (auto-detects: `npm run build`, `cargo build`, `go build`)
-4. Linter passes (auto-detects: `npm run lint`, `ruff`, `tsc --noEmit`)
-5. Browser tests/QA when flags passed
+Checks: deps, tests, build, lint, browser (if flagged). Exit: 0=pass, 1=fail, 2=config error, 3=not ready.
 
-**Exit codes**: 0 = pass (advance milestone), 1 = fail (create fix tasks, re-validate), 2 = config error (pause, report), 3 = state error (not ready)
+Budget check: if ≥80% spent → pause and report.
 
-**Budget check** (orchestrator responsibility): Calculate total spend vs budget. If approaching alert threshold (default 80%), pause and report.
+**Pass**: milestone → `passed`, next → `active`, commit, push, back to Phase 2.
+**Fail**: create targeted fix features, re-dispatch, re-validate. After 3 failures: pause, report with diagnosis.
 
-**On pass**: Set milestone `passed`, set next milestone `active`, log event, commit, push, continue to Phase 2.
+### Phase 5: Complete
 
-**On failure**: Worker creates fix tasks (GitHub issues in Full mode). Re-dispatch fixes, re-validate. After 3 failures on same milestone: pause, report to user.
-
-### Phase 5: Mission Completion
-
-**When**: All milestones have status `passed`.
-
-1. Run final validation (end-to-end smoke test if defined)
-2. Update mission status to `completed` with completion date
-3. Write retrospective: outcomes vs goal, budget accuracy, lessons learned
-4. Run skill learning scan:
-   ```bash
-   mission-skill-learner.sh scan {mission-dir}
-   # Review promotion suggestions, promote high-scoring artifacts:
-   mission-skill-learner.sh promote <path> draft
-   ```
-5. Commit and push final state
+All milestones `passed`: final smoke test → `status: completed` → retrospective (outcomes, budget, lessons) → skill scan (`mission-skill-learner.sh scan {dir}`, promote high-scoring artifacts) → commit, push.
 
 ## Self-Organisation
 
-### File and Folder Management
+Dirs: `mission.md` (always) · `research/` · `agents/` · `scripts/` · `assets/` — create only when you have content.
 
-```text
-{mission-dir}/
-├── mission.md          # State file (always exists)
-├── research/           # Created when first research artifact is needed
-├── agents/             # Created when first mission-specific agent is needed
-├── scripts/            # Created when first mission-specific script is needed
-└── assets/             # Created when first screenshot/PDF/export is needed
-```
+**Temporary agents**: create when 2+ features need the same specialised knowledge or a worker fails from missing context. Keep under 100 lines; frontmatter: `mode: subagent, status: draft, source: mission/{id}`. Pass path in worker prompts: `Read {mission-dir}/agents/{name}.md before starting.`
 
-Create directories only when you have content to put in them. Use descriptive filenames.
+After completion: move useful agents to `~/.aidevops/agents/draft/`; delete one-off agents.
 
-### Temporary Agent Creation (Draft Tier)
+## Improvement Feedback
 
-Create a mission agent when two or more features need the same specialised knowledge, or a worker fails due to missing context.
+At completion: `gh issue create --repo {aidevops_slug} --title "Mission feedback: {desc}" --body "{details}"`. Don't modify aidevops files during a mission or duplicate existing capabilities.
 
-```bash
-mkdir -p "{mission-dir}/agents"
-```
+## Research
 
-Agent format:
-```yaml
----
-description: {What this agent knows}
-mode: subagent
-status: draft
-created: {ISO date}
-source: mission/{mission_id}
-tools:
-  read: true
----
-```
+**Sources**: context7 MCP → Augment Context Engine → `gh api` (README) → `ai-research` MCP (haiku) → `webfetch` (URLs from README only). Capture in `research/{topic}.md` (decision, options, recommendation). 1-2 pages.
 
-Keep under 100 lines. Include the agent path in worker dispatch prompts:
-```text
-/full-loop Implement {task_id} -- {description}. Read {mission-dir}/agents/{name}.md for project-specific patterns before starting.
-```
+**When**: well-known → skip; unfamiliar → 30-60 min time-box; POC → popular defaults; Full → 2-3 options.
 
-**After mission completion**: Move generally useful agents to `~/.aidevops/agents/draft/`; delete one-off agents. Record decisions in the mission's "Mission Agents" table.
+## Budget
 
-## Improvement Feedback to aidevops
+Pre-execution: `budget-analysis-helper.sh recommend --goal "{goal}" --json`. Per-feature: `budget-analysis-helper.sh estimate --task "{desc}" --tier {tier} --json`. After worker: `budget-tracker-helper.sh record --provider {p} --model {m} --task {id} --input-tokens {N} --output-tokens {N}`.
 
-At mission completion, review the decision log and mission agents. For each improvement (missing capabilities, broken patterns, new integrations, workflow gaps):
+| Used | Action |
+|------|--------|
+| < 60% | Continue |
+| 60–80% | Warn; consider cheaper tier |
+| 80–100% | Pause; report options |
+| > 100% | Stop new dispatches |
 
-```bash
-gh issue create --repo {aidevops_slug} --title "Mission feedback: {description}" --body "{details}"
-```
+**Tiers**: haiku=research, sonnet=implementation, opus=re-planning only.
 
-Record issue numbers in the mission's "Framework Improvements" section. Use `mission-skill-learner.sh promote <path> draft` for reusable agents.
+## Modes
 
-**Don't**: Modify aidevops agent files directly during a mission, create PRs against aidevops from within a mission, or duplicate existing aidevops capabilities in mission agents.
-
-## Research Guidance
-
-When a mission requires a domain with no existing aidevops knowledge:
-
-**Research sources** (priority order):
-1. **context7 MCP**: `resolve-library-id` then `get-library-docs` — primary source for libraries/frameworks
-2. **Augment Context Engine**: Semantic codebase search for existing patterns
-3. **`gh api`**: Fetch README from GitHub repos (`gh api repos/{owner}/{repo}/contents/{path}`)
-4. **`ai-research` MCP**: Focused query via Anthropic API (`model: haiku` for cost efficiency)
-5. **Official docs**: `webfetch` only for URLs found in README/package metadata — never construct URLs
-
-**Capture findings** in `{mission-dir}/research/{topic}.md` (decision, options evaluated, recommendation, sources). Keep to 1-2 pages.
-
-**When to research vs build**:
-- Well-known technology (React, PostgreSQL, Stripe) → skip, use existing knowledge
-- Unfamiliar library → 30-60 min time-box, then decide
-- POC mode → pick popular defaults and iterate
-- Full mode → evaluate 2-3 options, document trade-offs
-
-**Anti-patterns**: Analysis paralysis (time-box it), reinventing the wheel (check aidevops capabilities first), over-documenting.
-
-## Budget Management
-
-### Pre-Execution Analysis
-
-```bash
-~/.aidevops/agents/scripts/budget-analysis-helper.sh recommend --goal "{mission_goal}" --json
-~/.aidevops/agents/scripts/budget-analysis-helper.sh analyse --budget {remaining_usd} --hours {remaining_hours} --json
-```
-
-If budget is insufficient for even the MVP tier, pause and report with tiered breakdown.
-
-### Per-Feature Estimation
-
-```bash
-~/.aidevops/agents/scripts/budget-analysis-helper.sh estimate --task "{feature_description}" --tier {worker_tier} --json
-```
-
-If estimated cost (high end) would exceed remaining budget: switch to cheaper tier, defer the feature, or pause.
-
-### Tracking & Thresholds
-
-After each worker completes: `budget-tracker-helper.sh record --provider {p} --model {m} --task {id} --input-tokens {N} --output-tokens {N}`
-
-| Budget Used | Action |
-|-------------|--------|
-| < 60% | Continue normally |
-| 60-80% | Log warning; check if remaining work fits; consider cheaper tier |
-| 80-100% | Pause; report options (increase budget, reduce scope, continue at risk) |
-| > 100% | Stop dispatching new features; complete in-progress only |
-
-**Cost optimisation**: haiku for research, sonnet for implementation, opus only for re-planning. In POC mode, default to sonnet for everything.
-
-## Mode-Specific Behaviour
-
-| Aspect | POC Mode | Full Mode |
-|--------|----------|-----------|
-| Workflow | Commit directly to main | Worktree + PR per feature |
-| Workers | Single per milestone (sequential) | Parallel (up to `max_parallel_workers`) |
-| Task tracking | Mission state file only | TODO.md + GitHub issues |
-| Research | Minimal — pick popular defaults | Thorough — evaluate 2-3 options |
-| Quality gates | None | Preflight, PR reviews, postflight |
-| Goal | Working prototype, fast | Production-quality output |
+| | POC | Full |
+|-|-----|------|
+| Workflow | Commit to main | Worktree + PR |
+| Workers | Sequential | Parallel (`max_parallel_workers`) |
+| Tracking | State file | TODO.md + GitHub issues |
+| Research | Popular defaults | Evaluate 2-3 options |
+| Quality | None | Preflight, reviews, postflight |
 
 ## Error Recovery
 
-### Worker Failure
+**Worker**: Transient → re-dispatch. Knowledge gap → create mission agent, re-dispatch. Scope → decompose, update state. Fundamental → update decision log, different approach.
 
-1. Read failure evidence (closed PR comments, CI logs, error output)
-2. Classify:
-   - **Transient** (flaky test, rate limit, timeout) → re-dispatch same feature
-   - **Knowledge gap** → create mission agent with missing context, re-dispatch
-   - **Scope issue** → decompose into smaller features, update mission state
-   - **Fundamental** → update decision log, adjust milestone plan, re-dispatch with different approach
-
-### Milestone Validation Failure
-
-1. Identify which criteria failed
-2. Create targeted fix features (not a full re-do)
-3. Add to current milestone, dispatch fixes, re-validate
-4. After 3 failures: pause, report with diagnosis
+**Validation**: targeted fix features → re-dispatch → re-validate. After 3 failures: pause, report.
 
 ## Session Resilience
 
-Missions run over days. Sessions die. The orchestrator must recover from a cold start by reading current state, not by assuming a previous step completed.
+Always recover from cold start by reading current state — never assume a previous step completed.
 
-**Recovery checklist** (run on every invocation):
-1. Read mission state file — what is the current `status`?
-2. For each milestone: status? Dispatched features with no completion evidence?
-3. Check `ps` for running workers from previous session
-4. Check `gh pr list` for open PRs matching mission features
-5. Check git log for recent commits matching features (POC mode)
-6. Resume from current state — don't re-dispatch completed features
+**Recovery** (every invocation): read `status` → check milestones → `ps` for workers → `gh pr list` → git log (POC) → resume without re-dispatching completed features.
 
-**Compaction survival**: Write checkpoint to `~/.aidevops/.agent-workspace/tmp/mission-{id}-checkpoint.md` before long-running operations. Preserve: mission ID, state file path, current milestone, feature statuses, budget spent, next action.
+**Compaction**: checkpoint to `~/.aidevops/.agent-workspace/tmp/mission-{id}-checkpoint.md` (ID, state path, milestone, feature statuses, budget, next action).
 
 ## Pulse Integration
 
-Pulse checks for mission state files in `{repo_root}/todo/missions/*/mission.md` and `~/.aidevops/missions/*/mission.md`. Missions with `status: active` are candidates for orchestration.
+Scans `{repo_root}/todo/missions/*/mission.md` and `~/.aidevops/missions/*/mission.md` for `status: active`.
 
-**Pulse does** (lightweight): re-dispatch dead workers, record completed features, detect idle missions, pause on budget threshold.
+**Pulse**: re-dispatch dead workers, record completions, pause on budget. **Orchestrator**: re-planning, validation, research.
 
-**Pulse dispatches orchestrator for** (heavyweight): re-planning, milestone validation, research.
+Pulse transitions: `dispatched`→`completed` (merged PR) · `dispatched`→`failed` (dead worker, no PR) · `active`→`paused` (budget) · re-dispatch (transient).
 
-**State transitions pulse can make**:
+Pulse does NOT advance milestones, run validation, create fix tasks, or modify plans.
 
-| Transition | When |
-|------------|------|
-| Feature: `dispatched` → `completed` | Merged PR found |
-| Feature: `dispatched` → `failed` | Worker dead, no PR, no commits |
-| Mission: `active` → `paused` | Budget threshold exceeded |
-| Re-dispatch failed feature | Transient failure detected |
+## Cross-Repo
 
-Pulse does NOT advance milestones, run validation, create fix tasks, or modify milestone plans.
-
-## Cross-Repo Missions
-
-- **Primary repo**: Where the mission state file lives. All orchestration happens here.
-- **Secondary repos**: Workers use `--dir {secondary_repo_path}` in dispatch commands.
-- Feature rows in the mission state file specify which repo they target.
-- Use `claim-task-id.sh --repo-path {secondary_repo}` for IDs in secondary repos.
+Primary repo holds the state file; workers target secondary repos via `--dir {path}`. Use `claim-task-id.sh --repo-path {secondary}` for IDs in secondary repos.
 
 ## Related
 
-- `workflows/milestone-validation.md` — Milestone validation worker (Phase 4 delegate)
-- `workflows/browser-qa.md` — Browser QA visual testing for milestone validation (t1359)
-- `scripts/milestone-validation-worker.sh` — Validation runner (tests, build, lint, browser)
-- `scripts/commands/mission.md` — Creates the mission state file
-- `scripts/commands/dashboard.md` — Progress dashboard (CLI + browser)
-- `scripts/commands/pulse.md` — Supervisor that detects active missions
-- `scripts/commands/full-loop.md` — Worker execution pattern
-- `templates/mission-template.md` — Mission state file format
-- `workflows/mission-skill-learning.md` — Skill learning: auto-capture patterns, promote artifacts
-- `scripts/mission-skill-learner.sh` — CLI for scanning, scoring, promoting artifacts
-- `reference/orchestration.md` — Model routing and dispatch patterns
-- `tools/context/model-routing.md` — Cost-aware model selection
-- `scripts/budget-analysis-helper.sh` — Budget analysis engine (t1357.7)
-- `scripts/budget-tracker-helper.sh` — Append-only cost log
-- `services/email/email-agent.md` — Email agent for autonomous 3rd-party communication (t1360)
+`workflows/milestone-validation.md` · `workflows/browser-qa.md` · `scripts/commands/mission.md` · `scripts/commands/dashboard.md` · `scripts/commands/pulse.md` · `scripts/commands/full-loop.md` · `templates/mission-template.md` · `workflows/mission-skill-learning.md` · `reference/orchestration.md` · `scripts/budget-analysis-helper.sh` · `scripts/budget-tracker-helper.sh`
