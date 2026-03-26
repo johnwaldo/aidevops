@@ -155,10 +155,13 @@ FIFO_DIR=$(mktemp -d)
 FIFO_IN="$FIFO_DIR/in"
 FIFO_OUT="$FIFO_DIR/out"
 mkfifo "$FIFO_IN" "$FIFO_OUT"
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/convos"
+mkdir -p "$LOG_DIR"
+AGENT_ERR_LOG="$LOG_DIR/agent-${CONV_ID}.stderr.log"
 trap 'rm -rf "$FIFO_DIR" "$LOCK_FILE"' EXIT
 
 convos agent serve "$CONV_ID" --profile-name "AI Agent" \
-  < "$FIFO_IN" > "$FIFO_OUT" 2>/dev/null &
+  < "$FIFO_IN" > "$FIFO_OUT" 2>>"$AGENT_ERR_LOG" &
 AGENT_PID=$!
 
 exec 3>"$FIFO_IN"
@@ -337,10 +340,10 @@ convos conversation send-reaction "$CONV_ID" <message-id> remove "(thumbs up)"
 | `agent serve` without conversation ID or `--name` | Pass a conversation ID or `--name` to create new |
 | Manually polling and sending separately | Use bridge script with named pipes |
 | Running bridge inline or in shared shell | Write to file, run as separate background process |
-| Using markdown in messages | Convos does not render markdown — plain text only |
+| Using Markdown in messages | Convos does not render Markdown — plain text only |
 | Sending via CLI while in agent mode | Use stdin commands — CLI sends create race conditions |
 | Forgetting `--env production` | Default is `dev` (test network) |
-| Replying to system events | Only `replyTo` messages with `typeId` of `text`, `reply`, or `attachment` |
+| Replying to system events | Only `replyTo` messages with `typeId` of `text` or `reply` (bridge ignores `attachment` and other types) |
 | Not processing joins after invite | Run `process-join-requests` after invitee opens the link |
 | Referencing inbox IDs in chat | Fetch profiles and use display names |
 | Announcing tool usage in chat | Do it silently, respond naturally |
