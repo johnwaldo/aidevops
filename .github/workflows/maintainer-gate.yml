@@ -220,8 +220,8 @@ jobs:
           fi
 
   # =========================================================================
-  # Job 3: Re-run PR checks when a linked issue's labels change
-  #         (so the gate re-evaluates after maintainer approves)
+  # Job 3: Re-evaluate PR gate when a linked issue's labels or assignees change.
+  #         Posts the final success/failure status directly — never leaves pending.
   # =========================================================================
   retrigger-pr-checks:
     name: Retrigger PR Checks on Issue Label Change
@@ -236,7 +236,7 @@ jobs:
       statuses: write
 
     steps:
-      - name: Find PRs linked to this issue and retrigger
+      - name: Evaluate gate and post final status on linked PRs
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
@@ -257,17 +257,53 @@ jobs:
 
           echo "Found PRs referencing issue #$ISSUE_NUMBER: $OPEN_PRS"
 
-          # Post a status update to retrigger the maintainer-gate check
+          # Evaluate gate conditions for the triggering issue.
+          # We check the current state of the issue (not the event payload) so
+          # the result reflects the post-event state (e.g. label already removed).
+          ISSUE_DATA=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}" \
+            --jq '{labels: [.labels[].name], assignees: [.assignees[].login], state: .state}' \
+            2>/dev/null || echo '{}')
+
+          ISSUE_STATE=$(echo "$ISSUE_DATA" | jq -r '.state' 2>/dev/null || echo "unknown")
+          LABELS=$(echo "$ISSUE_DATA" | jq -r '.labels[]' 2>/dev/null || true)
+          ASSIGNEES=$(echo "$ISSUE_DATA" | jq -r '.assignees[]' 2>/dev/null || true)
+
+          BLOCKED=false
+          BLOCK_REASON=""
+
+          # Skip gate evaluation for closed issues — they've already been reviewed
+          if [[ "$ISSUE_STATE" != "closed" ]]; then
+            if echo "$LABELS" | grep -q 'needs-maintainer-review'; then
+              BLOCKED=true
+              BLOCK_REASON="Issue #${ISSUE_NUMBER} has needs-maintainer-review label"
+            fi
+            if [[ -z "$ASSIGNEES" ]]; then
+              BLOCKED=true
+              BLOCK_REASON="${BLOCK_REASON:+${BLOCK_REASON}; }Issue #${ISSUE_NUMBER} has no assignee"
+            fi
+          fi
+
+          if [[ "$BLOCKED" == "true" ]]; then
+            STATUS_STATE="failure"
+            STATUS_DESC="Blocked: ${BLOCK_REASON}"
+          else
+            STATUS_STATE="success"
+            STATUS_DESC="Gate passed after issue #${ISSUE_NUMBER} label change"
+          fi
+
+          echo "Gate result: $STATUS_STATE — $STATUS_DESC"
+
+          # Post the final resolved status on each linked PR.
+          # Never leave the status at pending — always resolve to success or failure.
           for PR_NUM in $OPEN_PRS; do
             HEAD_SHA=$(gh pr view "$PR_NUM" --repo "$REPO" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)
             if [[ -n "$HEAD_SHA" ]]; then
-              echo "Posting pending status on PR #$PR_NUM (SHA: ${HEAD_SHA:0:8}) to retrigger checks"
-              # Create a commit status to signal the gate should re-evaluate
+              echo "Posting $STATUS_STATE status on PR #$PR_NUM (SHA: ${HEAD_SHA:0:8})"
               gh api "repos/${REPO}/statuses/${HEAD_SHA}" \
                 --method POST \
-                -f state=pending \
+                -f state="$STATUS_STATE" \
                 -f context="maintainer-gate" \
-                -f description="Re-evaluating after issue #${ISSUE_NUMBER} label change" \
+                -f description="$STATUS_DESC" \
                 2>/dev/null || echo "::warning::Could not post status on PR #$PR_NUM"
             fi
           done
