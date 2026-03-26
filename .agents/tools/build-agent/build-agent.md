@@ -14,7 +14,7 @@ mode: subagent
 - **MCP servers**: Disabled globally, enabled per-agent
 - **Code refs**: `rg "pattern"` search patterns, not `file:line` (line numbers drift)
 - **Subagents**: `agent-review.md` (review), `agent-testing.md` (testing)
-- **Related**: `@code-standards`, `aidevops/architecture.md`, `tools/browser/browser-automation.md`
+- **Related**: `@code-standards`, `.agents/aidevops/architecture.md`, `tools/browser/browser-automation.md`
 - **After creating/promoting**: `~/.aidevops/agents/scripts/subagent-index-helper.sh generate`
 - **Testing**: `agent-test-helper.sh run my-tests` or `claude -p "Test query"`
 
@@ -203,4 +203,4 @@ Agent changes in `.agents/` require `cd ~/Git/aidevops && ./setup.sh`. Offer to 
 
 ## Reviewing Existing Agents
 
-See `build-agent/agent-review.md` for systematic review (instruction budgets, universal applicability, duplicates, code examples, AI-CONTEXT blocks, stale content, MCP configuration).
+See `agent-review.md` for systematic review (instruction budgets, universal applicability, duplicates, code examples, AI-CONTEXT blocks, stale content, MCP configuration).
