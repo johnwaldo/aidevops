@@ -142,33 +142,35 @@ create_worker_sandbox() {
 		ln -sf "$agents_source" "$sandbox_dir/.aidevops"
 	fi
 
-	# --- Claude Code / OpenCode config ---
-	# Workers need their tool configs. Copy only the specific config files needed,
-	# not the entire .config directory (which may contain credentials).
+	# --- Runtime config files (t1665.5) ---
+	# Workers need MCP/tool configs. Copy only the specific config files needed
+	# for each installed runtime, not entire directories (which may contain credentials).
+	# Uses runtime-registry.sh for detection and path lookup.
 	local config_dir="$sandbox_dir/.config"
 	mkdir -p "$config_dir"
 
-	# OpenCode config (if exists) — needed for MCP server definitions
-	local opencode_src="${REAL_HOME}/.config/opencode"
-	if [[ -d "$opencode_src" ]]; then
-		mkdir -p "$config_dir/opencode"
-		# Copy only opencode.json (MCP config), not auth files
-		if [[ -f "$opencode_src/opencode.json" ]]; then
-			cp "$opencode_src/opencode.json" "$config_dir/opencode/"
-		fi
-	fi
+	local rt_id rt_config_file rt_config_dir dst_dir
+	while IFS= read -r rt_id; do
+		[[ -z "$rt_id" ]] && continue
+		rt_config_file=$(rt_config_path "$rt_id") || continue
+		# Resolve against REAL_HOME (sandbox uses the real user's configs)
+		rt_config_file="${rt_config_file/$HOME/$REAL_HOME}"
+		[[ -z "$rt_config_file" || ! -f "$rt_config_file" ]] && continue
 
-	# Claude Code settings (if exists) — needed for MCP server definitions
-	local claude_dir_src="${REAL_HOME}/.claude"
-	if [[ -d "$claude_dir_src" ]]; then
-		local claude_dir_dst="$sandbox_dir/.claude"
-		mkdir -p "$claude_dir_dst"
-		# Copy settings.json (MCP config, preferences) but NOT credentials
-		if [[ -f "$claude_dir_src/settings.json" ]]; then
-			cp "$claude_dir_src/settings.json" "$claude_dir_dst/"
-		fi
-		# Do NOT copy: credentials.json, .credentials, auth tokens
-	fi
+		rt_config_dir=$(dirname "$rt_config_file")
+
+		# Determine sandbox destination based on config path structure
+		# Config paths under ~/.config/ go to $sandbox_dir/.config/
+		# Config paths under ~/.claude/ go to $sandbox_dir/.claude/
+		# Config paths under ~/.<name>/ go to $sandbox_dir/.<name>/
+		local rel_to_home="${rt_config_file#"$REAL_HOME"/}"
+		dst_dir="$sandbox_dir/$(dirname "$rel_to_home")"
+		mkdir -p "$dst_dir"
+
+		# Copy only the config file (MCP definitions), NOT credentials
+		cp "$rt_config_file" "$dst_dir/"
+	done < <(rt_detect_configured)
+	# Do NOT copy: credentials.json, .credentials, auth tokens, OAuth files
 
 	# --- XDG directories for tool state ---
 	# Tools like npm, bun, etc. need writable cache/data dirs

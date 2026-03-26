@@ -458,8 +458,12 @@ scan_mcp_configs() {
 
 	local found_risk=0
 
-	for config in "$HOME/.config/Claude/claude_desktop_config.json" "$HOME/.cursor/mcp.json"; do
-		[[ -f "$config" ]] || continue
+	# Scan all runtime config files via registry (t1665.5)
+	local rt_id config
+	while IFS= read -r rt_id; do
+		[[ -z "$rt_id" ]] && continue
+		config=$(rt_config_path "$rt_id") || continue
+		[[ -z "$config" || ! -f "$config" ]] && continue
 
 		local uvx_count=0 npx_count=0
 		uvx_count=$(grep -c '"uvx"' "$config" 2>/dev/null) || uvx_count=0
@@ -478,7 +482,7 @@ scan_mcp_configs() {
 				"Pin versions or use locally installed packages"
 			found_risk=1
 		fi
-	done
+	done < <(rt_detect_configured)
 
 	if [[ "$found_risk" -eq 0 ]]; then
 		echo -e "  ${GREEN}[OK]${NC} No auto-downloading MCP server configurations found"

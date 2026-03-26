@@ -6,7 +6,7 @@
 # on-demand discovery instead of loading all tool definitions upfront.
 #
 # Usage:
-#   mcp-index-helper.sh sync              # Sync MCP descriptions from opencode.json
+#   mcp-index-helper.sh sync              # Sync MCP descriptions from all runtime configs
 #   mcp-index-helper.sh search "query"    # Search for tools matching query
 #   mcp-index-helper.sh list [mcp-name]   # List tools for an MCP server
 #   mcp-index-helper.sh status            # Show index status
@@ -27,7 +27,6 @@ set -euo pipefail
 # Configuration
 readonly INDEX_DIR="${AIDEVOPS_MCP_INDEX_DIR:-$HOME/.aidevops/.agent-workspace/mcp-index}"
 readonly INDEX_DB="$INDEX_DIR/mcp-tools.db"
-readonly OPENCODE_CONFIG="$HOME/.config/opencode/opencode.json"
 # shellcheck disable=SC2034  # Used for future cache invalidation
 readonly CACHE_TTL_HOURS=24
 
@@ -100,7 +99,8 @@ EOF
 }
 
 #######################################
-# Check if index needs refresh
+# Check if index needs refresh (t1665.5)
+# Checks all runtime config files, not just opencode.json.
 #######################################
 needs_refresh() {
 	if [[ ! -f "$INDEX_DB" ]]; then
@@ -114,49 +114,60 @@ needs_refresh() {
 		return 0
 	fi
 
-	# Check if opencode.json is newer than last sync
-	if [[ -f "$OPENCODE_CONFIG" ]]; then
-		local config_mtime
-		config_mtime=$(stat -c %Y "$OPENCODE_CONFIG" 2>/dev/null || stat -f %m "$OPENCODE_CONFIG" 2>/dev/null || echo "0")
-		local sync_epoch
-		sync_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S" "$last_sync" +%s 2>/dev/null || date -d "$last_sync" +%s 2>/dev/null || echo "0")
+	local sync_epoch
+	sync_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S" "$last_sync" +%s 2>/dev/null || date -d "$last_sync" +%s 2>/dev/null || echo "0")
 
+	# Check if any runtime config file is newer than last sync
+	local rt_id config_path config_mtime
+	while IFS= read -r rt_id; do
+		[[ -z "$rt_id" ]] && continue
+		config_path=$(rt_config_path "$rt_id") || continue
+		[[ -z "$config_path" || ! -f "$config_path" ]] && continue
+
+		config_mtime=$(stat -c %Y "$config_path" 2>/dev/null || stat -f %m "$config_path" 2>/dev/null || echo "0")
 		if [[ "$config_mtime" -gt "$sync_epoch" ]]; then
 			return 0
 		fi
-	fi
+	done < <(rt_detect_configured)
 
 	return 1
 }
 
 #######################################
-# Insert MCP tools into the index database
-# Reads opencode.json, iterates enabled MCP servers,
-# classifies tools by category, and upserts rows.
+# Insert MCP tools into the index database (t1665.5)
+# Reads MCP config from all configured runtimes via registry.
+# Each runtime may use a different MCP root key (e.g., "mcp" vs "mcpServers").
 # Prints "tool_count mcp_count" to stdout on success.
 # Uses Python for reliable JSON parsing.
 #######################################
 _sync_insert_tools() {
-	python3 - "$INDEX_DB" "$OPENCODE_CONFIG" <<'PYEOF'
+	# Build config_path:mcp_root_key pairs for all configured runtimes
+	local config_args=""
+	local rt_id config_path mcp_key
+	while IFS= read -r rt_id; do
+		[[ -z "$rt_id" ]] && continue
+		config_path=$(rt_config_path "$rt_id") || continue
+		[[ -z "$config_path" || ! -f "$config_path" ]] && continue
+		mcp_key=$(rt_mcp_root_key "$rt_id") || continue
+		[[ -z "$mcp_key" ]] && continue
+		config_args="${config_args}${config_path}:${mcp_key}"$'\n'
+	done < <(rt_detect_configured)
+
+	[[ -z "$config_args" ]] && {
+		echo "0 0"
+		return 0
+	}
+
+	python3 - "$INDEX_DB" "$config_args" <<'PYEOF'
 import json
 import sqlite3
 import sys
 
-db_path, config_path = sys.argv[1], sys.argv[2]
-
-try:
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-except Exception as e:
-    print(f"Error reading config: {e}", file=sys.stderr)
-    sys.exit(1)
+db_path = sys.argv[1]
+config_specs = sys.argv[2].strip().split('\n')
 
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
-
-# Get MCP servers from config
-mcp_servers = config.get('mcp', {})
-global_tools = config.get('tools', {})
 
 tool_count = 0
 mcp_count = 0
@@ -166,7 +177,6 @@ tool_categories = {
     'context7': ['query-docs', 'resolve-library-id'],
     'augment-context-engine': ['codebase-retrieval'],
     'dataforseo': ['serp', 'keywords', 'backlinks', 'domain-analytics'],
-    # serper - REMOVED: Uses curl subagent (.agents/seo/serper.md)
     'gsc': ['query', 'sitemaps', 'inspect'],
     'shadcn': ['browse', 'search', 'install'],
     'playwriter': ['navigate', 'click', 'type', 'screenshot'],
@@ -177,7 +187,6 @@ tool_categories = {
     'claude-code-mcp': ['run_claude_code'],
 }
 
-# More specific descriptions for known tools
 tool_descriptions = {
     'query-docs': 'Query documentation for a library using Context7',
     'resolve-library-id': 'Resolve a library name to Context7 ID',
@@ -190,65 +199,84 @@ tool_descriptions = {
     'run_claude_code': 'Run Claude Code as a one-shot subprocess',
 }
 
-for mcp_name, mcp_config in mcp_servers.items():
-    if not isinstance(mcp_config, dict):
+# Track seen MCP names to avoid duplicates across runtimes
+seen_mcps = set()
+
+for spec in config_specs:
+    if ':' not in spec:
+        continue
+    # Split on last colon to handle paths with colons (unlikely but safe)
+    parts = spec.rsplit(':', 1)
+    if len(parts) != 2:
+        continue
+    config_path, mcp_root_key = parts
+
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+    except Exception as e:
+        print(f"Warning: Failed to read {config_path}: {e}", file=sys.stderr)
         continue
 
-    # Skip disabled MCPs
-    if not mcp_config.get('enabled', True):
-        continue
+    # Get MCP servers using the runtime-specific root key
+    mcp_servers = config.get(mcp_root_key, {})
+    global_tools = config.get('tools', {})
 
-    mcp_count += 1
+    for mcp_name, mcp_config in mcp_servers.items():
+        if not isinstance(mcp_config, dict):
+            continue
+        if not mcp_config.get('enabled', True):
+            continue
+        if mcp_name in seen_mcps:
+            continue  # Already indexed from another runtime
+        seen_mcps.add(mcp_name)
 
-    # Check if this MCP's tools are globally enabled
-    tool_pattern = f"{mcp_name}_*"
-    globally_enabled = 1 if global_tools.get(tool_pattern, False) else 0
+        mcp_count += 1
 
-    # Classify category and resolve known tools for this MCP
-    category = 'general'
-    known_tools = []
+        tool_pattern = f"{mcp_name}_*"
+        globally_enabled = 1 if global_tools.get(tool_pattern, False) else 0
 
-    for pattern, tools in tool_categories.items():
-        if pattern in mcp_name.lower():
-            known_tools = tools
-            # Derive category from MCP name
-            if 'seo' in mcp_name.lower() or pattern in ['dataforseo', 'gsc']:
-                category = 'seo'
-            elif pattern in ['context7', 'augment-context-engine']:
-                category = 'context'
-            elif pattern in ['shadcn', 'playwriter']:
-                category = 'browser'
-            elif pattern == 'macos-automator':
-                category = 'automation'
-            elif pattern == 'outscraper':
-                category = 'data-extraction'
-            elif pattern == 'quickfile':
-                category = 'accounting'
-            elif pattern == 'localwp':
-                category = 'wordpress'
-            elif pattern == 'claude-code-mcp':
-                category = 'ai-assistant'
-            break
+        category = 'general'
+        known_tools = []
 
-    # If no known tools, create a generic placeholder entry
-    if not known_tools:
-        known_tools = ['*']
+        for pattern, tools in tool_categories.items():
+            if pattern in mcp_name.lower():
+                known_tools = tools
+                if 'seo' in mcp_name.lower() or pattern in ['dataforseo', 'gsc']:
+                    category = 'seo'
+                elif pattern in ['context7', 'augment-context-engine']:
+                    category = 'context'
+                elif pattern in ['shadcn', 'playwriter']:
+                    category = 'browser'
+                elif pattern == 'macos-automator':
+                    category = 'automation'
+                elif pattern == 'outscraper':
+                    category = 'data-extraction'
+                elif pattern == 'quickfile':
+                    category = 'accounting'
+                elif pattern == 'localwp':
+                    category = 'wordpress'
+                elif pattern == 'claude-code-mcp':
+                    category = 'ai-assistant'
+                break
 
-    for tool in known_tools:
-        tool_name = f"{mcp_name}_{tool}" if tool != '*' else f"{mcp_name}_*"
-        description = tool_descriptions.get(tool, f"Tool from {mcp_name} MCP server")
+        if not known_tools:
+            known_tools = ['*']
 
-        cursor.execute('''
-            INSERT OR REPLACE INTO mcp_tools
-            (mcp_name, tool_name, description, category, enabled_globally, indexed_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
-        ''', (mcp_name, tool_name, description, category, globally_enabled))
-        tool_count += 1
+        for tool in known_tools:
+            tool_name = f"{mcp_name}_{tool}" if tool != '*' else f"{mcp_name}_*"
+            description = tool_descriptions.get(tool, f"Tool from {mcp_name} MCP server")
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO mcp_tools
+                (mcp_name, tool_name, description, category, enabled_globally, indexed_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now'))
+            ''', (mcp_name, tool_name, description, category, globally_enabled))
+            tool_count += 1
 
 conn.commit()
 conn.close()
 
-# Print counts for the caller to capture and store in metadata
 print(f"{tool_count} {mcp_count}")
 PYEOF
 	return 0

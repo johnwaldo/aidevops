@@ -38,14 +38,9 @@ source "${SCRIPT_DIR}/shared-constants.sh"
 # Detects interactive AI coding sessions by examining running processes.
 # Distinguishes interactive (TUI) sessions from headless workers.
 #
-# Known AI coding assistants and their process signatures:
-#   opencode (interactive): .opencode (no "run" argument in cmdline)
-#   opencode (headless):    .opencode run ... (has "run" in cmdline)
-#   claude (interactive):   claude (no "-p" or "--print" in cmdline)
-#   claude (headless):      claude -p ... or claude --print ...
-#   cursor:                 Cursor process
-#   windsurf:               Windsurf process
-#   aider:                  aider (Python process)
+# Uses runtime-registry.sh (t1665.1) for runtime detection. Headless
+# exclusion patterns are maintained per-runtime in _rt_headless_pattern().
+# Adding a new runtime to the registry automatically makes it visible here.
 
 # Get system RAM in GB (used as default session threshold).
 # Each session uses ~100-400 MB, so RAM in GB is a reasonable max.
@@ -110,111 +105,163 @@ _get_pid_cmdline() {
 	return 0
 }
 
-# Count interactive OpenCode sessions.
-# Excludes headless workers (.opencode run ...), language servers, and node wrappers.
-# Outputs the count on stdout.
-_count_opencode_sessions() {
-	local count=0
-	local opencode_pids=""
-	opencode_pids=$(pgrep -f '\.opencode' || true)
+# =============================================================================
+# Runtime-aware session counting (t1665.5)
+# =============================================================================
+# Uses runtime-registry.sh to detect all installed runtimes and count their
+# interactive sessions. Headless exclusion patterns are per-runtime.
 
-	if [[ -n "$opencode_pids" ]]; then
-		local pid
-		while IFS= read -r pid; do
-			[[ -z "$pid" ]] && continue
-			local cmdline
-			cmdline=$(_get_pid_cmdline "$pid")
-
-			# Skip headless workers
-			if echo "$cmdline" | grep -qE '\.opencode run '; then
-				continue
-			fi
-			# Skip language servers spawned by opencode
-			if echo "$cmdline" | grep -qE '(typescript-language-server|eslintServer|vscode-)'; then
-				continue
-			fi
-			# Skip node wrapper processes (the actual .opencode binary is what matters)
-			if echo "$cmdline" | grep -qE '^node .*/bin/opencode'; then
-				continue
-			fi
-			count=$((count + 1))
-		done <<<"$opencode_pids"
-	fi
-
-	echo "$count"
+# Headless exclusion patterns per runtime ID.
+# Returns a grep -E pattern that matches headless/worker command lines.
+# Empty return means "no headless mode" — all PIDs are interactive.
+_rt_headless_pattern() {
+	local rt_id="$1"
+	case "$rt_id" in
+	opencode)
+		echo '\.opencode run '
+		;;
+	claude-code)
+		echo 'claude (-p|--print|run) '
+		;;
+	codex)
+		echo 'codex (--quiet|-q) '
+		;;
+	*)
+		# No known headless pattern — treat all PIDs as interactive
+		echo ""
+		;;
+	esac
 	return 0
 }
 
-# Count interactive Claude Code sessions.
-# Excludes headless modes (-p, --print, run).
-# Outputs the count on stdout.
-_count_claude_sessions() {
-	local count=0
-	local claude_pids=""
-	claude_pids=$(pgrep -x claude || true)
-
-	if [[ -n "$claude_pids" ]]; then
-		local pid
-		while IFS= read -r pid; do
-			[[ -z "$pid" ]] && continue
-			local cmdline
-			cmdline=$(_get_pid_cmdline "$pid")
-
-			# Skip headless modes
-			if echo "$cmdline" | grep -qE 'claude (-p|--print|run) '; then
-				continue
-			fi
-			count=$((count + 1))
-		done <<<"$claude_pids"
-	fi
-
-	echo "$count"
+# Noise exclusion patterns per runtime ID.
+# Returns a grep -E pattern that matches non-session processes (LSPs, wrappers).
+# Empty return means "no noise to filter".
+_rt_noise_pattern() {
+	local rt_id="$1"
+	case "$rt_id" in
+	opencode)
+		echo '(typescript-language-server|eslintServer|vscode-)|^node .*/bin/opencode'
+		;;
+	*)
+		echo ""
+		;;
+	esac
 	return 0
 }
 
-# Count interactive sessions for a simple app (Cursor, Windsurf, Aider).
-# These apps have no headless mode to filter — all matching PIDs are interactive.
-# Args: $1 = pgrep pattern
+# pgrep strategy per runtime ID.
+# Returns "exact" for pgrep -x (exact binary match) or "fuzzy" for pgrep -f.
+_rt_pgrep_strategy() {
+	local rt_id="$1"
+	case "$rt_id" in
+	opencode)
+		# opencode binary appears as .opencode in process list
+		echo "fuzzy"
+		;;
+	cursor)
+		echo "fuzzy"
+		;;
+	windsurf)
+		echo "fuzzy"
+		;;
+	*)
+		echo "exact"
+		;;
+	esac
+	return 0
+}
+
+# pgrep pattern per runtime ID (overrides binary name when needed).
+_rt_pgrep_pattern() {
+	local rt_id="$1"
+	local bin="$2"
+	case "$rt_id" in
+	opencode)
+		echo '\.opencode'
+		;;
+	cursor)
+		echo 'Cursor\.app'
+		;;
+	windsurf)
+		echo 'Windsurf'
+		;;
+	*)
+		echo "$bin"
+		;;
+	esac
+	return 0
+}
+
+# Count interactive sessions for a single runtime.
+# Args: $1 = runtime ID
 # Outputs the count on stdout.
-_count_simple_sessions() {
-	local pattern="$1"
-	local pids=""
-	pids=$(pgrep -f "$pattern" || true)
-	if [[ -n "$pids" ]]; then
-		echo "$pids" | wc -l | tr -d ' '
-	else
+_count_runtime_sessions() {
+	local rt_id="$1"
+	local bin
+	bin=$(rt_binary "$rt_id") || bin=""
+	[[ -z "$bin" ]] && {
 		echo "0"
+		return 0
+	}
+
+	local strategy pgrep_pat headless_pat noise_pat
+	strategy=$(_rt_pgrep_strategy "$rt_id")
+	pgrep_pat=$(_rt_pgrep_pattern "$rt_id" "$bin")
+	headless_pat=$(_rt_headless_pattern "$rt_id")
+	noise_pat=$(_rt_noise_pattern "$rt_id")
+
+	local pids=""
+	if [[ "$strategy" == "fuzzy" ]]; then
+		pids=$(pgrep -f "$pgrep_pat" || true)
+	else
+		pids=$(pgrep -x "$bin" || true)
 	fi
+
+	if [[ -z "$pids" ]]; then
+		echo "0"
+		return 0
+	fi
+
+	# If no filtering needed, just count PIDs
+	if [[ -z "$headless_pat" && -z "$noise_pat" ]]; then
+		echo "$pids" | wc -l | tr -d ' '
+		return 0
+	fi
+
+	# Filter out headless and noise processes
+	local count=0
+	local pid
+	while IFS= read -r pid; do
+		[[ -z "$pid" ]] && continue
+		local cmdline
+		cmdline=$(_get_pid_cmdline "$pid")
+
+		if [[ -n "$headless_pat" ]] && echo "$cmdline" | grep -qE "$headless_pat"; then
+			continue
+		fi
+		if [[ -n "$noise_pat" ]] && echo "$cmdline" | grep -qE "$noise_pat"; then
+			continue
+		fi
+		count=$((count + 1))
+	done <<<"$pids"
+
+	echo "$count"
 	return 0
 }
 
-# Count interactive AI sessions.
+# Count interactive AI sessions across all installed runtimes.
 # Returns the count on stdout.
-# Uses pgrep + /proc/cmdline (Linux) or ps (macOS) to distinguish
-# interactive from headless sessions.
+# Uses runtime-registry.sh for detection (t1665.5).
 count_interactive_sessions() {
 	local count=0
-	local n
+	local rt_id n
 
-	n=$(_count_opencode_sessions)
-	count=$((count + n))
-
-	n=$(_count_claude_sessions)
-	count=$((count + n))
-
-	# --- Cursor sessions ---
-	# Note: pgrep -c is Linux-only; use pgrep | wc -l for cross-platform.
-	# Guard with -n check to avoid counting empty output as 1.
-	n=$(_count_simple_sessions 'Cursor\.app')
-	count=$((count + n))
-
-	# --- Windsurf sessions ---
-	n=$(_count_simple_sessions 'Windsurf')
-	count=$((count + n))
-
-	# --- Aider sessions ---
-	n=$(_count_simple_sessions 'aider')
-	count=$((count + n))
+	while IFS= read -r rt_id; do
+		[[ -z "$rt_id" ]] && continue
+		n=$(_count_runtime_sessions "$rt_id")
+		count=$((count + n))
+	done < <(rt_detect_installed)
 
 	echo "$count"
 	return 0
@@ -235,116 +282,65 @@ _print_session_detail() {
 	return 0
 }
 
-# List interactive OpenCode sessions with details.
-# Excludes headless workers, language servers, and node wrappers.
-# Increments the found counter via stdout (caller adds to its own count).
-# Args: none. Outputs detail lines; returns number of sessions found.
-_list_opencode_sessions() {
-	local found=0
-	local opencode_pids=""
-	opencode_pids=$(pgrep -f '\.opencode' || true)
-
-	if [[ -n "$opencode_pids" ]]; then
-		local pid
-		while IFS= read -r pid; do
-			[[ -z "$pid" ]] && continue
-			local cmdline
-			cmdline=$(_get_pid_cmdline "$pid")
-
-			# Skip headless, language servers, node wrappers
-			if echo "$cmdline" | grep -qE '\.opencode run '; then
-				continue
-			fi
-			if echo "$cmdline" | grep -qE '(typescript-language-server|eslintServer|vscode-)'; then
-				continue
-			fi
-			if echo "$cmdline" | grep -qE '^node .*/bin/opencode'; then
-				continue
-			fi
-
-			_print_session_detail "$pid" "OpenCode"
-			found=$((found + 1))
-		done <<<"$opencode_pids"
-	fi
-
-	return "$found"
-}
-
-# List interactive Claude Code sessions with details.
-# Excludes headless modes (-p, --print, run).
+# List interactive sessions for a single runtime with details.
+# Args: $1 = runtime ID
 # Returns number of sessions found via exit code.
-_list_claude_sessions() {
-	local found=0
-	local claude_pids=""
-	claude_pids=$(pgrep -x claude || true)
+_list_runtime_sessions() {
+	local rt_id="$1"
+	local bin display_name
+	bin=$(rt_binary "$rt_id") || bin=""
+	[[ -z "$bin" ]] && return 0
+	display_name=$(rt_display_name "$rt_id") || display_name="$rt_id"
 
-	if [[ -n "$claude_pids" ]]; then
-		local pid
-		while IFS= read -r pid; do
-			[[ -z "$pid" ]] && continue
-			local cmdline
-			cmdline=$(_get_pid_cmdline "$pid")
+	local strategy pgrep_pat headless_pat noise_pat
+	strategy=$(_rt_pgrep_strategy "$rt_id")
+	pgrep_pat=$(_rt_pgrep_pattern "$rt_id" "$bin")
+	headless_pat=$(_rt_headless_pattern "$rt_id")
+	noise_pat=$(_rt_noise_pattern "$rt_id")
 
-			if echo "$cmdline" | grep -qE 'claude (-p|--print|run) '; then
-				continue
-			fi
-
-			_print_session_detail "$pid" "Claude Code"
-			found=$((found + 1))
-		done <<<"$claude_pids"
-	fi
-
-	return "$found"
-}
-
-# List interactive sessions for a simple app (Cursor, Windsurf, Aider).
-# All matching PIDs are treated as interactive (no headless mode to filter).
-# Args: $1 = pgrep pattern, $2 = display name
-# Returns number of sessions found via exit code.
-_list_simple_app_sessions() {
-	local pattern="$1"
-	local display_name="$2"
-	local found=0
 	local pids=""
-	pids=$(pgrep -f "$pattern" || true)
-
-	if [[ -n "$pids" ]]; then
-		local pid
-		while IFS= read -r pid; do
-			[[ -z "$pid" ]] && continue
-			_print_session_detail "$pid" "$display_name"
-			found=$((found + 1))
-		done <<<"$pids"
+	if [[ "$strategy" == "fuzzy" ]]; then
+		pids=$(pgrep -f "$pgrep_pat" || true)
+	else
+		pids=$(pgrep -x "$bin" || true)
 	fi
+
+	[[ -z "$pids" ]] && return 0
+
+	local found=0
+	local pid
+	while IFS= read -r pid; do
+		[[ -z "$pid" ]] && continue
+		local cmdline
+		cmdline=$(_get_pid_cmdline "$pid")
+
+		if [[ -n "$headless_pat" ]] && echo "$cmdline" | grep -qE "$headless_pat"; then
+			continue
+		fi
+		if [[ -n "$noise_pat" ]] && echo "$cmdline" | grep -qE "$noise_pat"; then
+			continue
+		fi
+
+		_print_session_detail "$pid" "$display_name"
+		found=$((found + 1))
+	done <<<"$pids"
 
 	return "$found"
 }
 
-# List detected interactive sessions with details.
+# List detected interactive sessions with details (t1665.5).
 # Output format: PID | APP | RSS_MB | UPTIME
+# Uses runtime-registry.sh for detection.
 list_sessions() {
 	local found=0
 	local n=0
+	local rt_id
 
-	# --- OpenCode sessions ---
-	_list_opencode_sessions || n=$?
-	found=$((found + n))
-
-	# --- Claude Code sessions ---
-	_list_claude_sessions || n=$?
-	found=$((found + n))
-
-	# --- Cursor sessions ---
-	_list_simple_app_sessions 'Cursor\.app' "Cursor" || n=$?
-	found=$((found + n))
-
-	# --- Windsurf sessions ---
-	_list_simple_app_sessions 'Windsurf' "Windsurf" || n=$?
-	found=$((found + n))
-
-	# --- Aider sessions ---
-	_list_simple_app_sessions 'aider' "Aider" || n=$?
-	found=$((found + n))
+	while IFS= read -r rt_id; do
+		[[ -z "$rt_id" ]] && continue
+		_list_runtime_sessions "$rt_id" || n=$?
+		found=$((found + n))
+	done < <(rt_detect_installed)
 
 	if [[ "$found" -eq 0 ]]; then
 		echo "  No interactive AI sessions detected"

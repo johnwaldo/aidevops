@@ -129,14 +129,14 @@ check_jq() {
 }
 
 #######################################
-# Detect available AI CLI backend (t1160.3, t1160)
-# Sets AIDEVOPS_DISPATCH_BACKEND to "opencode" or "claude"
+# Detect available AI CLI backend (t1160.3, t1160, t1665.5)
+# Sets AIDEVOPS_DISPATCH_BACKEND to a binary name (e.g., "opencode", "claude")
 #
 # Priority (aligned with supervisor/dispatch.sh resolve_ai_cli):
 #   1. AIDEVOPS_DISPATCH_BACKEND env var (explicit override)
 #   2. SUPERVISOR_CLI env var (supervisor-level override)
-#   3. opencode (primary — handles all providers including Anthropic OAuth)
-#   4. claude (first-class fallback — Anthropic-only, OAuth subscription billing)
+#   3. First headless-capable runtime found via registry (preference order:
+#      opencode first, then others by registry order)
 #
 # Returns 1 if no backend is available
 #######################################
@@ -148,8 +148,9 @@ detect_dispatch_backend() {
 
 	# Honour SUPERVISOR_CLI if set (supervisor-level override)
 	if [[ -n "${SUPERVISOR_CLI:-}" ]]; then
-		if [[ "$SUPERVISOR_CLI" != "opencode" && "$SUPERVISOR_CLI" != "claude" ]]; then
-			log_error "SUPERVISOR_CLI='$SUPERVISOR_CLI' is not a supported CLI (opencode|claude)"
+		# Validate it's a known runtime binary
+		if ! rt_id_from_binary "$SUPERVISOR_CLI" >/dev/null 2>&1; then
+			log_error "SUPERVISOR_CLI='$SUPERVISOR_CLI' is not a registered runtime binary"
 			return 1
 		fi
 		if command -v "$SUPERVISOR_CLI" &>/dev/null; then
@@ -161,17 +162,40 @@ detect_dispatch_backend() {
 		return 1
 	fi
 
-	if command -v opencode &>/dev/null; then
-		AIDEVOPS_DISPATCH_BACKEND="opencode"
-	elif command -v claude &>/dev/null; then
-		AIDEVOPS_DISPATCH_BACKEND="claude"
-	else
-		log_error "No AI CLI backend available. Install opencode (https://opencode.ai) or Claude Code CLI (https://docs.anthropic.com/en/docs/claude-cli)"
-		return 1
+	# Use registry to find first available headless-capable runtime.
+	# Preference: opencode first (handles all providers), then others.
+	local rt_id bin
+	# Check opencode first (primary preference)
+	bin=$(rt_binary "opencode") || bin=""
+	if [[ -n "$bin" ]] && command -v "$bin" &>/dev/null; then
+		AIDEVOPS_DISPATCH_BACKEND="$bin"
+		log_info "Using dispatch backend: $AIDEVOPS_DISPATCH_BACKEND"
+		return 0
 	fi
+	# Check claude-code second (first-class fallback)
+	bin=$(rt_binary "claude-code") || bin=""
+	if [[ -n "$bin" ]] && command -v "$bin" &>/dev/null; then
+		AIDEVOPS_DISPATCH_BACKEND="$bin"
+		log_info "Using dispatch backend: $AIDEVOPS_DISPATCH_BACKEND"
+		return 0
+	fi
+	# Fall through to any other headless-capable runtime
+	while IFS= read -r rt_id; do
+		[[ -z "$rt_id" ]] && continue
+		[[ "$rt_id" == "opencode" || "$rt_id" == "claude-code" ]] && continue # already checked
+		local headless
+		headless=$(rt_headless_support "$rt_id") || headless=""
+		[[ "$headless" != "yes" ]] && continue
+		bin=$(rt_binary "$rt_id") || continue
+		if [[ -n "$bin" ]] && command -v "$bin" &>/dev/null; then
+			AIDEVOPS_DISPATCH_BACKEND="$bin"
+			log_info "Using dispatch backend: $AIDEVOPS_DISPATCH_BACKEND"
+			return 0
+		fi
+	done < <(rt_list_ids)
 
-	log_info "Using dispatch backend: $AIDEVOPS_DISPATCH_BACKEND"
-	return 0
+	log_error "No AI CLI backend available. Install a supported runtime: https://aidevops.sh/runtimes"
+	return 1
 }
 
 #######################################

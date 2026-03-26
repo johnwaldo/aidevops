@@ -1377,20 +1377,26 @@ resolve_model_tier() {
 }
 
 #######################################
-# Detect available AI CLI backends (t132.7)
-# Returns a newline-separated list of available backends.
-# Checks: opencode, claude
+# Detect available AI CLI backends (t132.7, t1665.5)
+# Returns a newline-separated list of available backend binary names.
+# Delegates to runtime-registry.sh rt_detect_installed() for detection,
+# then maps runtime IDs back to binary names for backward compatibility.
 #######################################
 detect_ai_backends() {
 	local -a backends=()
+	local rt_id bin
 
-	if command -v opencode &>/dev/null; then
-		backends+=("opencode")
-	fi
-
-	if command -v claude &>/dev/null; then
-		backends+=("claude")
-	fi
+	# runtime-registry.sh is sourced above in this file
+	while IFS= read -r rt_id; do
+		[[ -z "$rt_id" ]] && continue
+		bin=$(rt_binary "$rt_id") || continue
+		[[ -z "$bin" ]] && continue
+		# Only include runtimes with headless support (dispatchable backends)
+		local headless
+		headless=$(rt_headless_support "$rt_id") || headless=""
+		[[ "$headless" != "yes" ]] && continue
+		backends+=("$bin")
+	done < <(rt_detect_installed)
 
 	if [[ ${#backends[@]} -eq 0 ]]; then
 		echo "none"
