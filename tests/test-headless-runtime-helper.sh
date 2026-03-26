@@ -418,6 +418,50 @@ else
 fi
 rm -f "$LOCK_DIR/issue-other.pid"
 
+# ── GH#6668: OPENCODE_PID must not be passed through to workers ──────────────
+# Workers inheriting OPENCODE_PID attach to the pulse's session instead of
+# creating independent sessions, causing all workers to share one session and
+# exit immediately with 0 commits / 0 PRs.
+section "Sandbox passthrough exclusions (GH#6668)"
+
+# Source the helper in a subshell so we can call build_sandbox_passthrough_csv
+# directly without polluting the test environment.
+passthrough_csv=$(
+	export OPENCODE_PID="12345"
+	export OPENCODE_SESSION_ID="ses_pulse_session"
+	export OPENCODE_BIN="$TEST_TMP_DIR/opencode-stub.sh"
+	export ANTHROPIC_API_KEY="test-key"
+	# shellcheck source=/dev/null
+	. "$HELPER" 2>/dev/null || true
+	build_sandbox_passthrough_csv 2>/dev/null || true
+)
+
+if echo "$passthrough_csv" | grep -qw "OPENCODE_PID"; then
+	fail "OPENCODE_PID excluded from worker passthrough" "found in: $passthrough_csv"
+else
+	pass "OPENCODE_PID excluded from worker passthrough"
+fi
+
+if echo "$passthrough_csv" | grep -qw "OPENCODE_SESSION_ID"; then
+	fail "OPENCODE_SESSION_ID excluded from worker passthrough" "found in: $passthrough_csv"
+else
+	pass "OPENCODE_SESSION_ID excluded from worker passthrough"
+fi
+
+# Other OPENCODE_* vars (e.g. OPENCODE_BIN) should still pass through
+if echo "$passthrough_csv" | grep -qw "OPENCODE_BIN"; then
+	pass "other OPENCODE_* vars still pass through"
+else
+	fail "other OPENCODE_* vars still pass through" "OPENCODE_BIN missing from: $passthrough_csv"
+fi
+
+# ANTHROPIC_API_KEY should still pass through
+if echo "$passthrough_csv" | grep -qw "ANTHROPIC_API_KEY"; then
+	pass "ANTHROPIC_API_KEY still passes through"
+else
+	fail "ANTHROPIC_API_KEY still passes through" "missing from: $passthrough_csv"
+fi
+
 echo ""
 printf "Total: %d, Passed: %d, Failed: %d\n" "$TOTAL_COUNT" "$PASS_COUNT" "$FAIL_COUNT"
 

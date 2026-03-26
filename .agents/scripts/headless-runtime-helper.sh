@@ -88,6 +88,15 @@ build_sandbox_passthrough_csv() {
 	while IFS='=' read -r name _; do
 		case "$name" in
 		AIDEVOPS_* | PULSE_* | GH_* | GITHUB_* | OPENAI_* | ANTHROPIC_* | GOOGLE_* | OPENCODE_* | CLAUDE_* | XDG_* | REAL_HOME | TMPDIR | TMP | TEMP | RTK_* | VERIFY_*)
+			# Exclude session-attachment vars that are only meaningful for the
+			# dispatching process (pulse/supervisor). Workers inheriting these
+			# attach to the parent's session instead of creating independent ones.
+			# GH#6668: OPENCODE_PID caused all workers to share the pulse session.
+			case "$name" in
+			OPENCODE_PID | OPENCODE_SESSION_ID)
+				continue
+				;;
+			esac
 			if [[ "$seen_names" == *" ${name} "* ]]; then
 				continue
 			fi
@@ -1219,4 +1228,7 @@ main() {
 	esac
 }
 
-main "$@"
+# Allow sourcing for unit tests without executing main
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	main "$@"
+fi
