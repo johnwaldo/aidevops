@@ -75,21 +75,12 @@ const commands = [
     .setName("ask").setDescription("Ask the AI a question")
     .addStringOption((opt) =>
       opt.setName("prompt").setDescription("Your question").setRequired(true)
-    )
-    .addStringOption((opt) =>
-      opt.setName("runner").setDescription("Which runner to use")
-        .addChoices(
-          { name: "Code Reviewer", value: "code-reviewer" },
-          { name: "SEO Analyst", value: "seo-analyst" },
-          { name: "Ops Monitor", value: "ops-monitor" }
-        )
     ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST().setToken(process.env.DISCORD_BOT_TOKEN!);
 // Global (up to 1 hour to propagate) or per-guild (instant, for development):
 await rest.put(Routes.applicationCommands(process.env.DISCORD_APP_ID!), { body: commands });
-// await rest.put(Routes.applicationGuildCommands(appId, guildId), { body: commands });
 ```
 
 ### Handle
@@ -137,7 +128,7 @@ import {
   StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
 } from "discord.js";
 
-// Buttons
+// Buttons — reply with components, handle via isButton()
 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
   new ButtonBuilder().setCustomId("approve").setLabel("Approve").setStyle(ButtonStyle.Success),
   new ButtonBuilder().setCustomId("reject").setLabel("Reject").setStyle(ButtonStyle.Danger)
@@ -147,14 +138,13 @@ client.on(Events.InteractionCreate, async (i) => {
   if (i.isButton() && i.customId === "approve") await i.update({ content: "Approved!", components: [] });
 });
 
-// Select menu
+// Select menu — handle via isStringSelectMenu()
 const select = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
   new StringSelectMenuBuilder().setCustomId("runner-select").setPlaceholder("Choose a runner")
     .addOptions({ label: "Code Reviewer", value: "code-reviewer" }, { label: "SEO Analyst", value: "seo-analyst" })
 );
-await interaction.reply({ content: "Select runner:", components: [select] });
 
-// Modal (text input form — use showModal(), handle via isModalSubmit())
+// Modal (text input form) — show via showModal(), handle via isModalSubmit()
 const modal = new ModalBuilder().setCustomId("task-modal").setTitle("Create Task");
 modal.addComponents(
   new ActionRowBuilder<TextInputBuilder>().addComponents(
@@ -162,10 +152,6 @@ modal.addComponents(
   )
 );
 await interaction.showModal(modal);
-client.on(Events.InteractionCreate, async (i) => {
-  if (i.isModalSubmit() && i.customId === "task-modal")
-    await i.reply(`Task created: **${i.fields.getTextInputValue("task-title")}**`);
-});
 ```
 
 ## Messaging Patterns
@@ -182,18 +168,12 @@ if (channel?.isTextBased()) {
   ]});
 }
 
-// DM
+// DM — bot-initiated; handle incoming DMs via MessageCreate (filter message.guild === null)
 const user = await client.users.fetch("USER_ID");
 await user.send("Your task has been completed.");
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot || message.guild) return;
-  await message.reply("Use /ask in a server for AI help.");
-});
 
-// Thread from message
+// Thread, file attachment, reaction
 const thread = await message.startThread({ name: "AI Discussion", autoArchiveDuration: 60 });
-
-// File + reaction
 await channel.send({ files: [new AttachmentBuilder(Buffer.from("content", "utf-8"), { name: "output.md" })] });
 await message.react("✅");
 ```
@@ -308,7 +288,7 @@ For systemd: create `/etc/systemd/system/discord-bot.service` with `Type=simple`
 | Deferred response edit | 15 minutes |
 | Component/modal interaction | 3 seconds (use `deferUpdate()`) |
 
-discord.js handles rate limiting automatically. Long responses: (1) file attachment as `.md`, (2) embeds (4096 chars in description), (3) thread with multiple messages.
+discord.js handles rate limiting automatically.
 
 ## Troubleshooting
 
