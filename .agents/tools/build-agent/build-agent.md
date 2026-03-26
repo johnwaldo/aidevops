@@ -203,4 +203,4 @@ Agent changes in `.agents/` require `cd ~/Git/aidevops && ./setup.sh`. Offer to 
 
 ## Reviewing Existing Agents
 
-See `agent-review.md` for systematic review (instruction budgets, universal applicability, duplicates, code examples, AI-CONTEXT blocks, stale content, MCP configuration).
+See `tools/build-agent/agent-review.md` for systematic review (instruction budgets, universal applicability, duplicates, code examples, AI-CONTEXT blocks, stale content, MCP configuration).
