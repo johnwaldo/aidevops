@@ -88,6 +88,42 @@ _trim_whitespace() {
 	return 0
 }
 
+# _extract_snippet_from_inline_code: fallback snippet extraction from
+# blockquotes, indented code blocks, and inline backtick code.
+# Arguments: $1=body_full
+# Outputs first qualifying line to stdout; returns 0 on success, 1 if none found.
+_extract_snippet_from_inline_code() {
+	local body_full="$1"
+	local line=""
+
+	while IFS= read -r line; do
+		case "$line" in
+		'> '*)
+			line="${line#> }"
+			;;
+		'    '* | '	'*)
+			# indented code block (4 spaces or tab)
+			line="${line#    }"
+			line="${line#	}"
+			;;
+		'`'*)
+			# inline backtick code — strip surrounding backticks
+			line="${line//\`/}"
+			;;
+		*)
+			continue
+			;;
+		esac
+		line=$(_trim_whitespace "$line")
+		if [[ -n "$line" && ${#line} -ge 12 ]]; then
+			echo "$line"
+			return 0
+		fi
+	done <<<"$body_full"
+
+	return 1
+}
+
 _extract_verification_snippet() {
 	local body_full="$1"
 	local line=""
@@ -156,32 +192,9 @@ _extract_verification_snippet() {
 		fi
 	done <<<"$body_full"
 
-	while IFS= read -r line; do
-		case "$line" in
-		'> '*)
-			line="${line#> }"
-			;;
-		'    '* | '	'*)
-			# indented code block (4 spaces or tab)
-			line="${line#    }"
-			line="${line#	}"
-			;;
-		'`'*)
-			# inline backtick code — strip surrounding backticks
-			line="${line//\`/}"
-			;;
-		*)
-			continue
-			;;
-		esac
-		line=$(_trim_whitespace "$line")
-		if [[ -n "$line" && ${#line} -ge 12 ]]; then
-			echo "$line"
-			return 0
-		fi
-	done <<<"$body_full"
-
-	return 1
+	# Fallback: try blockquotes, indented blocks, and inline backtick code
+	_extract_snippet_from_inline_code "$body_full"
+	return $?
 }
 
 # _body_has_suggestion_fence: returns 0 (true) if body_full contains a
@@ -200,60 +213,38 @@ _body_has_suggestion_fence() {
 	return 1
 }
 
-_finding_still_exists_on_main() {
+# _fetch_file_on_branch: fetch raw file content from GitHub API.
+# Outputs file content to stdout.
+# Returns 0 on success, 1 if file is missing (404), 2 on other API error.
+_fetch_file_on_branch() {
 	local repo_slug="$1"
 	local file_path="$2"
-	local line_num="$3"
-	local body_full="$4"
+	local branch="$3"
 
-	if [[ -z "$file_path" || "$file_path" == "null" ]]; then
-		echo '{"result":true,"status":"unverifiable"}'
-		return 0
-	fi
-
-	local default_branch
-	default_branch=$(_get_default_branch "$repo_slug")
-
-	local file_content
 	local api_err
 	api_err="$(mktemp)"
+	local file_content
 	if ! file_content=$(gh api -H "Accept: application/vnd.github.raw" \
-		"repos/${repo_slug}/contents/${file_path}?ref=${default_branch}" 2>"$api_err"); then
+		"repos/${repo_slug}/contents/${file_path}?ref=${branch}" 2>"$api_err"); then
 		if grep -q "404" "$api_err"; then
-			echo "[scan] Skipping resolved finding: ${file_path}:${line_num} - file missing on ${default_branch}" >&2
 			rm -f "$api_err"
-			echo '{"result":false,"status":"resolved"}'
 			return 1
 		fi
-		echo "[scan] Keeping unverifiable finding: ${file_path}:${line_num} - failed to fetch ${default_branch}" >&2
 		rm -f "$api_err"
-		echo '{"result":true,"status":"unverifiable"}'
-		return 0
+		return 2
 	fi
 	rm -f "$api_err"
+	printf '%s' "$file_content"
+	return 0
+}
 
-	if [[ -z "$file_content" ]]; then
-		echo "[scan] Skipping resolved finding: ${file_path}:${line_num} - file missing on ${default_branch}" >&2
-		echo '{"result":false,"status":"resolved"}'
-		return 1
-	fi
-
-	local snippet
-	if ! snippet=$(_extract_verification_snippet "$body_full"); then
-		echo "[scan] Keeping unverifiable finding: ${file_path}:${line_num} - no snippet extracted" >&2
-		echo '{"result":true,"status":"unverifiable"}'
-		return 0
-	fi
-
-	# Determine snippet semantics (GH#4874):
-	# - suggestion fence → snippet is the proposed FIX text.
-	#   Finding is resolved when the fix IS present in HEAD (suggestion applied).
-	# - all other sources → snippet is the PROBLEM text.
-	#   Finding is resolved when the problem is ABSENT from HEAD (problem fixed).
-	local is_suggestion_snippet="false"
-	if _body_has_suggestion_fence "$body_full"; then
-		is_suggestion_snippet="true"
-	fi
+# _snippet_found_in_content: search for snippet in file_content, optionally
+# anchored to a ±20-line window around line_num.
+# Returns 0 if found, 1 if not found.
+_snippet_found_in_content() {
+	local file_content="$1"
+	local snippet="$2"
+	local line_num="$3"
 
 	local found_in_window="false"
 	if [[ "$line_num" =~ ^[0-9]+$ && "$line_num" -gt 0 ]]; then
@@ -278,12 +269,24 @@ _finding_still_exists_on_main() {
 		fi
 	fi
 
-	local snippet_found="false"
 	if [[ "$found_in_window" == "true" ]]; then
-		snippet_found="true"
-	elif printf '%s' "$file_content" | grep -Fq -e "$snippet"; then
-		snippet_found="true"
+		return 0
 	fi
+	if printf '%s' "$file_content" | grep -Fq -e "$snippet"; then
+		return 0
+	fi
+	return 1
+}
+
+# _emit_snippet_verdict: given snippet semantics and whether the snippet was
+# found, emit the JSON result and return the appropriate exit code.
+# Returns 0 if finding is still actionable, 1 if resolved.
+_emit_snippet_verdict() {
+	local is_suggestion_snippet="$1"
+	local snippet_found="$2"
+	local file_path="$3"
+	local line_num="$4"
+	local default_branch="$5"
 
 	if [[ "$is_suggestion_snippet" == "true" ]]; then
 		# Suggestion snippet: found in HEAD → fix already applied → resolved → skip
@@ -306,6 +309,63 @@ _finding_still_exists_on_main() {
 		echo '{"result":false,"status":"resolved"}'
 		return 1
 	fi
+}
+
+_finding_still_exists_on_main() {
+	local repo_slug="$1"
+	local file_path="$2"
+	local line_num="$3"
+	local body_full="$4"
+
+	if [[ -z "$file_path" || "$file_path" == "null" ]]; then
+		echo '{"result":true,"status":"unverifiable"}'
+		return 0
+	fi
+
+	local default_branch
+	default_branch=$(_get_default_branch "$repo_slug")
+
+	local file_content
+	local fetch_rc
+	file_content=$(_fetch_file_on_branch "$repo_slug" "$file_path" "$default_branch") || fetch_rc=$?
+	fetch_rc="${fetch_rc:-0}"
+
+	if [[ "$fetch_rc" -eq 1 || -z "$file_content" ]]; then
+		echo "[scan] Skipping resolved finding: ${file_path}:${line_num} - file missing on ${default_branch}" >&2
+		echo '{"result":false,"status":"resolved"}'
+		return 1
+	fi
+	if [[ "$fetch_rc" -eq 2 ]]; then
+		echo "[scan] Keeping unverifiable finding: ${file_path}:${line_num} - failed to fetch ${default_branch}" >&2
+		echo '{"result":true,"status":"unverifiable"}'
+		return 0
+	fi
+
+	local snippet
+	if ! snippet=$(_extract_verification_snippet "$body_full"); then
+		echo "[scan] Keeping unverifiable finding: ${file_path}:${line_num} - no snippet extracted" >&2
+		echo '{"result":true,"status":"unverifiable"}'
+		return 0
+	fi
+
+	# Determine snippet semantics (GH#4874):
+	# - suggestion fence → snippet is the proposed FIX text.
+	#   Finding is resolved when the fix IS present in HEAD (suggestion applied).
+	# - all other sources → snippet is the PROBLEM text.
+	#   Finding is resolved when the problem is ABSENT from HEAD (problem fixed).
+	local is_suggestion_snippet="false"
+	if _body_has_suggestion_fence "$body_full"; then
+		is_suggestion_snippet="true"
+	fi
+
+	local snippet_found="false"
+	if _snippet_found_in_content "$file_content" "$snippet" "$line_num"; then
+		snippet_found="true"
+	fi
+
+	_emit_snippet_verdict "$is_suggestion_snippet" "$snippet_found" \
+		"$file_path" "$line_num" "$default_branch"
+	return $?
 }
 
 # Show status of all checks
@@ -627,7 +687,10 @@ cmd_watch() {
 #
 # Returns: 0 on success, 1 on error
 #######################################
-cmd_scan_merged() {
+# _parse_scan_merged_flags: parse cmd_scan_merged CLI flags.
+# Outputs newline-separated key=value pairs for each option.
+# Returns 0 on success, 1 on unknown flag.
+_parse_scan_merged_flags() {
 	local repo_slug=""
 	local batch_size=20
 	local create_issues=false
@@ -638,7 +701,6 @@ cmd_scan_merged() {
 	local dry_run=false
 	local include_positive=false
 
-	# Parse flags
 	while [[ $# -gt 0 ]]; do
 		local flag="$1"
 		case "$1" in
@@ -685,113 +747,84 @@ cmd_scan_merged() {
 		esac
 	done
 
-	# Validate batch_size is a positive integer (prevents command injection via arithmetic)
-	if ! [[ "$batch_size" =~ ^[0-9]+$ ]] || [[ "$batch_size" -eq 0 ]]; then
-		echo "Error: --batch must be a positive integer, got: ${batch_size}" >&2
-		return 1
-	fi
+	printf 'repo_slug=%s\n' "$repo_slug"
+	printf 'batch_size=%s\n' "$batch_size"
+	printf 'create_issues=%s\n' "$create_issues"
+	printf 'min_severity=%s\n' "$min_severity"
+	printf 'json_output=%s\n' "$json_output"
+	printf 'backfill=%s\n' "$backfill"
+	printf 'tag_actioned=%s\n' "$tag_actioned"
+	printf 'dry_run=%s\n' "$dry_run"
+	printf 'include_positive=%s\n' "$include_positive"
+	return 0
+}
 
-	# Auto-detect repo if not specified
-	if [[ -z "$repo_slug" ]]; then
-		repo_slug=$(get_repo) || return 1
-	fi
+# _fetch_merged_prs_list: fetch merged PRs from GitHub.
+# Outputs one "number|scanned_label" record per line.
+# Returns 0 on success, 1 on API error.
+_fetch_merged_prs_list() {
+	local repo_slug="$1"
+	local batch_size="$2"
+	local backfill="$3"
 
-	# Shared PR-level marker to prevent duplicate scans across users/runners
-	gh label create "review-feedback-scanned" --repo "$repo_slug" --color "5319E7" \
-		--description "Merged PR already scanned for quality feedback" --force 2>/dev/null || true
-
-	# State file for tracking scanned PRs
-	local state_dir="${HOME}/.aidevops/logs"
-	mkdir -p "$state_dir"
-	local slug_safe="${repo_slug//\//-}"
-	local state_file="${state_dir}/review-scan-state-${slug_safe}.json"
-
-	# Initialize state file if missing
-	if [[ ! -f "$state_file" ]]; then
-		echo '{"scanned_prs":[],"last_run":"","issues_created":0}' >"$state_file"
-	fi
-
-	# Fetch merged PRs — backfill uses gh api pagination for ALL PRs,
-	# normal mode uses gh pr list with a limited window (t1413)
-	local merged_prs
 	if [[ "$backfill" == true ]]; then
 		echo "Backfill mode: fetching ALL merged PRs for ${repo_slug}..." >&2
-		merged_prs=$(gh api "repos/${repo_slug}/pulls?state=closed&per_page=100&sort=updated&direction=desc" \
-			--paginate --jq '.[] | select(.merged_at != null) | "\(.number)|\(((.labels // []) | map(.name) | index("review-feedback-scanned")) != null)"') || {
+		gh api "repos/${repo_slug}/pulls?state=closed&per_page=100&sort=updated&direction=desc" \
+			--paginate --jq '.[] | select(.merged_at != null) | "\(.number)|\(((.labels // []) | map(.name) | index("review-feedback-scanned")) != null)"' || {
 			echo "Error: Failed to fetch merged PRs from ${repo_slug}" >&2
 			return 1
 		}
 	else
-		merged_prs=$(gh pr list --repo "$repo_slug" --state merged \
+		gh pr list --repo "$repo_slug" --state merged \
 			--limit "$((batch_size * 2))" \
 			--json number,mergedAt,labels \
-			--jq 'sort_by(.mergedAt) | reverse | .[] | "\(.number)|\(([.labels[].name] | index("review-feedback-scanned")) != null)"') || {
+			--jq 'sort_by(.mergedAt) | reverse | .[] | "\(.number)|\(([.labels[].name] | index("review-feedback-scanned")) != null)"' || {
 			echo "Error: Failed to fetch merged PRs from ${repo_slug}" >&2
 			return 1
 		}
 	fi
+	return 0
+}
 
-	if [[ -z "$merged_prs" ]]; then
-		if [[ "$json_output" == "true" ]]; then
-			echo '{"scanned":0,"findings":0,"issues_created":0,"details":[]}'
-		else
-			echo "No merged PRs found in ${repo_slug}."
-		fi
-		return 0
-	fi
+# _save_scan_state: persist newly scanned PR numbers to the state file.
+# Arguments: state_file, newly_scanned_array_elements..., issues_created
+# (Pass array elements as positional args; last arg is issues_created count.)
+_save_scan_state() {
+	local state_file="$1"
+	local issues_created="$2"
+	shift 2
+	# Remaining args are the newly scanned PR numbers
+	local new_scanned_json
+	new_scanned_json=$(printf '%s\n' "$@" | jq -R 'tonumber' | jq -s '.')
+	local now_iso
+	now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+	jq --argjson new_prs "$new_scanned_json" \
+		--arg last_run "$now_iso" \
+		--argjson created "$issues_created" \
+		'.scanned_prs = (.scanned_prs + $new_prs | unique) | .last_run = $last_run | .issues_created = (.issues_created + $created)' \
+		"$state_file" >"${state_file}.tmp" && mv "${state_file}.tmp" "$state_file"
+	return 0
+}
 
-	# Filter out already-scanned PRs, limit to batch_size
-	# In backfill mode, process ALL unscanned PRs in batches with rate limiting
-	local prs_to_scan=()
-	local count=0
-	while IFS= read -r pr_record; do
-		local pr_num="${pr_record%%|*}"
-		local scanned_label="${pr_record#*|}"
-		[[ -z "$pr_num" ]] && continue
-
-		# Global dedup: if PR already marked scanned on GitHub, skip.
-		# This protects against duplicate scans across different HOME/state files.
-		if [[ "$scanned_label" == "true" ]]; then
-			continue
-		fi
-
-		# Skip if already scanned (use jq for reliable lookup)
-		if jq -e --argjson pr "$pr_num" '.scanned_prs | index($pr) != null' "$state_file" >/dev/null 2>&1; then
-			continue
-		fi
-		prs_to_scan+=("$pr_num")
-		count=$((count + 1))
-		# In normal mode, cap at batch_size. In backfill mode, collect all.
-		if [[ "$backfill" != true ]] && [[ "$count" -ge "$batch_size" ]]; then
-			break
-		fi
-	done <<<"$merged_prs"
-
-	if [[ ${#prs_to_scan[@]} -eq 0 ]]; then
-		if [[ "$json_output" == "true" ]]; then
-			echo '{"scanned":0,"findings":0,"issues_created":0,"details":[]}'
-		else
-			echo "All merged PRs already scanned for ${repo_slug}."
-		fi
-		# Even if nothing to scan, tag actioned PRs if requested
-		if [[ "$tag_actioned" == true ]]; then
-			_tag_actioned_prs "$repo_slug" "$state_file"
-		fi
-		return 0
-	fi
+# _process_pr_scan_loop: iterate over prs_to_scan, scan each PR, collect findings.
+# Modifies caller's total_findings, total_issues_created, all_findings_json,
+# newly_scanned, batch_count via nameref-style side effects through a temp file.
+# Outputs results as a single JSON line: {"findings":N,"issues":N,"scanned":N}
+_process_pr_scan_loop() {
+	local repo_slug="$1"
+	local min_severity="$2"
+	local include_positive="$3"
+	local create_issues="$4"
+	local dry_run="$5"
+	local backfill="$6"
+	local batch_size="$7"
+	local json_output="$8"
+	local state_file="$9"
+	shift 9
+	# Remaining args are the PR numbers to scan
+	local prs_to_scan=("$@")
 
 	local total_to_scan=${#prs_to_scan[@]}
-	if [[ "$json_output" != "true" ]]; then
-		echo -e "${BLUE:-}=== Scanning ${total_to_scan} merged PRs for unactioned review feedback ===${NC:-}"
-		echo "Repository: ${repo_slug}"
-		if [[ "$dry_run" == true ]]; then
-			echo "Mode: dry-run (no issues will be created, PRs will not be marked scanned)"
-		elif [[ "$backfill" == true ]]; then
-			echo "Mode: backfill (processing in batches of ${batch_size} with rate limiting)"
-		fi
-		echo ""
-	fi
-
 	local total_findings=0
 	local total_issues_created=0
 	local all_findings_json="[]"
@@ -808,15 +841,7 @@ cmd_scan_merged() {
 			sleep 5
 			# Save progress incrementally so we don't lose work on interruption
 			if [[ ${#newly_scanned[@]} -gt 0 ]]; then
-				local progress_json
-				progress_json=$(printf '%s\n' "${newly_scanned[@]}" | jq -R 'tonumber' | jq -s '.')
-				local progress_iso
-				progress_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-				jq --argjson new_prs "$progress_json" \
-					--arg last_run "$progress_iso" \
-					--argjson created "$total_issues_created" \
-					'.scanned_prs = (.scanned_prs + $new_prs | unique) | .last_run = $last_run | .issues_created = (.issues_created + $created)' \
-					"$state_file" >"${state_file}.tmp" && mv "${state_file}.tmp" "$state_file"
+				_save_scan_state "$state_file" "$total_issues_created" "${newly_scanned[@]}"
 				newly_scanned=()
 			fi
 		fi
@@ -862,25 +887,66 @@ cmd_scan_merged() {
 		fi
 	done
 
-	# Update state file with newly scanned PRs (final save) — skipped in dry-run
+	# Final state save — skipped in dry-run
 	if [[ "$dry_run" != true && ${#newly_scanned[@]} -gt 0 ]]; then
-		local new_scanned_json
-		new_scanned_json=$(printf '%s\n' "${newly_scanned[@]}" | jq -R 'tonumber' | jq -s '.')
-		local now_iso
-		now_iso=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-		jq --argjson new_prs "$new_scanned_json" \
-			--arg last_run "$now_iso" \
-			--argjson created "$total_issues_created" \
-			'.scanned_prs = (.scanned_prs + $new_prs | unique) | .last_run = $last_run | .issues_created = (.issues_created + $created)' \
-			"$state_file" >"${state_file}.tmp" && mv "${state_file}.tmp" "$state_file"
+		_save_scan_state "$state_file" "$total_issues_created" "${newly_scanned[@]}"
 	fi
 
-	# Tag actioned PRs if requested (t1413)
-	if [[ "$tag_actioned" == true ]]; then
-		_tag_actioned_prs "$repo_slug" "$state_file"
-	fi
+	# Return results as JSON for caller to consume
+	printf '%s' "$all_findings_json" >"${state_file}.findings_tmp"
+	printf '%d %d %d\n' "$total_findings" "$total_issues_created" "$batch_count"
+	return 0
+}
 
-	# Output
+# _filter_unscanned_prs: from a newline-separated "number|scanned_label" list,
+# return the PR numbers that have not yet been scanned, up to batch_size.
+# In backfill mode, returns all unscanned PRs.
+# Arguments: $1=merged_prs_text $2=state_file $3=batch_size $4=backfill
+# Outputs one PR number per line.
+_filter_unscanned_prs() {
+	local merged_prs="$1"
+	local state_file="$2"
+	local batch_size="$3"
+	local backfill="$4"
+
+	local count=0
+	while IFS= read -r pr_record; do
+		local pr_num="${pr_record%%|*}"
+		local scanned_label="${pr_record#*|}"
+		[[ -z "$pr_num" ]] && continue
+
+		# Global dedup: if PR already marked scanned on GitHub, skip.
+		# This protects against duplicate scans across different HOME/state files.
+		if [[ "$scanned_label" == "true" ]]; then
+			continue
+		fi
+
+		# Skip if already scanned (use jq for reliable lookup)
+		if jq -e --argjson pr "$pr_num" '.scanned_prs | index($pr) != null' "$state_file" >/dev/null 2>&1; then
+			continue
+		fi
+		echo "$pr_num"
+		count=$((count + 1))
+		# In normal mode, cap at batch_size. In backfill mode, collect all.
+		if [[ "$backfill" != true ]] && [[ "$count" -ge "$batch_size" ]]; then
+			break
+		fi
+	done <<<"$merged_prs"
+	return 0
+}
+
+# _print_scan_summary: emit the final scan summary to stdout.
+# Arguments: $1=json_output $2=backfill $3=dry_run $4=all_findings_json
+#            $5=batch_count $6=total_findings $7=total_issues_created
+_print_scan_summary() {
+	local json_output="$1"
+	local backfill="$2"
+	local dry_run="$3"
+	local all_findings_json="$4"
+	local batch_count="$5"
+	local total_findings="$6"
+	local total_issues_created="$7"
+
 	if [[ "$json_output" == "true" ]]; then
 		local details_json="$all_findings_json"
 		[[ "$backfill" == true && "$dry_run" != true ]] && details_json="[]"
@@ -905,47 +971,128 @@ cmd_scan_merged() {
 	return 0
 }
 
-#######################################
-# Scan a single merged PR for review feedback
-#
-# Fetches both inline review comments and review bodies from all
-# reviewers (bots and humans). Extracts severity from known patterns
-# (Gemini SVG markers, CodeRabbit labels). Checks if affected files
-# still exist on HEAD.
-#
-# Arguments:
-#   $1 - repo slug
-#   $2 - PR number
-#   $3 - minimum severity (critical|high|medium)
-#   $4 - include_positive (true|false) — when true, skip positive-review filters
-#        (summary-only, approval-only, no-actionable-sentiment). Useful for
-#        debugging false-positive suppression. Default: false.
-# Output: JSON array of findings to stdout
-# Returns: 0 on success
-#######################################
-_scan_single_pr() {
+# _resolve_scan_state_file: ensure the scan state file exists and return its path.
+# Also creates the "review-feedback-scanned" label on the repo.
+# Arguments: $1=repo_slug
+# Outputs the state file path to stdout.
+_resolve_scan_state_file() {
 	local repo_slug="$1"
+
+	gh label create "review-feedback-scanned" --repo "$repo_slug" --color "5319E7" \
+		--description "Merged PR already scanned for quality feedback" --force 2>/dev/null || true
+
+	local state_dir="${HOME}/.aidevops/logs"
+	mkdir -p "$state_dir"
+	local slug_safe="${repo_slug//\//-}"
+	local state_file="${state_dir}/review-scan-state-${slug_safe}.json"
+	if [[ ! -f "$state_file" ]]; then
+		echo '{"scanned_prs":[],"last_run":"","issues_created":0}' >"$state_file"
+	fi
+	echo "$state_file"
+	return 0
+}
+
+cmd_scan_merged() {
+	# Parse flags via helper (keeps flag parsing isolated)
+	local parsed_flags
+	parsed_flags=$(_parse_scan_merged_flags "$@") || return 1
+
+	local repo_slug batch_size create_issues min_severity
+	local json_output backfill tag_actioned dry_run include_positive
+	while IFS='=' read -r key val; do
+		case "$key" in
+		repo_slug) repo_slug="$val" ;;
+		batch_size) batch_size="$val" ;;
+		create_issues) create_issues="$val" ;;
+		min_severity) min_severity="$val" ;;
+		json_output) json_output="$val" ;;
+		backfill) backfill="$val" ;;
+		tag_actioned) tag_actioned="$val" ;;
+		dry_run) dry_run="$val" ;;
+		include_positive) include_positive="$val" ;;
+		esac
+	done <<<"$parsed_flags"
+
+	# Validate batch_size is a positive integer (prevents command injection via arithmetic)
+	if ! [[ "$batch_size" =~ ^[0-9]+$ ]] || [[ "$batch_size" -eq 0 ]]; then
+		echo "Error: --batch must be a positive integer, got: ${batch_size}" >&2
+		return 1
+	fi
+
+	# Auto-detect repo if not specified
+	[[ -z "$repo_slug" ]] && { repo_slug=$(get_repo) || return 1; }
+
+	local state_file
+	state_file=$(_resolve_scan_state_file "$repo_slug")
+
+	# Fetch and filter merged PRs
+	local merged_prs
+	merged_prs=$(_fetch_merged_prs_list "$repo_slug" "$batch_size" "$backfill") || return 1
+
+	if [[ -z "$merged_prs" ]]; then
+		[[ "$json_output" == "true" ]] &&
+			echo '{"scanned":0,"findings":0,"issues_created":0,"details":[]}' ||
+			echo "No merged PRs found in ${repo_slug}."
+		return 0
+	fi
+
+	local prs_to_scan=()
+	while IFS= read -r pr_num; do
+		[[ -z "$pr_num" ]] && continue
+		prs_to_scan+=("$pr_num")
+	done < <(_filter_unscanned_prs "$merged_prs" "$state_file" "$batch_size" "$backfill")
+
+	if [[ ${#prs_to_scan[@]} -eq 0 ]]; then
+		[[ "$json_output" == "true" ]] &&
+			echo '{"scanned":0,"findings":0,"issues_created":0,"details":[]}' ||
+			echo "All merged PRs already scanned for ${repo_slug}."
+		[[ "$tag_actioned" == true ]] && _tag_actioned_prs "$repo_slug" "$state_file"
+		return 0
+	fi
+
+	local total_to_scan=${#prs_to_scan[@]}
+	if [[ "$json_output" != "true" ]]; then
+		echo -e "${BLUE:-}=== Scanning ${total_to_scan} merged PRs for unactioned review feedback ===${NC:-}"
+		echo "Repository: ${repo_slug}"
+		[[ "$dry_run" == true ]] &&
+			echo "Mode: dry-run (no issues will be created, PRs will not be marked scanned)"
+		[[ "$backfill" == true && "$dry_run" != true ]] &&
+			echo "Mode: backfill (processing in batches of ${batch_size} with rate limiting)"
+		echo ""
+	fi
+
+	local loop_result
+	loop_result=$(_process_pr_scan_loop \
+		"$repo_slug" "$min_severity" "$include_positive" \
+		"$create_issues" "$dry_run" "$backfill" "$batch_size" \
+		"$json_output" "$state_file" \
+		"${prs_to_scan[@]}")
+
+	local total_findings total_issues_created batch_count
+	read -r total_findings total_issues_created batch_count <<<"$loop_result"
+
+	local all_findings_json="[]"
+	if [[ -f "${state_file}.findings_tmp" ]]; then
+		all_findings_json=$(cat "${state_file}.findings_tmp")
+		rm -f "${state_file}.findings_tmp"
+	fi
+
+	[[ "$tag_actioned" == true ]] && _tag_actioned_prs "$repo_slug" "$state_file"
+
+	_print_scan_summary "$json_output" "$backfill" "$dry_run" \
+		"$all_findings_json" "$batch_count" "$total_findings" "$total_issues_created"
+	return 0
+}
+
+# _build_inline_findings: extract actionable inline review comments from a
+# JSON array of PR comments. Outputs a JSON array of finding objects.
+# Arguments: $1=comments_json $2=pr_num $3=min_severity
+_build_inline_findings() {
+	local comments="$1"
 	local pr_num="$2"
 	local min_severity="$3"
-	local include_positive="${4:-false}"
 
-	echo -e "  Scanning PR #${pr_num}..." >&2
-
-	local findings="[]"
-
-	# --- Fetch inline review comments (file-level) ---
-	local comments
-	comments=$(gh api "repos/${repo_slug}/pulls/${pr_num}/comments" \
-		--paginate --jq '.' | jq -s 'add // []') || comments="[]"
-
-	# --- Fetch review bodies (top-level reviews) ---
-	local reviews
-	reviews=$(gh api "repos/${repo_slug}/pulls/${pr_num}/reviews" \
-		--paginate --jq '.' | jq -s 'add // []') || reviews="[]"
-
-	# Process inline comments
-	local inline_findings
-	inline_findings=$(echo "$comments" | jq --arg pr "$pr_num" --arg min_sev "$min_severity" '
+	echo "$comments" | jq --arg pr "$pr_num" --arg min_sev "$min_severity" '
 		[.[] |
 		# Determine reviewer type
 		(.user.login) as $login |
@@ -989,21 +1136,22 @@ _scan_single_pr() {
 			url: .html_url,
 			created_at: .created_at
 		}]
-	') || inline_findings="[]"
+	' || echo "[]"
+	return 0
+}
 
-	# Build a per-reviewer inline comment count map from the already-fetched comments.
-	# Used below to detect summary-only reviews (state=COMMENTED, no inline comments).
-	local inline_counts_json
-	inline_counts_json=$(printf '%s' "$comments" | jq '
-		group_by(.user.login) |
-		map({key: .[0].user.login, value: length}) |
-		from_entries
-	') || inline_counts_json="{}"
+# _prefilter_reviews: first-pass filter on review bodies.
+# Adds reviewer, severity fields; removes summary-only bot reviews and
+# reviews below min_severity. Outputs an intermediate JSON array.
+# Arguments: $1=reviews_json $2=min_severity $3=inline_counts_json
+#            $4=include_positive (true|false)
+_prefilter_reviews() {
+	local reviews="$1"
+	local min_severity="$2"
+	local inline_counts_json="$3"
+	local include_positive="$4"
 
-	# Process review bodies (for substantive reviews with body content)
-	local review_findings
-	review_findings=$(printf '%s' "$reviews" | jq \
-		--arg pr "$pr_num" \
+	printf '%s' "$reviews" | jq \
 		--arg min_sev "$min_severity" \
 		--argjson inline_counts "$inline_counts_json" \
 		--argjson include_positive "$([[ "$include_positive" == "true" ]] && echo 'true' || echo 'false')" '
@@ -1041,6 +1189,29 @@ _scan_single_pr() {
 		({"critical":4,"high":3,"medium":2,"low":1}[$min_sev] // 2) as $min_num |
 
 		select($sev_num >= $min_num) |
+
+		# Annotate with derived fields for second-pass filtering
+		. + {_reviewer: $reviewer, _severity: $severity}]
+	' || echo "[]"
+	return 0
+}
+
+# _build_review_findings: extract actionable top-level review bodies.
+# Outputs a JSON array of finding objects.
+# Arguments: $1=reviews_json $2=pr_num $3=min_severity
+#            $4=inline_counts_json $5=include_positive (true|false)
+# _apply_positive_filter: second-pass filter — removes purely positive/approving
+# reviews and annotates each item with _actionable flag for output shaping.
+# Arguments: $1=prefiltered_json $2=include_positive (true|false)
+_apply_positive_filter() {
+	local prefiltered="$1"
+	local include_positive="$2"
+
+	printf '%s' "$prefiltered" | jq \
+		--argjson include_positive "$([[ "$include_positive" == "true" ]] && echo 'true' || echo 'false')" '
+		[.[] |
+		(._reviewer) as $reviewer |
+		(.body) as $body |
 
 		# Detect purely positive/approving reviews with no actionable critique.
 		# These are false positives — filing quality-debt issues for "LGTM" or
@@ -1084,9 +1255,6 @@ _scan_single_pr() {
 			"\\bconsistent\\b|\\brobust(ness)?\\b|\\buser experience\\b|" +
 			"\\breduces? (external )?requirements?\\b|\\bwell-implemented\\b"; "i")) as $summary_praise_only |
 
-		# Filter out review-body summaries that do not contain concrete fixes.
-		# Bots frequently post high-level walkthroughs that mention suggestions
-		# but do not include actionable details tied to a file/line.
 		($body | test(
 			"\\bshould\\b|\\bconsider\\b|\\binstead\\b|\\bsuggest|\\brecommend(ed|ing)?\\b|" +
 			"\\bwarning\\b|\\bcaution\\b|\\bavoid\\b|\\b(don ?'"'"'?t|do not)\\b|" +
@@ -1099,17 +1267,48 @@ _scan_single_pr() {
 
 		($actionable_raw and ($no_actionable_recommendation | not) and ($no_actionable_suggestions | not)) as $actionable |
 
-		# Skip purely approving reviews unless --include-positive is set.
-		# Explicit "no suggestions" statements are always non-actionable and should
-		# be skipped even though they contain the token "suggest", which would
-		# otherwise trip the actionable heuristic.
-		# Other approval/sentiment patterns are skipped only when no actionable
-		# critique appears in the body.
-		select($include_positive or (((($approval_only or $no_actionable_recommendation or $no_actionable_suggestions or $no_actionable_sentiment or $summary_praise_only) and ($actionable | not))) | not)) |
+		($body | test(
+			"\\bmerging\\.?$|\\bmerge (this|the) pr\\b|" +
+			"\\bci (checks? )?(green|pass(ed)?|ok)\\b|" +
+			"\\ball (checks?|tests?) (green|pass(ed)?|ok)\\b|" +
+			"\\breview.bot.gate (pass|ok)\\b|" +
+			"\\bpulse supervisor\\b"; "i")) as $merge_status_only |
+
+		select($include_positive or (((($approval_only or $no_actionable_recommendation or $no_actionable_suggestions or $no_actionable_sentiment or $summary_praise_only or $merge_status_only) and ($actionable | not))) | not)) |
+
+		. + {_actionable: $actionable}]
+	' || echo "[]"
+	return 0
+}
+
+# _shape_review_findings: final-pass — apply reviewer-type select and shape output objects.
+# Arguments: $1=filtered_json $2=pr_num $3=include_positive (true|false)
+_shape_review_findings() {
+	local filtered="$1"
+	local pr_num="$2"
+	local include_positive="$3"
+
+	printf '%s' "$filtered" | jq \
+		--arg pr "$pr_num" \
+		--argjson include_positive "$([[ "$include_positive" == "true" ]] && echo 'true' || echo 'false')" '
+		[.[] |
+		(._reviewer) as $reviewer |
+		(._severity) as $severity |
+		(._actionable) as $actionable |
+		(.body) as $body |
+
+		# Detect merge/CI-status comments (GH#5668)
+		($body | test(
+			"\\bmerging\\.?$|\\bmerge (this|the) pr\\b|" +
+			"\\bci (checks? )?(green|pass(ed)?|ok)\\b|" +
+			"\\ball (checks?|tests?) (green|pass(ed)?|ok)\\b|" +
+			"\\breview.bot.gate (pass|ok)\\b|" +
+			"\\bpulse supervisor\\b"; "i")) as $merge_status_only |
 
 		select(
 			if $include_positive then true
-			elif $reviewer == "human" then true
+			elif .state == "CHANGES_REQUESTED" then true
+			elif $reviewer == "human" then $actionable
 			elif .state == "APPROVED" then $actionable
 			else
 				($actionable and ($body | test(
@@ -1118,11 +1317,13 @@ _scan_single_pr() {
 			end
 		) |
 
+		select($include_positive or ($merge_status_only | not)) |
+
 		{
 			pr: ($pr | tonumber),
 			type: "review_body",
 			reviewer: $reviewer,
-			reviewer_login: $login,
+			reviewer_login: .user.login,
 			severity: $severity,
 			file: null,
 			line: null,
@@ -1131,7 +1332,118 @@ _scan_single_pr() {
 			url: .html_url,
 			created_at: .submitted_at
 		}]
-	') || review_findings="[]"
+	' || echo "[]"
+	return 0
+}
+
+# _build_review_findings: extract actionable top-level review bodies.
+# Outputs a JSON array of finding objects.
+# Arguments: $1=reviews_json $2=pr_num $3=min_severity
+#            $4=inline_counts_json $5=include_positive (true|false)
+_build_review_findings() {
+	local reviews="$1"
+	local pr_num="$2"
+	local min_severity="$3"
+	local inline_counts_json="$4"
+	local include_positive="$5"
+
+	# Pass 1: severity + summary-only filtering
+	local prefiltered
+	prefiltered=$(_prefilter_reviews "$reviews" "$min_severity" "$inline_counts_json" "$include_positive") || prefiltered="[]"
+
+	# Pass 2: positive-filter detection
+	local pos_filtered
+	pos_filtered=$(_apply_positive_filter "$prefiltered" "$include_positive") || pos_filtered="[]"
+
+	# Pass 3: reviewer-type select + output shaping
+	_shape_review_findings "$pos_filtered" "$pr_num" "$include_positive"
+	return $?
+}
+
+# _filter_findings_by_head_files: remove findings whose file no longer exists
+# at HEAD. Findings with null file (review bodies) are always kept.
+# Arguments: $1=repo_slug $2=findings_json
+# Outputs filtered JSON array.
+_filter_findings_by_head_files() {
+	local repo_slug="$1"
+	local findings="$2"
+
+	local item_count
+	item_count=$(printf '%s' "$findings" | jq 'length' || echo "0")
+
+	if [[ "$item_count" -eq 0 ]]; then
+		echo "[]"
+		return 0
+	fi
+
+	local head_files
+	head_files=$(gh api "repos/${repo_slug}/git/trees/HEAD?recursive=1" \
+		--jq '[.tree[].path]') || head_files="[]"
+
+	echo "$findings" | jq --argjson head_files "$head_files" '
+		[.[] |
+		if .file == null then .  # review bodies without file refs — keep
+		elif (.file as $f | $head_files | any(. == $f)) then .  # file still exists
+		else empty  # file was removed/renamed — skip
+		end]
+	'
+	return 0
+}
+
+#######################################
+# Scan a single merged PR for review feedback
+#
+# Fetches both inline review comments and review bodies from all
+# reviewers (bots and humans). Extracts severity from known patterns
+# (Gemini SVG markers, CodeRabbit labels). Checks if affected files
+# still exist on HEAD.
+#
+# Arguments:
+#   $1 - repo slug
+#   $2 - PR number
+#   $3 - minimum severity (critical|high|medium)
+#   $4 - include_positive (true|false) — when true, skip positive-review filters
+#        (summary-only, approval-only, no-actionable-sentiment). Useful for
+#        debugging false-positive suppression. Default: false.
+# Output: JSON array of findings to stdout
+# Returns: 0 on success
+#######################################
+_scan_single_pr() {
+	local repo_slug="$1"
+	local pr_num="$2"
+	local min_severity="$3"
+	local include_positive="${4:-false}"
+
+	echo -e "  Scanning PR #${pr_num}..." >&2
+
+	# --- Fetch inline review comments (file-level) ---
+	local comments
+	comments=$(gh api "repos/${repo_slug}/pulls/${pr_num}/comments" \
+		--paginate --jq '.' | jq -s 'add // []') || comments="[]"
+
+	# --- Fetch review bodies (top-level reviews) ---
+	local reviews
+	reviews=$(gh api "repos/${repo_slug}/pulls/${pr_num}/reviews" \
+		--paginate --jq '.' | jq -s 'add // []') || reviews="[]"
+
+	# Process inline comments
+	local inline_findings
+	inline_findings=$(_build_inline_findings "$comments" "$pr_num" "$min_severity") || inline_findings="[]"
+
+	# Build a per-reviewer inline comment count map from the already-fetched comments.
+	# Used below to detect summary-only reviews (state=COMMENTED, no inline comments).
+	local inline_counts_json
+	inline_counts_json=$(printf '%s' "$comments" | jq '
+		group_by(.user.login) |
+		map({key: .[0].user.login, value: length}) |
+		from_entries
+	') || inline_counts_json="{}"
+
+	# Process review bodies (for substantive reviews with body content)
+	local review_findings
+	review_findings=$(_build_review_findings \
+		"$reviews" "$pr_num" "$min_severity" \
+		"$inline_counts_json" "$include_positive") || review_findings="[]"
 
 	# Log skipped summary-only reviews at DEBUG level for traceability
 	if [[ "${AIDEVOPS_DEBUG:-}" == "1" ]]; then
@@ -1153,29 +1465,11 @@ _scan_single_pr() {
 	fi
 
 	# Merge and deduplicate
+	local findings
 	findings=$(printf '%s\n%s' "$inline_findings" "$review_findings" | jq -s '.[0] + .[1]')
 
 	# Filter: check if affected files still exist on HEAD
-	local filtered="[]"
-	local item_count
-	item_count=$(printf '%s' "$findings" | jq 'length' || echo "0")
-
-	if [[ "$item_count" -gt 0 ]]; then
-		# Get list of files in the repo at HEAD
-		local head_files
-		head_files=$(gh api "repos/${repo_slug}/git/trees/HEAD?recursive=1" \
-			--jq '[.tree[].path]') || head_files="[]"
-
-		filtered=$(echo "$findings" | jq --argjson head_files "$head_files" '
-			[.[] |
-			if .file == null then .  # review bodies without file refs — keep
-			elif (.file as $f | $head_files | any(. == $f)) then .  # file still exists
-			else empty  # file was removed/renamed — skip
-			end]
-		')
-	fi
-
-	echo "$filtered"
+	_filter_findings_by_head_files "$repo_slug" "$findings"
 	return 0
 }
 
@@ -1338,10 +1632,13 @@ _backfill_priority_labels() {
 # Output: number of issues created (integer) to stdout
 # Returns: 0 on success
 #######################################
-_create_quality_debt_issues() {
+# _verify_findings_against_main: filter a JSON findings array to only those
+# that still exist on the default branch. Annotates each with verification_status.
+# Arguments: $1=repo_slug $2=findings_json
+# Outputs filtered JSON array to stdout.
+_verify_findings_against_main() {
 	local repo_slug="$1"
-	local pr_num="$2"
-	local findings="$3"
+	local findings="$2"
 	local verified_findings_stream=""
 
 	while IFS= read -r finding; do
@@ -1382,20 +1679,17 @@ _create_quality_debt_issues() {
 	done < <(printf '%s' "$findings" | jq -c '.[]')
 
 	if [[ -n "$verified_findings_stream" ]]; then
-		findings=$(printf '%s' "$verified_findings_stream" | jq -s '.')
+		printf '%s' "$verified_findings_stream" | jq -s '.'
 	else
-		findings="[]"
+		echo "[]"
 	fi
+	return 0
+}
 
-	local finding_count
-	finding_count=$(printf '%s' "$findings" | jq 'length' || echo "0")
-
-	if [[ "$finding_count" -eq 0 ]]; then
-		echo "0"
-		return 0
-	fi
-
-	# Ensure labels exist (quality-debt + source + priority labels for dispatch ordering, t1413)
+# _ensure_quality_debt_labels: create quality-debt labels on the repo if missing.
+# Arguments: $1=repo_slug
+_ensure_quality_debt_labels() {
+	local repo_slug="$1"
 	gh label create "quality-debt" --repo "$repo_slug" --color "D93F0B" \
 		--description "Unactioned review feedback from merged PRs" --force || true
 	gh label create "source:review-feedback" --repo "$repo_slug" --color "C2E0C6" \
@@ -1406,6 +1700,216 @@ _create_quality_debt_issues() {
 		--description "High severity — significant quality issue" --force || true
 	gh label create "priority:medium" --repo "$repo_slug" --color "FBCA04" \
 		--description "Medium severity — moderate quality issue" --force || true
+	return 0
+}
+
+# _create_new_quality_debt_issue: create a new GitHub issue for a file's findings.
+# Arguments: $1=repo_slug $2=pr_num $3=file $4=issue_title $5=max_severity
+#            $6=reviewers $7=file_finding_count $8=finding_details
+# Outputs "1" if created, "0" otherwise.
+_create_new_quality_debt_issue() {
+	local repo_slug="$1"
+	local pr_num="$2"
+	local file="$3"
+	local issue_title="$4"
+	local max_severity="$5"
+	local reviewers="$6"
+	local file_finding_count="$7"
+	local finding_details="$8"
+
+	local issue_body
+	issue_body="## Unactioned Review Feedback
+
+**Source PR**: #${pr_num}
+**File**: \`${file}\`
+**Reviewers**: ${reviewers}
+**Findings**: ${file_finding_count}
+**Max severity**: ${max_severity}
+
+---
+
+${finding_details}
+
+---
+_Auto-generated by \`quality-feedback-helper.sh scan-merged\`. Review each finding and either fix the code or dismiss with a reason._"
+
+	# Map severity to priority label for dispatch ordering (t1413)
+	local priority_label=""
+	case "$max_severity" in
+	critical) priority_label="priority:critical" ;;
+	high) priority_label="priority:high" ;;
+	medium) priority_label="priority:medium" ;;
+	*) priority_label="" ;;
+	esac
+
+	# Create the issue with severity-based priority label and source provenance
+	local label_args="quality-debt,source:review-feedback"
+	[[ -n "$priority_label" ]] && label_args="${label_args},${priority_label}"
+
+	# Auto-assign to repo owner so the maintainer gate assignee check passes (GH#6623).
+	# quality-debt issues are auto-generated by trusted tooling — the assignee gate
+	# adds no security value for them, but the gate still requires an assignee.
+	local repo_owner
+	repo_owner=$(echo "$repo_slug" | cut -d/ -f1)
+
+	local new_issue
+	new_issue=$(gh issue create --repo "$repo_slug" \
+		--title "$issue_title" \
+		--body "$issue_body" \
+		--label "$label_args" \
+		--assignee "$repo_owner" | grep -oE '[0-9]+$' || echo "")
+
+	if [[ -n "$new_issue" ]]; then
+		echo "  Created issue #${new_issue}: ${issue_title}" >&2
+		echo "1"
+		return 0
+	fi
+	echo "0"
+	return 0
+}
+
+# _append_findings_to_issue: append findings as a comment on an existing issue.
+# Arguments: $1=repo_slug $2=issue_num $3=pr_num $4=file $5=reviewers
+#            $6=file_finding_count $7=max_severity $8=finding_details
+_append_findings_to_issue() {
+	local repo_slug="$1"
+	local issue_num="$2"
+	local pr_num="$3"
+	local file="$4"
+	local reviewers="$5"
+	local file_finding_count="$6"
+	local max_severity="$7"
+	local finding_details="$8"
+
+	local comment_body="## Additional Review Feedback (PR #${pr_num})
+
+**Reviewers**: ${reviewers}
+**Findings**: ${file_finding_count}
+**Max severity**: ${max_severity}
+
+---
+
+${finding_details}
+
+---
+_Appended by \`quality-feedback-helper.sh scan-merged\` (cross-PR file dedup, t1411)._"
+
+	gh issue comment "$issue_num" --repo "$repo_slug" \
+		--body "$comment_body" >/dev/null || true
+	echo "  Appended to existing #${issue_num} for ${file} (PR #${pr_num})" >&2
+	return 0
+}
+
+# _create_or_append_file_issue: for a single file's findings, either create a
+# new quality-debt issue or append to an existing one (cross-PR dedup, t1411).
+# Arguments: $1=repo_slug $2=pr_num $3=file $4=file_findings_json
+#            $5=existing_issues_json $6=existing_open_issues_json
+# Outputs "1" if a new issue was created, "0" otherwise.
+_create_or_append_file_issue() {
+	local repo_slug="$1"
+	local pr_num="$2"
+	local file="$3"
+	local file_findings="$4"
+	local existing_issues_json="$5"
+	local existing_open_issues_json="$6"
+
+	local file_finding_count
+	file_finding_count=$(echo "$file_findings" | jq 'length')
+	[[ "$file_finding_count" -eq 0 ]] && echo "0" && return 0
+
+	# Get highest severity for this file
+	local max_severity
+	max_severity=$(echo "$file_findings" | jq -r '
+		[.[].severity] |
+		if any(. == "critical") then "critical"
+		elif any(. == "high") then "high"
+		elif any(. == "medium") then "medium"
+		else "low"
+		end
+	')
+
+	# Build issue title
+	local issue_title
+	if [[ "$file" == "general" ]]; then
+		issue_title="quality-debt: PR #${pr_num} review feedback (${max_severity})"
+	else
+		issue_title="quality-debt: ${file} — PR #${pr_num} review feedback (${max_severity})"
+	fi
+
+	# Build finding details (shared between new issue and comment append)
+	local reviewers
+	reviewers=$(echo "$file_findings" | jq -r '[.[].reviewer] | unique | join(", ")')
+
+	local finding_details
+	finding_details=$(echo "$file_findings" | jq -r '.[] |
+		"### \(.severity | ascii_upcase): \(.reviewer) (\(.reviewer_login))\n" +
+		(if .file != null and .line != null then "**File**: `\(.file):\(.line)`\n" else "" end) +
+		(if .verification_status == "unverifiable" then "**Verification**: kept as unverifiable (no stable snippet extracted)\n" else "" end) +
+		"\(.body_full)\n\n" +
+		(if .url != null then "[View comment](\(.url))\n" else "" end) +
+		"---\n"
+	')
+
+	# Skip if exact duplicate (same PR + file combination), including closed history.
+	# This prevents re-creating previously resolved issues when backfill/scan state resets.
+	local exact_title_match
+	local exact_title_state
+	exact_title_match=$(echo "$existing_issues_json" | jq -r --arg t "$issue_title" \
+		'[.[] | select(.title == $t)][0].number // empty' 2>/dev/null || echo "")
+	exact_title_state=$(echo "$existing_issues_json" | jq -r --arg t "$issue_title" \
+		'[.[] | select(.title == $t)][0].state // empty' 2>/dev/null || echo "")
+	if [[ -n "$exact_title_match" ]]; then
+		if [[ "$exact_title_state" == "CLOSED" ]]; then
+			echo "  Skipping previously closed quality-debt issue #${exact_title_match}: ${issue_title}" >&2
+		else
+			echo "  Skipping duplicate: ${issue_title}" >&2
+		fi
+		echo "0"
+		return 0
+	fi
+
+	# Cross-PR file dedup (t1411): check if there's an existing open
+	# quality-debt issue for the same FILE from a different PR. If so,
+	# append findings as a comment instead of creating a new issue.
+	local existing_file_issue=""
+	if [[ "$file" != "general" ]]; then
+		existing_file_issue=$(echo "$existing_open_issues_json" | jq -r --arg f "$file" \
+			'[.[] | select(.title | startswith("quality-debt: \($f) —"))] | .[0].number // empty' ||
+			echo "")
+	fi
+
+	if [[ -n "$existing_file_issue" ]]; then
+		_append_findings_to_issue "$repo_slug" "$existing_file_issue" "$pr_num" "$file" \
+			"$reviewers" "$file_finding_count" "$max_severity" "$finding_details"
+		echo "0"
+		return 0
+	fi
+
+	# No existing issue for this file — delegate to creation helper
+	_create_new_quality_debt_issue \
+		"$repo_slug" "$pr_num" "$file" "$issue_title" "$max_severity" \
+		"$reviewers" "$file_finding_count" "$finding_details"
+	return $?
+}
+
+_create_quality_debt_issues() {
+	local repo_slug="$1"
+	local pr_num="$2"
+	local findings="$3"
+
+	# Verify findings still exist on main branch
+	findings=$(_verify_findings_against_main "$repo_slug" "$findings")
+
+	local finding_count
+	finding_count=$(printf '%s' "$findings" | jq 'length' || echo "0")
+
+	if [[ "$finding_count" -eq 0 ]]; then
+		echo "0"
+		return 0
+	fi
+
+	# Ensure labels exist (quality-debt + source + priority labels for dispatch ordering, t1413)
+	_ensure_quality_debt_labels "$repo_slug"
 
 	# Check existing quality-debt issues to avoid duplicates.
 	# Fetch title/number/state so we can dedupe against both open and closed history.
@@ -1434,133 +1938,11 @@ _create_quality_debt_issues() {
 			file_findings=$(echo "$findings" | jq --arg f "$file" '[.[] | select(.file == $f)]')
 		fi
 
-		local file_finding_count
-		file_finding_count=$(echo "$file_findings" | jq 'length')
-		[[ "$file_finding_count" -eq 0 ]] && continue
-
-		# Get highest severity for this file
-		local max_severity
-		max_severity=$(echo "$file_findings" | jq -r '
-			[.[].severity] |
-			if any(. == "critical") then "critical"
-			elif any(. == "high") then "high"
-			elif any(. == "medium") then "medium"
-			else "low"
-			end
-		')
-
-		# Build issue title
-		local issue_title
-		if [[ "$file" == "general" ]]; then
-			issue_title="quality-debt: PR #${pr_num} review feedback (${max_severity})"
-		else
-			issue_title="quality-debt: ${file} — PR #${pr_num} review feedback (${max_severity})"
-		fi
-
-		# Build finding details (shared between new issue and comment append)
-		local reviewers
-		reviewers=$(echo "$file_findings" | jq -r '[.[].reviewer] | unique | join(", ")')
-
-		local finding_details
-		finding_details=$(echo "$file_findings" | jq -r '.[] |
-			"### \(.severity | ascii_upcase): \(.reviewer) (\(.reviewer_login))\n" +
-			(if .file != null and .line != null then "**File**: `\(.file):\(.line)`\n" else "" end) +
-			(if .verification_status == "unverifiable" then "**Verification**: kept as unverifiable (no stable snippet extracted)\n" else "" end) +
-			"\(.body_full)\n\n" +
-			(if .url != null then "[View comment](\(.url))\n" else "" end) +
-			"---\n"
-		')
-
-		# Skip if exact duplicate (same PR + file combination), including closed history.
-		# This prevents re-creating previously resolved issues when backfill/scan state resets.
-		local exact_title_match
-		local exact_title_state
-		exact_title_match=$(echo "$existing_issues_json" | jq -r --arg t "$issue_title" \
-			'[.[] | select(.title == $t)][0].number // empty' 2>/dev/null || echo "")
-		exact_title_state=$(echo "$existing_issues_json" | jq -r --arg t "$issue_title" \
-			'[.[] | select(.title == $t)][0].state // empty' 2>/dev/null || echo "")
-		if [[ -n "$exact_title_match" ]]; then
-			if [[ "$exact_title_state" == "CLOSED" ]]; then
-				echo "  Skipping previously closed quality-debt issue #${exact_title_match}: ${issue_title}" >&2
-			else
-				echo "  Skipping duplicate: ${issue_title}" >&2
-			fi
-			continue
-		fi
-
-		# Cross-PR file dedup (t1411): check if there's an existing open
-		# quality-debt issue for the same FILE from a different PR. If so,
-		# append findings as a comment instead of creating a new issue.
-		# This batches all outstanding feedback for a file into one issue,
-		# saving worker sessions (one worker fixes all feedback for a file).
-		local existing_file_issue=""
-		if [[ "$file" != "general" ]]; then
-			existing_file_issue=$(echo "$existing_open_issues_json" | jq -r --arg f "$file" \
-				'[.[] | select(.title | startswith("quality-debt: \($f) —"))] | .[0].number // empty' ||
-				echo "")
-		fi
-
-		if [[ -n "$existing_file_issue" ]]; then
-			# Append findings as a comment on the existing issue
-			local comment_body="## Additional Review Feedback (PR #${pr_num})
-
-**Reviewers**: ${reviewers}
-**Findings**: ${file_finding_count}
-**Max severity**: ${max_severity}
-
----
-
-${finding_details}
-
----
-_Appended by \`quality-feedback-helper.sh scan-merged\` (cross-PR file dedup, t1411)._"
-
-			gh issue comment "$existing_file_issue" --repo "$repo_slug" \
-				--body "$comment_body" >/dev/null || true
-			echo "  Appended to existing #${existing_file_issue} for ${file} (PR #${pr_num})" >&2
-			continue
-		fi
-
-		# No existing issue for this file — create a new one
-		local issue_body
-		issue_body="## Unactioned Review Feedback
-
-**Source PR**: #${pr_num}
-**File**: \`${file}\`
-**Reviewers**: ${reviewers}
-**Findings**: ${file_finding_count}
-**Max severity**: ${max_severity}
-
----
-
-${finding_details}
-
----
-_Auto-generated by \`quality-feedback-helper.sh scan-merged\`. Review each finding and either fix the code or dismiss with a reason._"
-
-		# Map severity to priority label for dispatch ordering (t1413)
-		local priority_label=""
-		case "$max_severity" in
-		critical) priority_label="priority:critical" ;;
-		high) priority_label="priority:high" ;;
-		medium) priority_label="priority:medium" ;;
-		*) priority_label="" ;;
-		esac
-
-		# Create the issue with severity-based priority label and source provenance
-		local label_args="quality-debt,source:review-feedback"
-		[[ -n "$priority_label" ]] && label_args="${label_args},${priority_label}"
-
-		local new_issue
-		new_issue=$(gh issue create --repo "$repo_slug" \
-			--title "$issue_title" \
-			--body "$issue_body" \
-			--label "$label_args" | grep -oE '[0-9]+$' || echo "")
-
-		if [[ -n "$new_issue" ]]; then
-			echo "  Created issue #${new_issue}: ${issue_title}" >&2
-			created=$((created + 1))
-		fi
+		local issue_created
+		issue_created=$(_create_or_append_file_issue \
+			"$repo_slug" "$pr_num" "$file" "$file_findings" \
+			"$existing_issues_json" "$existing_open_issues_json")
+		created=$((created + issue_created))
 	done <<<"$files"
 
 	echo "$created"

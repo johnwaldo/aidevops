@@ -167,8 +167,47 @@ _sandbox_is_secret_tainted_command() {
 	return 1
 }
 
+# Apply Python-based secret redaction to a file, writing result to stdout.
+# Arguments: $1=file path
+# Caller is responsible for redirecting stdout to stderr if needed.
+_sandbox_redact_with_python() {
+	local input_file="$1"
+	python3 - "$input_file" <<'PY'
+import os
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    text = open(path, "r", encoding="utf-8", errors="replace").read()
+except Exception:
+    sys.exit(0)
+
+candidate_values = []
+for key, value in os.environ.items():
+    upper = key.upper()
+    if any(token in upper for token in ["SECRET", "TOKEN", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY", "CLIENT_SECRET", "AUTH"]):
+        if value and len(value) >= 8:
+            candidate_values.append(value)
+
+for value in sorted(set(candidate_values), key=len, reverse=True):
+    text = text.replace(value, "[REDACTED_SECRET]")
+
+patterns = [
+    (re.compile(r'(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)'), r'\1[REDACTED_SECRET]'),
+    (re.compile(r'(?i)(access_token|refresh_token|client_secret|api[_-]?key|password|token|secret)(\s*[:=]\s*)("?[^"\s,}]+"?)'), r'\1\2"[REDACTED_SECRET]"'),
+]
+
+for pattern, repl in patterns:
+    text = pattern.sub(repl, text)
+
+sys.stdout.write(text)
+PY
+	return 0
+}
+
 # Redact likely secret values from a captured output file.
-# Arguments: $1=file path, $2=stream name (stdout|stderr)
+# Arguments: $1=file path, $2=stream name (stdout|stderr), $3=tainted_flag
 _sandbox_emit_redacted_output() {
 	local output_file="$1"
 	local stream_name="$2"
@@ -193,69 +232,9 @@ _sandbox_emit_redacted_output() {
 
 	if command -v python3 >/dev/null 2>&1; then
 		if [[ "$stream_name" == "stderr" ]]; then
-			python3 - "$truncated_file" <<'PY' >&2
-import os
-import re
-import sys
-
-path = sys.argv[1]
-try:
-    text = open(path, "r", encoding="utf-8", errors="replace").read()
-except Exception:
-    sys.exit(0)
-
-candidate_values = []
-for key, value in os.environ.items():
-    upper = key.upper()
-    if any(token in upper for token in ["SECRET", "TOKEN", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY", "CLIENT_SECRET", "AUTH"]):
-        if value and len(value) >= 8:
-            candidate_values.append(value)
-
-for value in sorted(set(candidate_values), key=len, reverse=True):
-    text = text.replace(value, "[REDACTED_SECRET]")
-
-patterns = [
-    (re.compile(r'(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)'), r'\1[REDACTED_SECRET]'),
-    (re.compile(r'(?i)(access_token|refresh_token|client_secret|api[_-]?key|password|token|secret)(\s*[:=]\s*)("?[^"\s,}]+"?)'), r'\1\2"[REDACTED_SECRET]"'),
-]
-
-for pattern, repl in patterns:
-    text = pattern.sub(repl, text)
-
-sys.stdout.write(text)
-PY
+			_sandbox_redact_with_python "$truncated_file" >&2
 		else
-			python3 - "$truncated_file" <<'PY'
-import os
-import re
-import sys
-
-path = sys.argv[1]
-try:
-    text = open(path, "r", encoding="utf-8", errors="replace").read()
-except Exception:
-    sys.exit(0)
-
-candidate_values = []
-for key, value in os.environ.items():
-    upper = key.upper()
-    if any(token in upper for token in ["SECRET", "TOKEN", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY", "CLIENT_SECRET", "AUTH"]):
-        if value and len(value) >= 8:
-            candidate_values.append(value)
-
-for value in sorted(set(candidate_values), key=len, reverse=True):
-    text = text.replace(value, "[REDACTED_SECRET]")
-
-patterns = [
-    (re.compile(r'(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)'), r'\1[REDACTED_SECRET]'),
-    (re.compile(r'(?i)(access_token|refresh_token|client_secret|api[_-]?key|password|token|secret)(\s*[:=]\s*)("?[^"\s,}]+"?)'), r'\1\2"[REDACTED_SECRET]"'),
-]
-
-for pattern, repl in patterns:
-    text = pattern.sub(repl, text)
-
-sys.stdout.write(text)
-PY
+			_sandbox_redact_with_python "$truncated_file"
 		fi
 	else
 		if [[ "$stream_name" == "stderr" ]]; then
@@ -424,6 +403,599 @@ _sandbox_check_dns_exfil() {
 # Sandbox Execution
 # =============================================================================
 
+# Kill a child process group and its secondary watchdog.
+# Standalone cleanup function — called explicitly on all exit paths and
+# as an EXIT trap safety net. Takes explicit arguments instead of relying
+# on closure variables (extracted from nested _pgkill_cleanup in GH#6429).
+#
+# Arguments:
+#   $1 - watchdog_pid (may be empty)
+#   $2 - child_pgid (may be empty)
+#   $3 - child_pid (may be empty)
+_sandbox_pgkill_cleanup() {
+	local cleanup_watchdog_pid="$1"
+	local cleanup_child_pgid="$2"
+	local cleanup_child_pid="$3"
+
+	# Kill the secondary watchdog first to prevent it from firing
+	# after we've already cleaned up the child.
+	if [[ -n "$cleanup_watchdog_pid" ]]; then
+		kill "$cleanup_watchdog_pid" 2>/dev/null || true
+		wait "$cleanup_watchdog_pid" 2>/dev/null || true
+	fi
+
+	if [[ -n "$cleanup_child_pgid" ]]; then
+		# SIGTERM first — allow graceful shutdown
+		kill -- "-${cleanup_child_pgid}" 2>/dev/null || true
+		# Brief grace period, then SIGKILL any survivors
+		sleep 0.5
+		kill -0 -- "-${cleanup_child_pgid}" 2>/dev/null &&
+			kill -9 -- "-${cleanup_child_pgid}" 2>/dev/null || true
+	elif [[ -n "$cleanup_child_pid" ]]; then
+		# Fallback: setsid unavailable — kill direct child process only
+		kill "$cleanup_child_pid" 2>/dev/null || true
+		sleep 0.5
+		kill -0 "$cleanup_child_pid" 2>/dev/null &&
+			kill -9 "$cleanup_child_pid" 2>/dev/null || true
+	fi
+	return 0
+}
+
+# Start a command in a new process group via setsid.
+# Sets caller-scoped variables: child_pid, child_pgid, child_start_token
+# (uses bash dynamic scoping — caller must declare these as local).
+#
+# Arguments: stdout_file stderr_file cmd [args...]
+# Fallback: if setsid is unavailable, runs directly and leaves child_pgid
+# empty so _sandbox_pgkill_cleanup falls back to killing child_pid.
+_sandbox_spawn_child() {
+	local sc_stdout_file="$1"
+	local sc_stderr_file="$2"
+	shift 2
+
+	# setsid creates a new session (and process group) so the child and all
+	# its descendants share a PGID distinct from the wrapper's PGID.
+	# stdout/stderr are redirected here so the redirection applies to the
+	# backgrounded child process, not to the polling loop.
+	if command -v setsid &>/dev/null; then
+		setsid "$@" >"$sc_stdout_file" 2>"$sc_stderr_file" &
+		child_pid=$!
+		# Retrieve the process group ID of the child.
+		# On Linux: ps -o pgid= returns the PGID. On macOS: same flag works.
+		# If ps fails (race: child already exited), clear pgid to fall back
+		# to killing child_pid directly in _sandbox_pgkill_cleanup.
+		child_pgid="$(ps -o pgid= -p "$child_pid" 2>/dev/null | tr -d ' ')" || true
+		if [[ -z "$child_pgid" ]] || [[ "$child_pgid" == "0" ]]; then
+			child_pgid=""
+		fi
+	else
+		"$@" >"$sc_stdout_file" 2>"$sc_stderr_file" &
+		child_pid=$!
+		# setsid not available — child shares the script's process group.
+		# Do NOT read the PGID here: ps would return the script's own PGID,
+		# causing _sandbox_pgkill_cleanup to kill the wrapper itself.
+		child_pgid=""
+	fi
+
+	# PID recycling safety: capture a stable identity token at spawn time.
+	# On Linux, use /proc/<pid>/stat field 22 (starttime in clock ticks since
+	# boot). On macOS/other, use 'ps -o lstart=' for absolute start timestamp.
+	# If the lookup fails (child already exited), token is empty — the watchdog
+	# will skip signal delivery (safe: child already gone).
+	child_start_token="$(_sandbox_get_proc_starttime "$child_pid")"
+	return 0
+}
+
+# Poll until a child process exits or the timeout deadline is reached.
+# Returns 0 if the child exited on its own, 124 if the timeout was reached.
+#
+# Arguments:
+#   $1 - timeout in seconds
+#   $2 - child_pid to monitor
+_sandbox_poll_child() {
+	local poll_timeout="$1"
+	local poll_child_pid="$2"
+	local half_secs_remaining=$((poll_timeout * 2))
+
+	while kill -0 "$poll_child_pid" 2>/dev/null; do
+		if ((half_secs_remaining <= 0)); then
+			return 124
+		fi
+		sleep 0.5
+		((half_secs_remaining--)) || true
+	done
+	return 0
+}
+
+# Runs cmd in a new process group (via setsid) and kills the entire group
+# when the timeout expires or the function exits. This ensures that worker
+# child processes (MCP servers, node workers, etc.) are also terminated —
+# a plain `timeout` only kills its direct child (GH#5530).
+#
+# Arguments: t_secs stdout_file stderr_file cmd [args...]
+# stdout/stderr are passed as file paths (not via shell redirection on the
+# function call) so the redirection applies to the backgrounded child, not
+# to the polling loop in this function.
+#
+# Process group lifecycle (GH#5530):
+# The worker process spawns its own child processes. A plain `timeout` only
+# kills its direct child — grandchildren survive indefinitely. Fix: run the
+# command in a new process group via `setsid`, then kill the entire group
+# (kill -- -PGID) on timeout or exit. Cleanup is called explicitly on all
+# exit paths — the EXIT trap is a safety net for unexpected exits only.
+#
+# Secondary watchdog (GH#6413):
+# The primary polling loop uses sleep 0.5 + counter decrement. If the parent
+# process crashes, gets OOM-killed, or the sleep drifts, the child (in its
+# own session via setsid) survives indefinitely. Fix: spawn a background
+# watchdog process that independently tracks wall-clock time via date(1) and
+# kills the child process group if the deadline is exceeded. The watchdog is
+# killed on normal exit to avoid orphaned watchers.
+_sandbox_exec_with_pgkill() {
+	local t_secs="$1"
+	local t_stdout_file="$2"
+	local t_stderr_file="$3"
+	shift 3
+	local child_pid=""
+	local child_pgid=""
+	local child_start_token=""
+	local t_exit_code=0
+	local watchdog_pid=""
+
+	# EXIT trap uses a closure-style wrapper to pass current variable values
+	# to the standalone cleanup function.
+	trap '_sandbox_pgkill_cleanup "$watchdog_pid" "$child_pgid" "$child_pid"' EXIT
+
+	# Spawn the child in a new process group (sets child_pid, child_pgid,
+	# child_start_token via dynamic scoping).
+	_sandbox_spawn_child "$t_stdout_file" "$t_stderr_file" "$@"
+
+	# Marker file for watchdog-initiated kills (GH#6414, CodeRabbit review).
+	# Derived from t_stderr_file path to avoid collisions across concurrent
+	# sandbox invocations (unlike a global /tmp/ path with PID suffix).
+	local t_watchdog_marker="${t_stderr_file}.watchdog_timeout"
+
+	# Secondary watchdog (GH#6413): independent wall-clock timeout enforcement.
+	# 10% grace period avoids racing with the primary loop's normal timeout.
+	# GH#6538: use _sandbox_spawn_watchdog_bg so the watchdog process appears
+	# as "bash -c ... sandbox-watchdog" in ps, not as "sandbox-exec-helper.sh
+	# run ... opencode run ... /full-loop ..." — preventing it from being
+	# counted as a duplicate active worker by list_active_worker_processes().
+	_sandbox_spawn_watchdog_bg "$t_secs" "$child_pid" "$child_pgid" "$child_start_token" "$t_watchdog_marker"
+	watchdog_pid=$!
+
+	# Poll until the child exits or the deadline is reached.
+	if ! _sandbox_poll_child "$t_secs" "$child_pid"; then
+		log_sandbox "WARN" "Command timed out after ${t_secs}s — killing process group ${child_pgid}"
+		_sandbox_pgkill_cleanup "$watchdog_pid" "$child_pgid" "$child_pid"
+		watchdog_pid=""
+		# Reap the child after killing it
+		wait "$child_pid" 2>/dev/null || true
+		trap - EXIT
+		return 124
+	fi
+
+	wait "$child_pid" 2>/dev/null
+	t_exit_code=$?
+
+	# Watchdog exit status override (GH#6414, CodeRabbit review): if the
+	# secondary watchdog killed the child, it will have touched the marker
+	# file. Override the exit code to 124 (standard timeout) so callers can
+	# distinguish a watchdog-killed process from a normal non-zero exit.
+	if [[ -f "$t_watchdog_marker" ]]; then
+		log_sandbox "WARN" "Secondary watchdog marker detected for PID ${child_pid} — overriding exit code to 124"
+		t_exit_code=124
+		rm -f "$t_watchdog_marker" 2>/dev/null || true
+	fi
+
+	# Explicitly clean up any remaining descendants in the process group.
+	# The EXIT trap is cleared below, so cleanup must be called explicitly
+	# here — the trap does not fire on a normal function return.
+	_sandbox_pgkill_cleanup "$watchdog_pid" "$child_pgid" "$child_pid"
+	watchdog_pid=""
+	trap - EXIT
+	return "$t_exit_code"
+}
+
+# Get the start time of a process for PID recycling detection (GH#6414).
+# On Linux, reads /proc/<pid>/stat field 22 (starttime in clock ticks since
+# boot) — this is the most reliable identity token: monotonic, kernel-sourced,
+# and avoids forking ps. On macOS/other, uses ps -o lstart= which returns the
+# process start date/time string. Returns empty string if the process doesn't
+# exist or the start time can't be determined (non-fatal — the watchdog
+# proceeds without the recycling guard in that case).
+# Arguments: $1 - PID
+_sandbox_get_proc_starttime() {
+	local gps_pid="$1"
+	local gps_starttime=""
+
+	if [[ -f "/proc/${gps_pid}/stat" ]]; then
+		# Linux: field 22 of /proc/<pid>/stat is starttime (clock ticks since boot).
+		# Fields are space-separated but field 2 (comm) can contain spaces and
+		# parentheses, so we strip it first: remove everything from the first
+		# '(' to the last ')' to get clean space-separated fields, then pick
+		# field 20 (which is original field 22 after removing the 2-field comm).
+		local gps_stat_content=""
+		gps_stat_content="$(cat "/proc/${gps_pid}/stat" 2>/dev/null)" || true
+		if [[ -n "$gps_stat_content" ]]; then
+			# Remove comm field: everything from first '(' to last ')'
+			local gps_after_comm=""
+			gps_after_comm="${gps_stat_content##*) }"
+			# Field 20 in the remaining string = original field 22 (starttime)
+			gps_starttime="$(printf '%s' "$gps_after_comm" | awk '{print $20}')" || true
+		fi
+	else
+		# macOS / other: use ps -o lstart= for process start time string.
+		# Example output: "Wed Mar 25 14:30:00 2026"
+		gps_starttime="$(ps -o lstart= -p "$gps_pid" 2>/dev/null | tr -s ' ')" || true
+		# Trim leading/trailing whitespace
+		gps_starttime="${gps_starttime#"${gps_starttime%%[![:space:]]*}"}"
+		gps_starttime="${gps_starttime%"${gps_starttime##*[![:space:]]}"}"
+	fi
+
+	printf '%s' "$gps_starttime"
+	return 0
+}
+
+# Secondary watchdog for _sandbox_exec_with_pgkill (GH#6413).
+# Runs as a background process. Sleeps for timeout + 10% grace, then verifies
+# wall-clock elapsed time via date(1) and kills the child process group if
+# the deadline has been exceeded. This is defense-in-depth: if the primary
+# polling loop in _sandbox_exec_with_pgkill fails (parent crash, OOM, sleep
+# drift), this watchdog independently enforces the timeout.
+#
+# Exit status override (GH#6414): before sending TERM/KILL, the watchdog
+# touches the marker file passed as $5. The parent checks for this marker
+# after 'wait "$child_pid"' returns and overrides the exit code to 124
+# (standard timeout exit code) so callers can distinguish watchdog-killed
+# from normal exit. The marker path is derived from t_stderr_file to avoid
+# collisions across concurrent sandbox invocations.
+#
+# PID recycling safety (GH#6414): $4 (child_start_token) is the process
+# start time captured at spawn via _sandbox_get_proc_starttime (Linux:
+# /proc/<pid>/stat field 22, macOS: ps -o lstart=). Before sending any
+# signal, the watchdog re-reads the start time and compares. If they differ,
+# the PID has been recycled — the watchdog logs and exits without signalling.
+#
+# Process identity (GH#6538): the watchdog is spawned via
+# _sandbox_spawn_watchdog_bg which uses "( exec bash -c '...' sandbox-watchdog )"
+# so the resulting process appears as "bash -c ... sandbox-watchdog" in ps,
+# NOT as "sandbox-exec-helper.sh run ... opencode run ... /full-loop ...".
+# This prevents list_active_worker_processes() in pulse-wrapper.sh from
+# counting the watchdog as a second active worker for the same issue.
+#
+# Arguments:
+#   $1 - timeout_secs (original timeout)
+#   $2 - child_pid (PID to monitor)
+#   $3 - child_pgid (process group ID, may be empty)
+#   $4 - child_start_token (process start time captured at spawn, may be empty)
+#   $5 - marker_file (touched before kill to signal timeout to parent)
+_sandbox_spawn_watchdog() {
+	local wd_timeout="$1"
+	local wd_pid="$2"
+	local wd_pgid="$3"
+	local wd_start_token="$4"
+	local wd_marker="$5"
+	local wd_start
+	wd_start="$(date +%s)"
+
+	# Grace period: 10% of timeout, minimum 5s, maximum 60s.
+	# This avoids racing with the primary loop which fires at exactly t_secs.
+	local wd_grace=$((wd_timeout / 10))
+	if ((wd_grace < 5)); then
+		wd_grace=5
+	fi
+	if ((wd_grace > 60)); then
+		wd_grace=60
+	fi
+	local wd_deadline=$((wd_timeout + wd_grace))
+
+	# Sleep in chunks (30s) so we can exit promptly if the child finishes
+	# and our parent kills us. A single long sleep would delay cleanup.
+	local wd_slept=0
+	while ((wd_slept < wd_deadline)); do
+		local wd_chunk=30
+		if ((wd_slept + wd_chunk > wd_deadline)); then
+			wd_chunk=$((wd_deadline - wd_slept))
+		fi
+		sleep "$wd_chunk" 2>/dev/null || return 0
+		wd_slept=$((wd_slept + wd_chunk))
+
+		# Check if child is still alive — if not, our job is done
+		if ! kill -0 "$wd_pid" 2>/dev/null; then
+			return 0
+		fi
+	done
+
+	# Verify wall-clock elapsed time to guard against sleep drift
+	local wd_now
+	wd_now="$(date +%s)"
+	local wd_elapsed=$((wd_now - wd_start))
+
+	if ((wd_elapsed < wd_timeout)); then
+		# Sleep returned early (spurious wakeup) — not actually timed out
+		return 0
+	fi
+
+	# Child is still alive past the deadline — verify PID identity before killing.
+	if kill -0 "$wd_pid" 2>/dev/null; then
+		# PID recycling safety: re-read the process start time via the same
+		# platform-aware helper used at spawn. If the PID has been recycled
+		# (new process with the same PID), the start times will differ.
+		if [[ -n "$wd_start_token" ]]; then
+			local wd_current_token=""
+			wd_current_token="$(_sandbox_get_proc_starttime "$wd_pid")"
+			if [[ -z "$wd_current_token" ]]; then
+				# Lookup returned nothing — process already exited between kill -0 and now
+				return 0
+			fi
+			if [[ "$wd_current_token" != "$wd_start_token" ]]; then
+				log_sandbox "WARN" "Secondary watchdog: PID ${wd_pid} start time changed (token mismatch) — PID recycled, skipping kill"
+				return 0
+			fi
+		fi
+
+		log_sandbox "WARN" "Secondary watchdog: child PID ${wd_pid} still alive after ${wd_elapsed}s (timeout=${wd_timeout}s) — killing"
+
+		# Touch marker file before sending signals so the parent can detect
+		# that this watchdog (not a normal exit) caused the child's termination.
+		# The parent checks for this file after 'wait "$child_pid"' and overrides
+		# the exit code to 124.
+		touch "$wd_marker" 2>/dev/null || true
+
+		if [[ -n "$wd_pgid" ]]; then
+			kill -- "-${wd_pgid}" 2>/dev/null || true
+			sleep 1
+			kill -0 -- "-${wd_pgid}" 2>/dev/null &&
+				kill -9 -- "-${wd_pgid}" 2>/dev/null || true
+		else
+			kill "$wd_pid" 2>/dev/null || true
+			sleep 1
+			kill -0 "$wd_pid" 2>/dev/null &&
+				kill -9 "$wd_pid" 2>/dev/null || true
+		fi
+	fi
+
+	return 0
+}
+
+# Spawn the secondary watchdog as a background process with a distinct process
+# name (GH#6538). Using "( exec bash -c '...' sandbox-watchdog )" replaces the
+# forked subshell's process image so ps shows "bash -c ... sandbox-watchdog"
+# instead of inheriting the parent's execve() command line
+# ("sandbox-exec-helper.sh run ... -- opencode run ... /full-loop ...").
+#
+# Without this, list_active_worker_processes() in pulse-wrapper.sh matches the
+# watchdog on /full-loop + opencode and counts it as a second active worker for
+# the same issue — causing duplicate dispatch, git conflicts, and inflated
+# struggle ratios (GH#6538).
+#
+# The watchdog body is sourced from the parent script so all helper functions
+# (_sandbox_get_proc_starttime, log_sandbox, etc.) are available in the child.
+# BASH_SOURCE[0] is the canonical path to this script file.
+#
+# Arguments: same as _sandbox_spawn_watchdog ($1-$5)
+# Returns: 0 always (background job; caller captures PID via $!)
+_sandbox_spawn_watchdog_bg() {
+	local bg_timeout="$1"
+	local bg_pid="$2"
+	local bg_pgid="$3"
+	local bg_start_token="$4"
+	local bg_marker="$5"
+	local bg_script="${BASH_SOURCE[0]}"
+
+	# exec replaces the subshell's process image. The resulting process shows
+	# as "bash -c <body> sandbox-watchdog <args>" in ps — no sandbox-exec-helper.sh,
+	# no opencode, no /full-loop — so worker-counting filters skip it.
+	(
+		exec bash --norc --noprofile -c '
+			script="$1"; shift
+			# shellcheck source=/dev/null
+			source "$script" 2>/dev/null || true
+			_sandbox_spawn_watchdog "$@"
+		' sandbox-watchdog "$bg_script" "$bg_timeout" "$bg_pid" "$bg_pgid" "$bg_start_token" "$bg_marker"
+	) &
+	return 0
+}
+
+# Build the env -i argument list for sandboxed execution.
+# Appends to the caller's env_args array (visible via bash dynamic scoping).
+# Arguments:
+#   $1 - exec_tmpdir path (used to set TMPDIR)
+#   $2 - extra_passthrough (comma-separated list of additional env var names)
+# Caller must declare: local -a env_args=() before calling this function.
+_sandbox_build_env_args() {
+	local exec_tmpdir="$1"
+	local extra_passthrough="$2"
+
+	# Seed with env -i to clear the environment
+	env_args=("env" "-i")
+
+	# Add default passthrough vars (only if they exist in current env)
+	local var
+	for var in $DEFAULT_PASSTHROUGH; do
+		if [[ -n "${!var:-}" ]]; then
+			env_args+=("${var}=${!var}")
+		fi
+	done
+
+	# Override TMPDIR to isolated directory
+	env_args+=("TMPDIR=${exec_tmpdir}")
+
+	# Add extra passthrough vars (comma-separated list)
+	if [[ -n "$extra_passthrough" ]]; then
+		local extra_var
+		while IFS= read -r extra_var; do
+			# trim whitespace
+			extra_var="${extra_var#"${extra_var%%[![:space:]]*}"}"
+			extra_var="${extra_var%"${extra_var##*[![:space:]]}"}"
+			if [[ -n "${!extra_var:-}" ]]; then
+				env_args+=("${extra_var}=${!extra_var}")
+			else
+				log_sandbox "WARN" "Passthrough var '${extra_var}' not set in environment, skipping"
+			fi
+		done < <(printf '%s\n' "$extra_passthrough" | tr ',' '\n')
+	fi
+	return 0
+}
+
+# Dispatch the sandboxed command via _sandbox_exec_with_pgkill.
+# Handles optional macOS seatbelt network blocking.
+# Arguments:
+#   $1 - block_network (true|false)
+#   $2 - timeout_secs
+#   $3 - stdout_file
+#   $4 - stderr_file
+# Remaining args: env_args elements followed by "--" followed by cmd_args elements.
+# Caller passes: "${env_args[@]}" "--" "${cmd_args[@]}"
+_sandbox_run_dispatch() {
+	local block_network="$1"
+	local timeout_secs="$2"
+	local stdout_file="$3"
+	local stderr_file="$4"
+	shift 4
+	local dispatch_exit=0
+
+	# Split remaining args into env_args and cmd_args at the "--" separator
+	local -a d_env_args=()
+	local -a d_cmd_args=()
+	local past_sep=false
+	local arg
+	for arg in "$@"; do
+		if [[ "$past_sep" == false ]] && [[ "$arg" == "--" ]]; then
+			past_sep=true
+		elif [[ "$past_sep" == false ]]; then
+			d_env_args+=("$arg")
+		else
+			d_cmd_args+=("$arg")
+		fi
+	done
+
+	if [[ "$block_network" == true ]] && command -v sandbox-exec &>/dev/null; then
+		# macOS seatbelt: deny network access.
+		# sandbox-exec accepts program + args directly (no shell wrapper needed).
+		local seatbelt_profile="(version 1)(allow default)(deny network*)"
+		_sandbox_exec_with_pgkill "$timeout_secs" "$stdout_file" "$stderr_file" \
+			sandbox-exec -p "$seatbelt_profile" \
+			"${d_env_args[@]}" \
+			"${d_cmd_args[@]}" || dispatch_exit=$?
+	else
+		if [[ "$block_network" == true ]]; then
+			log_sandbox "WARN" "Network blocking requested but sandbox-exec not available (non-macOS); proceeding without"
+		fi
+		_sandbox_exec_with_pgkill "$timeout_secs" "$stdout_file" "$stderr_file" \
+			"${d_env_args[@]}" \
+			"${d_cmd_args[@]}" || dispatch_exit=$?
+	fi
+
+	return "$dispatch_exit"
+}
+
+# Handle post-execution steps: timeout warning, output emission, audit log, cleanup.
+# Arguments:
+#   $1 - exit_code
+#   $2 - timeout_secs
+#   $3 - stdout_file
+#   $4 - stderr_file
+#   $5 - command_tainted (true|false)
+#   $6 - cmd_str
+#   $7 - duration (seconds)
+#   $8 - block_network (true|false)
+#   $9 - extra_passthrough
+_sandbox_run_post_exec() {
+	local exit_code="$1"
+	local timeout_secs="$2"
+	local stdout_file="$3"
+	local stderr_file="$4"
+	local command_tainted="$5"
+	local cmd_str="$6"
+	local duration="$7"
+	local block_network="$8"
+	local extra_passthrough="$9"
+
+	# Handle timeout (exit code 124 from _sandbox_exec_with_pgkill)
+	if [[ $exit_code -eq 124 ]]; then
+		log_sandbox "WARN" "Command timed out after ${timeout_secs}s"
+	fi
+
+	# Output results with redaction and taint-aware handling
+	_sandbox_emit_redacted_output "$stdout_file" "stdout" "$command_tainted"
+	_sandbox_emit_redacted_output "$stderr_file" "stderr" "$command_tainted"
+
+	# Audit log
+	log_execution "$cmd_str" "$exit_code" "$duration" "$timeout_secs" "$block_network" "$extra_passthrough"
+
+	# Async cleanup of old temp dirs (older than 60 minutes).
+	# stderr is not suppressed so permission errors or other persistent failures
+	# remain visible for debugging rather than silently consuming disk space.
+	find "$SANDBOX_TMP_BASE" -maxdepth 1 -type d -mmin +60 -exec rm -rf {} + &
+
+	return 0
+}
+
+# Check the secret IO guard for a command string.
+# Returns 0 (proceed) or 126 (blocked). Logs and records the blocked execution.
+# Arguments:
+#   $1 - secret_io_guard (true|false)
+#   $2 - allow_secret_io (true|false)
+#   $3 - cmd_str
+#   $4 - timeout_secs
+#   $5 - block_network (true|false)
+#   $6 - extra_passthrough
+_sandbox_run_check_secret_guard() {
+	local secret_io_guard="$1"
+	local allow_secret_io="$2"
+	local cmd_str="$3"
+	local timeout_secs="$4"
+	local block_network="$5"
+	local extra_passthrough="$6"
+
+	if [[ "$secret_io_guard" == "true" ]] && [[ "$allow_secret_io" != "true" ]]; then
+		local block_reason
+		if block_reason="$(_sandbox_secret_block_reason "$cmd_str")"; then
+			log_sandbox "ERROR" "Blocked command due to secret leak risk: ${block_reason}"
+			log_sandbox "ERROR" "Use --allow-secret-io only for explicit user-approved local operations"
+			log_execution "$cmd_str" 126 0 "$timeout_secs" "$block_network" "$extra_passthrough"
+			return 126
+		fi
+	fi
+	return 0
+}
+
+# Run pre-execution checks: log intent, run network tiering, detect taint.
+# Prints "true" or "false" to stdout to indicate whether the command is tainted.
+# Arguments:
+#   $1 - cmd_str
+#   $2 - timeout_secs
+#   $3 - block_network (true|false)
+#   $4 - network_tiering (true|false)
+#   $5 - worker_id
+_sandbox_run_pre_exec() {
+	local cmd_str="$1"
+	local timeout_secs="$2"
+	local block_network="$3"
+	local network_tiering="$4"
+	local worker_id="$5"
+
+	log_sandbox "INFO" "Executing (timeout=${timeout_secs}s, network_blocked=${block_network}, tiering=${network_tiering}): ${cmd_str:0:200}"
+
+	# Network tiering pre-check (t1412.3): extract domains from the command
+	# and check them against the tier classification before execution.
+	# This is a best-effort heuristic — it catches obvious cases like
+	# "curl evil.ngrok.io" but cannot intercept runtime DNS resolution.
+	# The primary value is logging + post-session review, not hard blocking.
+	if [[ "$network_tiering" == true ]] && [[ -x "$NET_TIER_HELPER" ]]; then
+		_sandbox_check_network_tiers "$cmd_str" "$worker_id"
+	fi
+
+	local command_tainted=false
+	if _sandbox_is_secret_tainted_command "$cmd_str"; then
+		command_tainted=true
+	fi
+	printf '%s' "$command_tainted"
+	return 0
+}
+
 sandbox_run() {
 	local timeout_secs="$SANDBOX_DEFAULT_TIMEOUT"
 	local block_network=false
@@ -432,14 +1004,10 @@ sandbox_run() {
 	local worker_id="sandbox-$$"
 	local extra_passthrough=""
 	local secret_io_guard="${AIDEVOPS_BLOCK_SECRET_IO:-$SECRET_IO_GUARD_DEFAULT}"
-
-	# Capture command and its arguments as an array to avoid bash -c eval risks:
-	# - Preserves arguments with spaces correctly (no word-splitting on expansion)
-	# - Eliminates shell injection via unquoted arguments
-	# - Avoids the eval-equivalent behaviour of bash -c "$string"
+	# cmd_args is an array — preserves spaces, avoids bash -c eval risks
 	local -a cmd_args=()
 
-	# Parse arguments
+	# Parse flags; remaining positional args become the sandboxed command
 	while [[ $# -gt 0 ]]; do
 		case $1 in
 		--timeout)
@@ -487,20 +1055,12 @@ sandbox_run() {
 		return 1
 	fi
 
-	# For pattern-matching helpers (secret guard, taint check, network tiering),
-	# pass a space-joined string representation — these functions do text matching
-	# only and do not execute the command.
+	# Space-joined string for pattern-matching helpers (no execution)
 	local cmd_str="${cmd_args[*]}"
 
-	if [[ "$secret_io_guard" == "true" ]] && [[ "$allow_secret_io" != "true" ]]; then
-		local block_reason
-		if block_reason="$(_sandbox_secret_block_reason "$cmd_str")"; then
-			log_sandbox "ERROR" "Blocked command due to secret leak risk: ${block_reason}"
-			log_sandbox "ERROR" "Use --allow-secret-io only for explicit user-approved local operations"
-			log_execution "$cmd_str" 126 0 "$timeout_secs" "$block_network" "$extra_passthrough"
-			return 126
-		fi
-	fi
+	_sandbox_run_check_secret_guard \
+		"$secret_io_guard" "$allow_secret_io" "$cmd_str" \
+		"$timeout_secs" "$block_network" "$extra_passthrough" || return $?
 
 	# Create isolated temp directory
 	local exec_id
@@ -508,201 +1068,29 @@ sandbox_run() {
 	local exec_tmpdir="${SANDBOX_TMP_BASE}/${exec_id}"
 	mkdir -p "$exec_tmpdir"
 
-	# Build environment — start with env -i then add vars
-	local -a env_args=("env" "-i")
+	local -a env_args=()
+	_sandbox_build_env_args "$exec_tmpdir" "$extra_passthrough"
 
-	# Add default passthrough vars (only if they exist in current env)
-	local var
-	for var in $DEFAULT_PASSTHROUGH; do
-		if [[ -n "${!var:-}" ]]; then
-			env_args+=("${var}=${!var}")
-		fi
-	done
-
-	# Override TMPDIR to isolated directory
-	env_args+=("TMPDIR=${exec_tmpdir}")
-
-	# Add extra passthrough vars
-	if [[ -n "$extra_passthrough" ]]; then
-		local extra_var
-		while IFS= read -r extra_var; do
-			# trim whitespace
-			extra_var="${extra_var#"${extra_var%%[![:space:]]*}"}"
-			extra_var="${extra_var%"${extra_var##*[![:space:]]}"}"
-			if [[ -n "${!extra_var:-}" ]]; then
-				env_args+=("${extra_var}=${!extra_var}")
-			else
-				log_sandbox "WARN" "Passthrough var '${extra_var}' not set in environment, skipping"
-			fi
-		done < <(printf '%s\n' "$extra_passthrough" | tr ',' '\n')
-	fi
-
-	# Capture output files
 	local stdout_file="${exec_tmpdir}/stdout"
 	local stderr_file="${exec_tmpdir}/stderr"
+	local command_tainted
+	command_tainted="$(_sandbox_run_pre_exec \
+		"$cmd_str" "$timeout_secs" "$block_network" "$network_tiering" "$worker_id")"
 
-	log_sandbox "INFO" "Executing (timeout=${timeout_secs}s, network_blocked=${block_network}, tiering=${network_tiering}): ${cmd_str:0:200}"
-
-	# Network tiering pre-check (t1412.3): extract domains from the command
-	# and check them against the tier classification before execution.
-	# This is a best-effort heuristic — it catches obvious cases like
-	# "curl evil.ngrok.io" but cannot intercept runtime DNS resolution.
-	# The primary value is logging + post-session review, not hard blocking.
-	if [[ "$network_tiering" == true ]] && [[ -x "$NET_TIER_HELPER" ]]; then
-		_sandbox_check_network_tiers "$cmd_str" "$worker_id"
-	fi
-
-	local start_time
+	local start_time exit_code=0
 	start_time="$(date +%s)"
-	local exit_code=0
-	local command_tainted=false
-	if _sandbox_is_secret_tainted_command "$cmd_str"; then
-		command_tainted=true
-	fi
 
-	# Execute with timeout and clean environment.
-	# cmd_args is expanded as an array — each element is a separate argument,
-	# preserving spaces and avoiding any additional shell interpretation.
-	#
-	# Process group lifecycle (GH#5530):
-	# The worker process (e.g. opencode run) spawns its own child processes
-	# (MCP servers, node workers, etc.). A plain `timeout` only kills its direct
-	# child — grandchildren survive and keep the bash wrapper alive indefinitely.
-	# Fix: run the command in a new process group via `setsid` (Linux/macOS),
-	# then kill the entire group (kill -- -PGID) on timeout or exit.
-	# _pgkill_cleanup is called explicitly on all exit paths (timeout, normal,
-	# signal) — the EXIT trap is cleared before return, so explicit calls are
-	# required. The trap is a safety net for unexpected exits only.
-	# _sandbox_exec_with_pgkill t_secs stdout_file stderr_file cmd [args...]
-	# Runs cmd in a new process group (via setsid) and kills the entire group
-	# when the timeout expires or the function exits. This ensures that worker
-	# child processes (MCP servers, node workers, etc.) are also terminated —
-	# a plain `timeout` only kills its direct child (GH#5530).
-	#
-	# stdout/stderr are passed as file paths (not via shell redirection on the
-	# function call) so the redirection applies to the backgrounded child, not
-	# to the polling loop in this function.
-	_sandbox_exec_with_pgkill() {
-		local t_secs="$1"
-		local t_stdout_file="$2"
-		local t_stderr_file="$3"
-		shift 3
-		local child_pid=""
-		local child_pgid=""
-		local t_exit_code=0
+	_sandbox_run_dispatch \
+		"$block_network" "$timeout_secs" "$stdout_file" "$stderr_file" \
+		"${env_args[@]}" "--" "${cmd_args[@]}" || exit_code=$?
 
-		# Kill the child process group on any exit from this function.
-		# Uses kill -- -PGID to send SIGTERM to every process in the group,
-		# followed by SIGKILL after a short grace period.
-		_pgkill_cleanup() {
-			if [[ -n "$child_pgid" ]]; then
-				# SIGTERM first — allow graceful shutdown
-				kill -- "-${child_pgid}" 2>/dev/null || true
-				# Brief grace period, then SIGKILL any survivors
-				sleep 0.5
-				kill -0 -- "-${child_pgid}" 2>/dev/null &&
-					kill -9 -- "-${child_pgid}" 2>/dev/null || true
-			elif [[ -n "$child_pid" ]]; then
-				# Fallback: setsid unavailable — kill direct child process only
-				kill "$child_pid" 2>/dev/null || true
-				sleep 0.5
-				kill -0 "$child_pid" 2>/dev/null &&
-					kill -9 "$child_pid" 2>/dev/null || true
-			fi
-			return 0
-		}
-		trap '_pgkill_cleanup' EXIT
-
-		# Start the command in a new process group.
-		# setsid creates a new session (and process group) so the child and all
-		# its descendants share a PGID distinct from the wrapper's PGID.
-		# stdout/stderr are redirected here so the redirection applies to the
-		# backgrounded child process, not to the polling loop below.
-		# Fallback: if setsid is unavailable, run directly and clear child_pgid
-		# so _pgkill_cleanup falls back to killing child_pid directly.
-		if command -v setsid &>/dev/null; then
-			setsid "$@" >"$t_stdout_file" 2>"$t_stderr_file" &
-			child_pid=$!
-			# Retrieve the process group ID of the child.
-			# On Linux: ps -o pgid= returns the PGID. On macOS: same flag works.
-			# If ps fails (race: child already exited), clear pgid to fall back
-			# to killing child_pid directly in _pgkill_cleanup.
-			child_pgid="$(ps -o pgid= -p "$child_pid" 2>/dev/null | tr -d ' ')" || true
-			if [[ -z "$child_pgid" ]] || [[ "$child_pgid" == "0" ]]; then
-				child_pgid=""
-			fi
-		else
-			"$@" >"$t_stdout_file" 2>"$t_stderr_file" &
-			child_pid=$!
-			# setsid not available — child shares the script's process group.
-			# Do NOT read the PGID here: ps would return the script's own PGID,
-			# causing _pgkill_cleanup to kill the wrapper itself.
-			# Leave child_pgid empty so _pgkill_cleanup kills child_pid directly.
-			child_pgid=""
-		fi
-
-		# Poll until the child exits or the deadline is reached.
-		local half_secs_remaining=$((t_secs * 2))
-		while kill -0 "$child_pid" 2>/dev/null; do
-			if ((half_secs_remaining <= 0)); then
-				log_sandbox "WARN" "Command timed out after ${t_secs}s — killing process group ${child_pgid}"
-				_pgkill_cleanup
-				# Reap the child after killing it
-				wait "$child_pid" 2>/dev/null || true
-				trap - EXIT
-				return 124
-			fi
-			sleep 0.5
-			((half_secs_remaining--)) || true
-		done
-
-		wait "$child_pid" 2>/dev/null
-		t_exit_code=$?
-		# Explicitly clean up any remaining descendants in the process group.
-		# The EXIT trap is cleared below, so cleanup must be called explicitly
-		# here — the trap does not fire on a normal function return.
-		_pgkill_cleanup
-		trap - EXIT
-		return "$t_exit_code"
-	}
-
-	if [[ "$block_network" == true ]] && command -v sandbox-exec &>/dev/null; then
-		# macOS seatbelt: deny network access.
-		# sandbox-exec accepts program + args directly (no shell wrapper needed).
-		local seatbelt_profile="(version 1)(allow default)(deny network*)"
-		_sandbox_exec_with_pgkill "$timeout_secs" "$stdout_file" "$stderr_file" \
-			sandbox-exec -p "$seatbelt_profile" \
-			"${env_args[@]}" \
-			"${cmd_args[@]}" || exit_code=$?
-	else
-		if [[ "$block_network" == true ]]; then
-			log_sandbox "WARN" "Network blocking requested but sandbox-exec not available (non-macOS); proceeding without"
-		fi
-		_sandbox_exec_with_pgkill "$timeout_secs" "$stdout_file" "$stderr_file" \
-			"${env_args[@]}" \
-			"${cmd_args[@]}" || exit_code=$?
-	fi
-
-	local end_time
+	local end_time duration
 	end_time="$(date +%s)"
-	local duration=$((end_time - start_time))
+	duration=$((end_time - start_time))
 
-	# Handle timeout (exit code 124 from _sandbox_exec_with_pgkill)
-	if [[ $exit_code -eq 124 ]]; then
-		log_sandbox "WARN" "Command timed out after ${timeout_secs}s"
-	fi
-
-	# Output results with redaction and taint-aware handling
-	_sandbox_emit_redacted_output "$stdout_file" "stdout" "$command_tainted"
-	_sandbox_emit_redacted_output "$stderr_file" "stderr" "$command_tainted"
-
-	# Audit log
-	log_execution "$cmd_str" "$exit_code" "$duration" "$timeout_secs" "$block_network" "$extra_passthrough"
-
-	# Async cleanup of old temp dirs (older than 60 minutes).
-	# stderr is not suppressed so permission errors or other persistent failures
-	# remain visible for debugging rather than silently consuming disk space.
-	find "$SANDBOX_TMP_BASE" -maxdepth 1 -type d -mmin +60 -exec rm -rf {} + &
+	_sandbox_run_post_exec \
+		"$exit_code" "$timeout_secs" "$stdout_file" "$stderr_file" \
+		"$command_tainted" "$cmd_str" "$duration" "$block_network" "$extra_passthrough"
 
 	return "$exit_code"
 }
@@ -838,4 +1226,15 @@ main() {
 	esac
 }
 
-main "$@"
+# Source guard: only call main() when executed directly, not when sourced.
+# This prevents the secondary watchdog (_sandbox_spawn_watchdog_bg) from
+# triggering help output when it sources this script to load helper functions.
+# Without this guard, sourcing the script would call main() with the watchdog's
+# positional args (e.g., a numeric timeout), which falls through to the *)
+# case in main() → sandbox_help() → help text printed to the sandbox's stdout
+# pipe → contaminating the opencode output file → output_has_activity() returns
+# "0" → headless-runtime-helper.sh records a backoff and never launches the
+# worker. This was the root cause of GH#6617. (GH#6550)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	main "$@"
+fi

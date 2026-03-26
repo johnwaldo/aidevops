@@ -214,20 +214,35 @@ timeout_sec() {
 		gtimeout "$secs" "$@"
 		return $?
 	else
-		# macOS fallback: background the command and kill after deadline.
-		# The perl alarm approach (perl -e 'alarm shift; exec @ARGV') is fragile:
-		# SIGALRM may not kill child processes that trap or ignore signals (e.g.,
-		# Node MCP servers). Using background + kill is more reliable.
+		# macOS fallback: background the command in a new process group and kill
+		# the entire group after the deadline. Using set -m puts each background
+		# job in its own process group (PGID == child PID), so kill -- -PGID
+		# terminates the child and all its descendants — not just the direct child.
+		#
+		# GH#5530: the previous implementation used kill "$cmd_pid" which only
+		# killed the direct child. Wrapper processes (e.g., bash sandbox-exec-helper.sh)
+		# survived because they are parents of the killed process, not children.
+		#
+		# Save whether monitor mode was already active before enabling it, so we
+		# can restore the original shell state rather than unconditionally disabling it.
+		local monitor_was_enabled=false
+		[[ $- == *m* ]] && monitor_was_enabled=true
+		set -m
 		"$@" &
 		local cmd_pid=$!
+		# Restore monitor mode to its original state (set -m or set +m as appropriate)
+		$monitor_was_enabled && set -m || set +m
+		# PGID equals the PID of the process group leader (the background job)
+		local cmd_pgid="$cmd_pid"
 		# Poll every 0.5s; count half-seconds to avoid floating-point math
 		local half_secs_remaining=$((secs * 2))
 		while kill -0 "$cmd_pid" 2>/dev/null; do
 			if ((half_secs_remaining <= 0)); then
-				kill -TERM "$cmd_pid" # SIGTERM (15) — graceful shutdown
+				# Kill the entire process group: SIGTERM first, then SIGKILL
+				kill -TERM -- "-${cmd_pgid}" 2>/dev/null || true # SIGTERM (15) — graceful
 				sleep 0.2
-				if kill -0 "$cmd_pid" 2>/dev/null; then
-					kill -KILL "$cmd_pid" || true # SIGKILL (9) — hard kill
+				if kill -0 -- "-${cmd_pgid}" 2>/dev/null; then
+					kill -KILL -- "-${cmd_pgid}" 2>/dev/null || true # SIGKILL (9) — hard kill
 				fi
 				wait "$cmd_pid" 2>/dev/null || true
 				return 124 # Normalise to GNU timeout convention
@@ -1362,26 +1377,35 @@ resolve_model_tier() {
 }
 
 #######################################
-# Detect available AI CLI backends (t132.7)
-# Returns a newline-separated list of available backends.
-# Checks: opencode, claude
+# Detect available AI CLI backends (t132.7, t1665.5)
+# Returns a newline-separated list of available backend runtime IDs.
+# Delegates to runtime-registry.sh rt_detect_installed().
 #######################################
 detect_ai_backends() {
-	local -a backends=()
+	# Use runtime registry if loaded (t1665.5)
+	if type rt_detect_installed &>/dev/null; then
+		local installed
+		installed=$(rt_detect_installed) || true
+		if [[ -z "$installed" ]]; then
+			echo "none"
+			return 1
+		fi
+		echo "$installed"
+		return 0
+	fi
 
+	# Fallback: hardcoded check (registry not loaded)
+	local -a backends=()
 	if command -v opencode &>/dev/null; then
 		backends+=("opencode")
 	fi
-
 	if command -v claude &>/dev/null; then
 		backends+=("claude")
 	fi
-
 	if [[ ${#backends[@]} -eq 0 ]]; then
 		echo "none"
 		return 1
 	fi
-
 	printf '%s\n' "${backends[@]}"
 	return 0
 }
@@ -1523,6 +1547,13 @@ _CONFIG_HELPER="${_SC_SELF%/*}/config-helper.sh"
 if [[ -r "$_CONFIG_HELPER" ]]; then
 	# shellcheck source=/dev/null
 	source "$_CONFIG_HELPER"
+fi
+
+# Source runtime registry (t1665.1) — central data source for all AI CLI runtimes
+_RUNTIME_REGISTRY="${_SC_SELF%/*}/runtime-registry.sh"
+if [[ -r "$_RUNTIME_REGISTRY" ]]; then
+	# shellcheck source=/dev/null
+	source "$_RUNTIME_REGISTRY"
 fi
 
 # Legacy paths (kept for backward compatibility and migration)

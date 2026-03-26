@@ -172,39 +172,14 @@ categorize_memory() {
 }
 
 #######################################
-# Find graduation candidates
-# Criteria: high confidence OR frequently accessed, not yet graduated
+# Run the candidate SQL query and return JSON results
+# Args: min_access limit
 #######################################
-cmd_candidates() {
-	local limit=$DEFAULT_LIMIT
-	local min_access=$DEFAULT_MIN_ACCESS
+_query_candidates_json() {
+	local min_access="$1"
+	local limit="$2"
 
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--limit | -l)
-			limit="$2"
-			shift 2
-			;;
-		--min-access)
-			min_access="$2"
-			shift 2
-			;;
-		--json)
-			local format="json"
-			shift
-			;;
-		*) shift ;;
-		esac
-	done
-
-	ensure_schema || return 1
-
-	log_info "Finding graduation candidates (min access: $min_access, limit: $limit)..."
-	echo ""
-
-	local results
-	results=$(
-		db -json "$MEMORY_DB" <<EOF
+	db -json "$MEMORY_DB" <<EOF
 SELECT
     l.id,
     l.type,
@@ -227,18 +202,15 @@ ORDER BY
     l.created_at ASC
 LIMIT $limit;
 EOF
-	)
+}
 
-	if [[ -z "$results" || "$results" == "[]" ]]; then
-		log_info "No graduation candidates found."
-		log_info "Memories qualify when: confidence=high OR access_count >= $min_access"
-		return 0
-	fi
-
-	if [[ "${format:-text}" == "json" ]]; then
-		echo "$results"
-		return 0
-	fi
+#######################################
+# Print candidates in human-readable text format
+# Args: results_json min_access
+#######################################
+_print_candidates_text() {
+	local results="$1"
+	local min_access="$2"
 
 	echo "=== Graduation Candidates ==="
 	echo ""
@@ -279,19 +251,17 @@ EOF
 }
 
 #######################################
-# Graduate memories into shared docs
+# Parse arguments for cmd_candidates
+# Usage: _candidates_parse_args "$@"
+# Outputs: newline-separated KEY=VALUE pairs
 #######################################
-cmd_graduate() {
-	local dry_run=false
+_candidates_parse_args() {
 	local limit=$DEFAULT_LIMIT
 	local min_access=$DEFAULT_MIN_ACCESS
+	local format="text"
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
-		--dry-run)
-			dry_run=true
-			shift
-			;;
 		--limit | -l)
 			limit="$2"
 			shift 2
@@ -300,59 +270,74 @@ cmd_graduate() {
 			min_access="$2"
 			shift 2
 			;;
+		--json)
+			format="json"
+			shift
+			;;
 		*) shift ;;
 		esac
 	done
 
+	printf '%s\n' \
+		"limit=${limit}" \
+		"min_access=${min_access}" \
+		"format=${format}"
+	return 0
+}
+
+#######################################
+# Find graduation candidates
+# Criteria: high confidence OR frequently accessed, not yet graduated
+#######################################
+cmd_candidates() {
+	local parsed
+	parsed=$(_candidates_parse_args "$@")
+
+	local limit min_access format
+	while IFS='=' read -r key val; do
+		case "$key" in
+		limit) limit="$val" ;;
+		min_access) min_access="$val" ;;
+		format) format="$val" ;;
+		esac
+	done <<<"$parsed"
+
 	ensure_schema || return 1
 
-	local target_file
-	target_file=$(graduated_file_path) || return 1
+	log_info "Finding graduation candidates (min access: $min_access, limit: $limit)..."
+	echo ""
 
-	log_info "Graduating memories to $target_file..."
-
-	# Fetch candidates
 	local results
-	results=$(
-		db -json "$MEMORY_DB" <<EOF
-SELECT
-    l.id,
-    l.type,
-    l.content,
-    l.tags,
-    l.confidence,
-    l.created_at,
-    COALESCE(a.access_count, 0) as access_count
-FROM learnings l
-LEFT JOIN learning_access a ON l.id = a.id
-WHERE (
-    l.confidence = 'high'
-    OR COALESCE(a.access_count, 0) >= $min_access
-)
-AND (a.graduated_at IS NULL OR a.graduated_at = '')
-ORDER BY
-    CASE WHEN l.confidence = 'high' THEN 0 ELSE 1 END,
-    COALESCE(a.access_count, 0) DESC,
-    l.created_at ASC
-LIMIT $limit;
-EOF
-	)
+	results=$(_query_candidates_json "$min_access" "$limit")
 
 	if [[ -z "$results" || "$results" == "[]" ]]; then
-		log_info "No memories to graduate."
+		log_info "No graduation candidates found."
+		log_info "Memories qualify when: confidence=high OR access_count >= $min_access"
 		return 0
 	fi
 
-	# Collect actionable entries grouped by category
-	# Use temp files for category grouping (bash 3.2 compat - no assoc arrays)
-	local tmp_dir
-	tmp_dir=$(mktemp -d)
-	# shellcheck disable=SC2064
-	trap "rm -rf '$tmp_dir'" EXIT
+	if [[ "$format" == "json" ]]; then
+		echo "$results"
+		return 0
+	fi
+
+	_print_candidates_text "$results" "$min_access"
+	return 0
+}
+
+#######################################
+# Collect actionable entries into tmp_dir, grouped by category
+# Populates graduated_ids array (by reference via temp file)
+# Args: results_json tmp_dir
+# Outputs: writes count files to tmp_dir/counts (graduated, skipped)
+#          writes id list to tmp_dir/ids
+#######################################
+_collect_entries() {
+	local results="$1"
+	local tmp_dir="$2"
 
 	local graduated_count=0
 	local skipped_count=0
-	local graduated_ids=()
 
 	while IFS= read -r entry; do
 		local id type content confidence access_count
@@ -362,16 +347,16 @@ EOF
 		confidence=$(echo "$entry" | jq -r '.confidence')
 		access_count=$(echo "$entry" | jq -r '.access_count')
 
+		# Always record the id (actionable or not — both get marked graduated)
+		echo "$id" >>"$tmp_dir/ids"
+
 		if ! is_actionable "$content"; then
 			skipped_count=$((skipped_count + 1))
-			# Mark skipped entries as graduated too (so they don't reappear)
-			graduated_ids+=("$id")
 			continue
 		fi
 
-		local category
+		local category safe_category
 		category=$(categorize_memory "$type")
-		local safe_category
 		safe_category=$(echo "$category" | sed 's/[^a-zA-Z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
 
 		# Store the real category name in a mapping file
@@ -384,45 +369,54 @@ EOF
 			echo ""
 		} >>"$tmp_dir/${safe_category}.entries"
 
-		graduated_ids+=("$id")
 		graduated_count=$((graduated_count + 1))
 	done < <(echo "$results" | jq -c '.[]')
 
-	if [[ "$graduated_count" -eq 0 ]]; then
-		log_info "No actionable memories to graduate ($skipped_count skipped as metadata)."
-		# Still mark skipped entries
-		if [[ "$dry_run" == false && ${#graduated_ids[@]} -gt 0 ]]; then
-			mark_graduated "${graduated_ids[@]}"
-		fi
-		return 0
-	fi
+	# Write counts for caller to read
+	echo "$graduated_count" >"$tmp_dir/count_graduated"
+	echo "$skipped_count" >"$tmp_dir/count_skipped"
 
-	if [[ "$dry_run" == true ]]; then
-		log_info "[DRY RUN] Would graduate $graduated_count memories ($skipped_count skipped)"
-		echo ""
-		echo "=== Preview of graduated content ==="
-		echo ""
-		for entries_file in "$tmp_dir"/*.entries; do
-			[[ -f "$entries_file" ]] || continue
-			local base_name cat_name
-			base_name=$(basename "$entries_file" .entries)
-			cat_name=$(cat "$tmp_dir/${base_name}.name" 2>/dev/null || echo "$base_name")
-			echo "### $cat_name"
-			echo ""
-			cat "$entries_file"
-		done
-		return 0
-	fi
+	return 0
+}
 
-	# Build the content to append
-	local new_content=""
+#######################################
+# Print dry-run preview of entries in tmp_dir
+# Args: tmp_dir graduated_count skipped_count
+#######################################
+_preview_entries() {
+	local tmp_dir="$1"
+	local graduated_count="$2"
+	local skipped_count="$3"
+
+	log_info "[DRY RUN] Would graduate $graduated_count memories ($skipped_count skipped)"
+	echo ""
+	echo "=== Preview of graduated content ==="
+	echo ""
+
+	for entries_file in "$tmp_dir"/*.entries; do
+		[[ -f "$entries_file" ]] || continue
+		local base_name cat_name
+		base_name=$(basename "$entries_file" .entries)
+		cat_name=$(cat "$tmp_dir/${base_name}.name" 2>/dev/null || echo "$base_name")
+		echo "### $cat_name"
+		echo ""
+		cat "$entries_file"
+	done
+
+	return 0
+}
+
+#######################################
+# Build the markdown content to append from tmp_dir entries
+# Args: tmp_dir
+# Outputs: prints the markdown block to stdout
+#######################################
+_build_graduation_content() {
+	local tmp_dir="$1"
 	local timestamp
 	timestamp=$(date -u +"%Y-%m-%d")
 
-	new_content+="
-## Graduated: $timestamp
-
-"
+	printf '\n## Graduated: %s\n\n' "$timestamp"
 
 	local first_category=true
 	for entries_file in "$tmp_dir"/*.entries; do
@@ -430,28 +424,37 @@ EOF
 		local base_name cat_name
 		base_name=$(basename "$entries_file" .entries)
 		cat_name=$(cat "$tmp_dir/${base_name}.name" 2>/dev/null || echo "$base_name")
-		# Add blank line before heading (MD022) - skip for first category
+
+		# Add blank line before heading (MD022) — skip for first category
 		# (already has blank line from ## Graduated header above)
 		if [[ "$first_category" == true ]]; then
 			first_category=false
 		else
-			new_content+="
-"
+			printf '\n'
 		fi
-		new_content+="### $cat_name
 
-"
-		new_content+=$(cat "$entries_file")
-		new_content+="
-"
+		printf '### %s\n\n' "$cat_name"
+		cat "$entries_file"
+		printf '\n'
 	done
 
-	# Ensure target file exists with header
-	if [[ ! -f "$target_file" ]]; then
-		local target_dir
-		target_dir=$(dirname "$target_file")
-		mkdir -p "$target_dir"
-		cat >"$target_file" <<'HEADER'
+	return 0
+}
+
+#######################################
+# Ensure the graduated learnings file exists with its header
+# Args: target_file
+#######################################
+_ensure_graduated_file() {
+	local target_file="$1"
+
+	[[ -f "$target_file" ]] && return 0
+
+	local target_dir
+	target_dir=$(dirname "$target_file")
+	mkdir -p "$target_dir"
+
+	cat >"$target_file" <<'HEADER'
 ---
 description: Shared learnings graduated from local memory across all users
 mode: subagent
@@ -484,19 +487,158 @@ candidates and appends them here. Each graduation batch is timestamped.
 - **Context & Background**: Important background information
 
 HEADER
-		log_info "Created $target_file"
+
+	log_info "Created $target_file"
+	return 0
+}
+
+#######################################
+# Parse arguments for cmd_graduate
+# Usage: _graduate_parse_args "$@"
+# Outputs: newline-separated KEY=VALUE pairs
+#######################################
+_graduate_parse_args() {
+	local dry_run=false
+	local limit=$DEFAULT_LIMIT
+	local min_access=$DEFAULT_MIN_ACCESS
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--dry-run)
+			dry_run=true
+			shift
+			;;
+		--limit | -l)
+			limit="$2"
+			shift 2
+			;;
+		--min-access)
+			min_access="$2"
+			shift 2
+			;;
+		*) shift ;;
+		esac
+	done
+
+	printf '%s\n' \
+		"dry_run=${dry_run}" \
+		"limit=${limit}" \
+		"min_access=${min_access}"
+	return 0
+}
+
+#######################################
+# Collect entries from results into tmp_dir and read back counts/ids
+# Args: results tmp_dir
+# Outputs: sets graduated_count, skipped_count, graduated_ids[] in caller scope
+# (caller must declare these variables before calling)
+#######################################
+_graduate_collect_and_read() {
+	local results="$1"
+	local tmp_dir="$2"
+
+	_collect_entries "$results" "$tmp_dir"
+
+	graduated_count=$(cat "$tmp_dir/count_graduated" 2>/dev/null || echo "0")
+	skipped_count=$(cat "$tmp_dir/count_skipped" 2>/dev/null || echo "0")
+
+	graduated_ids=()
+	if [[ -f "$tmp_dir/ids" ]]; then
+		while IFS= read -r id; do
+			graduated_ids+=("$id")
+		done <"$tmp_dir/ids"
 	fi
+	return 0
+}
+
+#######################################
+# Write graduated content to file and mark memories in DB
+# Args: tmp_dir target_file graduated_count skipped_count graduated_ids...
+#######################################
+_graduate_write_and_mark() {
+	local tmp_dir="$1"
+	local target_file="$2"
+	local graduated_count="$3"
+	local skipped_count="$4"
+	shift 4
+	local graduated_ids=("$@")
+
+	local new_content
+	new_content=$(_build_graduation_content "$tmp_dir")
+
+	_ensure_graduated_file "$target_file"
 
 	# Append graduated content
 	echo "$new_content" >>"$target_file"
 
 	# Mark memories as graduated in the DB
-	mark_graduated "${graduated_ids[@]}"
+	if [[ ${#graduated_ids[@]} -gt 0 ]]; then
+		mark_graduated "${graduated_ids[@]}"
+	fi
 
 	log_success "Graduated $graduated_count memories ($skipped_count skipped as metadata)"
 	log_info "Updated: $target_file"
 	log_info "Remember to commit and push the changes."
+	return 0
+}
 
+#######################################
+# Graduate memories into shared docs
+#######################################
+cmd_graduate() {
+	local parsed
+	parsed=$(_graduate_parse_args "$@")
+
+	local dry_run limit min_access
+	while IFS='=' read -r key val; do
+		case "$key" in
+		dry_run) dry_run="$val" ;;
+		limit) limit="$val" ;;
+		min_access) min_access="$val" ;;
+		esac
+	done <<<"$parsed"
+
+	ensure_schema || return 1
+
+	local target_file
+	target_file=$(graduated_file_path) || return 1
+
+	log_info "Graduating memories to $target_file..."
+
+	local results
+	results=$(_query_candidates_json "$min_access" "$limit")
+
+	if [[ -z "$results" || "$results" == "[]" ]]; then
+		log_info "No memories to graduate."
+		return 0
+	fi
+
+	# Collect actionable entries grouped by category into tmp files
+	local tmp_dir
+	tmp_dir=$(mktemp -d)
+	# shellcheck disable=SC2064
+	trap "rm -rf '$tmp_dir'" EXIT
+
+	local graduated_count skipped_count
+	local graduated_ids=()
+	_graduate_collect_and_read "$results" "$tmp_dir"
+
+	if [[ "$graduated_count" -eq 0 ]]; then
+		log_info "No actionable memories to graduate ($skipped_count skipped as metadata)."
+		# Still mark skipped entries so they don't reappear
+		if [[ "$dry_run" == false && ${#graduated_ids[@]} -gt 0 ]]; then
+			mark_graduated "${graduated_ids[@]}"
+		fi
+		return 0
+	fi
+
+	if [[ "$dry_run" == true ]]; then
+		_preview_entries "$tmp_dir" "$graduated_count" "$skipped_count"
+		return 0
+	fi
+
+	_graduate_write_and_mark "$tmp_dir" "$target_file" \
+		"$graduated_count" "$skipped_count" "${graduated_ids[@]+"${graduated_ids[@]}"}"
 	return 0
 }
 

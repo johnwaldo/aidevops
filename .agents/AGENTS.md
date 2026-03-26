@@ -116,6 +116,8 @@ This is the correct action path for framework issues. Do NOT use `claim-task-id.
 - Running the session miner pulse (`scripts/session-miner-pulse.sh`) to extract learning from past sessions
 - **Filing issues for information gaps (t1416):** When you cannot determine what happened on a task because comments lack model tier, branch name, failure diagnosis, or other audit-critical fields, file a self-improvement issue. Information gaps cause cascading waste — without knowing what was tried, the next attempt repeats the same failure. The issue/PR comment timeline is the primary audit trail; if the information isn't there, it's invisible.
 
+**Issue quality filter (GH#6508):** Before filing any enhancement or architectural change — whether via `/log-issue-aidevops`, `framework-issue-helper.sh`, or direct `gh issue create` — apply the framework's own principles to the proposal. Ask: (1) Is this addressing an observed failure, or is it preemptive? Preemptive rules for unobserved failure modes are prompt bloat. (2) Does this add a deterministic mechanism where model judgment would work better? (3) If this comes from comparing aidevops to another framework, is the "gap" actually a deliberate architectural choice? The bar for adding guidance is: **observed failure first, then minimal guidance**. Bug reports with clear reproduction steps are exempt — bugs are observed failures by definition.
+
 **Intelligence over determinism:** The harness gives you goals, tools, and boundaries — not scripts for every scenario. Deterministic rules are for things with exactly one correct answer (CLI syntax, file paths, security). Everything else — prioritisation, triage, stuck detection, what to work on — is a judgment call. If a rule says "if X then Y" but there are cases where X is true and Y is wrong, it's guidance not a rule. Use the cheapest model that can handle the decision (haiku for triage, sonnet for implementation, opus for strategy) — but never use a regex where a model call would handle outliers better. See `prompts/build.txt` "Intelligence Over Determinism" for the full principle.
 
 **Autonomous operation:** When the user says "continue", "monitor", or "keep going" — enter autonomous mode: use sleep/wait loops, maintain a perpetual todo to survive compaction, only interrupt for blocking errors that require user input.
@@ -237,6 +239,8 @@ Planning files go direct to main. Code changes need worktree + PR. Workers NEVER
 **Repo registration**: When you create or clone a new repo (via `gh repo create`, `git clone`, `git init`, etc.), add it to `~/.config/aidevops/repos.json` immediately. Every repo the user works with should be registered — unregistered repos are invisible to cross-repo tools (pulse, health dashboard, session time, contributor stats). Set fields based on the repo's purpose:
 - `pulse: true` — repos with active development, tasks, and issues (most repos)
 - `pulse: false` — repos that exist but don't need task management (profile READMEs, forks for reference, archived projects)
+- `pulse_hours` — optional object `{"start": N, "end": N}` (24h local time). When set, the pulse only dispatches for this repo during the specified window. Overnight windows are supported (e.g., `{"start": 17, "end": 5}` runs 17:00–05:00). Repos without this field run 24/7 (default). Example: `"pulse_hours": {"start": 17, "end": 5}` to avoid conflicts with daytime work.
+- `pulse_expires` — optional ISO date string `"YYYY-MM-DD"`. When today is past this date, the pulse auto-sets `pulse: false` in repos.json and stops dispatching. Useful for temporary pulse windows (e.g., "help clear the backlog this week"). The field is inert once `pulse: false` is written.
 - `contributed: true` — external repos where we've authored or commented on issues/PRs. No merge/dispatch/TODO powers — only monitors for new activity needing reply. Managed by `contribution-watch-helper.sh` (notification-driven, excludes managed `pulse: true` repos).
 - `local_only: true` — repos with no remote (skip all `gh` operations)
 - `priority` — `"tooling"` (infrastructure/tools), `"product"` (user-facing), `"profile"` (GitHub profile, docs-only)
@@ -261,6 +265,14 @@ Worktrees: `wt switch -c {type}/{name}`. Keep the canonical repo directory on `m
 
 Full workflow: `workflows/git-workflow.md`, `reference/session.md`
 
+## Slash Command Resolution
+
+When a user invokes a slash command (`/runners`, `/full-loop`, `/routine`, etc.) or provides input that clearly maps to one, always read the canonical command doc at `scripts/commands/<command>.md` before executing. The on-disk doc is the source of truth — do not improvise from memory or inline text. User-provided workflow descriptions may be stale; use them as context but defer to the command doc for the current procedure.
+
+This also applies when the agent itself needs to perform an action that has a corresponding command (e.g., logging a framework issue → `/log-issue-aidevops`). Prefer the slash command workflow as the operator interface; the command doc enforces quality steps (diagnostics, duplicate checks, user confirmation) that direct helper invocation may skip.
+
+If unsure which command maps to the user's intent, list available commands: `ls ~/.aidevops/agents/scripts/commands/`.
+
 ## Domain Index
 
 Read subagents on-demand. Full index: `subagent-index.toon`.
@@ -284,10 +296,12 @@ Read subagents on-demand. Full index: `subagent-index.toon`.
 | Email | `tools/ui/react-email.md`, `services/email/email-agent.md`, `services/email/email-mailbox.md`, `services/email/email-actions.md`, `services/email/email-intelligence.md`, `services/email/email-providers.md`, `services/email/email-security.md`, `services/email/email-testing.md`, `services/email/email-composition.md`, `services/email/email-inbound-commands.md`, `services/email/google-workspace.md` |
 | Outreach | `services/outreach/cold-outreach.md`, `services/outreach/smartlead.md`, `services/outreach/instantly.md`, `services/outreach/manyreach.md` |
 | Payments | `services/payments/revenuecat.md`, `services/payments/stripe.md`, `services/payments/procurement.md` |
-| Security/Encryption | `tools/security/tirith.md`, `tools/security/opsec.md`, `tools/security/prompt-injection-defender.md`, `tools/security/tamper-evident-audit.md`, `tools/credentials/encryption-stack.md` |
+| Auth troubleshooting | `tools/credentials/auth-troubleshooting.md` |
+| Security/Encryption | `tools/security/tirith.md`, `tools/security/opsec.md`, `tools/security/prompt-injection-defender.md`, `tools/security/tamper-evident-audit.md`, `tools/credentials/encryption-stack.md`, `scripts/secret-hygiene-helper.sh` |
 | Database/Local-first | `tools/database/pglite-local-first.md`, `services/database/postgres-drizzle-skill.md` |
 | Vector Search | `tools/database/vector-search.md`, `tools/database/vector-search/zvec.md` |
 | Local Development | `services/hosting/local-hosting.md` |
+| Hosting/Deployment | `tools/deployment/fly-io.md`, `tools/deployment/coolify.md`, `tools/deployment/vercel.md`, `tools/deployment/uncloud.md`, `tools/deployment/daytona.md` |
 | Infrastructure | `tools/infrastructure/cloud-gpu.md`, `tools/containers/orbstack.md`, `tools/containers/remote-dispatch.md` |
 | Accessibility | `services/accessibility/accessibility-audit.md` |
 | OpenAPI exploration | `tools/context/openapi-search.md` |
@@ -296,6 +310,7 @@ Read subagents on-demand. Full index: `subagent-index.toon`.
 | Model routing | `tools/context/model-routing.md`, `reference/orchestration.md` |
 | Orchestration | `reference/orchestration.md`, `tools/ai-assistants/headless-dispatch.md`, `scripts/commands/pulse.md`, `scripts/commands/dashboard.md` |
 | Upstream watch | `scripts/upstream-watch-helper.sh`, `.agents/configs/upstream-watch.json` |
+| Testing | `scripts/commands/testing-setup.md`, `tools/build-agent/agent-testing.md`, `scripts/testing-setup-helper.sh` |
 | Agent/MCP dev | `tools/build-agent/build-agent.md`, `tools/build-mcp/build-mcp.md`, `tools/mcp-toolkit/mcporter.md` |
 | Framework | `aidevops/architecture.md`, `scripts/commands/skills.md` |
 
@@ -316,10 +331,20 @@ Key capabilities (details in `reference/orchestration.md`, `reference/services.m
 - **Browser**: Playwright, dev-browser (persistent login)
 - **Quality**: Write-time per-edit linting → `linters-local.sh` → `/pr review` → `/postflight`. Fix violations at edit time, not commit time. See `prompts/build.txt` "Write-Time Quality Enforcement". Bundle `skip_gates` filter irrelevant checks per project type.
 - **Sessions**: `/session-review`, `/checkpoint`, compaction resilience
+- **Auth recovery**: if model is broken or "Key Missing" → read `tools/credentials/auth-troubleshooting.md`
 
 ## Security
 
 Rules: `prompts/build.txt`. Secrets: `gopass` preferred; `credentials.sh` plaintext fallback (600 perms). Config templates: `configs/*.json.txt` (committed), working: `configs/*.json` (gitignored). Full docs: `tools/credentials/gopass.md`.
+
+**Unified security command:** `aidevops security` (no args) runs all checks — user posture, plaintext secret hygiene, supply chain IoCs, and active advisories. Subcommands for targeted use:
+- `aidevops security` — run everything (recommended)
+- `aidevops security posture` — interactive security posture setup (gopass, gh auth, SSH, secretlint)
+- `aidevops security scan` — secret hygiene & supply chain scan (plaintext secrets, `.pth` IoCs, unpinned deps, MCP auto-download risks). Never exposes secret values.
+- `aidevops security check` — per-repo posture assessment (workflows, branch protection, review bot gate)
+- `aidevops security dismiss <id>` — dismiss a security advisory after taking action.
+- Security advisories are delivered via `aidevops update` and shown in the session greeting until dismissed. Advisory files: `~/.aidevops/advisories/*.advisory`.
+- All remediation commands must be run in a **separate terminal**, never inside AI chat sessions.
 
 **Cross-repo privacy:** NEVER include private repo names in TODO.md task descriptions, issue titles, or comments on public repos. Use generic references like "a managed private repo" or "cross-repo project". The issue-sync-helper.sh has automated sanitization, but prevention at the source is the primary defense.
 

@@ -134,6 +134,27 @@ Workers that skip verification or mark a PR ready without running the specified 
 - Abstractions that add indirection without clear benefit
 - Consolidating similar sections that address different audiences or contexts
 
+### Reference corpora — restructure, do not compress (GH#6432)
+
+Some large `.md` files are **knowledge bases** (skill docs, domain reference material, textbooks) rather than agent instruction docs. Their size comes from breadth of domain knowledge, not verbosity — the content is already as dense as it should be.
+
+**How to identify:** The file is a SKILL.md or similar reference doc where sections are self-contained domain knowledge (e.g., "Landing Page Optimization", "Checkout Flow Psychology") rather than operational rules, workflows, or decision trees. The content reads like a textbook chapter, not like agent instructions.
+
+**Correct action: split into chapter files with a slim index.** Do NOT compress, summarise, or remove domain knowledge. Instead:
+
+1. Extract each major section (`## N. Section`) into its own file (e.g., `01-introduction.md`, `02-fundamentals.md`)
+2. Replace the original file with a slim index (~100-200 lines) — table of contents with one-line descriptions and file pointers to each chapter
+3. Verify zero content loss: `wc -l` total of all chapter files >= original line count minus index overhead
+4. This enables progressive disclosure — agents load only the chapter they need, not the entire corpus
+
+**What NOT to do with reference corpora:**
+
+- Do not "tighten prose" — reference material is already dense
+- Do not merge small sections to reduce file count — each section is a distinct domain concern
+- Do not remove sections that seem to overlap — domain topics overlap by nature (e.g., social proof appears in landing pages AND checkout flows)
+
+**Issue template guidance:** When creating `simplification-debt` issues for oversized files, classify the file first. If it's a reference corpus, the issue title should say "restructure" not "tighten", and the body should recommend chapter splitting, not prose compression.
+
 ### Almost never simplify (flag but do not recommend)
 
 - Comments containing task IDs, incident numbers, or error pattern data (e.g., `t1345`, `GH#2928`, `46.8% failure rate`) -- these are institutional memory
@@ -387,21 +408,49 @@ The pulse already skips `needs-maintainer-review` issues (see pulse.md "External
 
 ## Integration with Quality Workflow
 
-Code simplification analysis fits into the quality workflow as a periodic review, not a per-commit gate:
+Code simplification analysis fits into the quality workflow via two input paths:
+
+### 1. Automated weekly scan (GH#5628)
+
+`pulse-wrapper.sh` runs a weekly complexity scan that uses the same awk-based function complexity check as CI. It creates `simplification-debt` issues for files exceeding the per-file violation threshold (default: 5+ functions >100 lines). Issues are deduplicated against existing open issues by repo-relative file path.
 
 ```text
-Periodic review --> /code-simplifier (analyse)
-                        |
-                    Issues created (needs-maintainer-review)
-                        |
-                    Maintainer comments "approved" or "declined: reason"
-                        |
-                    Pulse processes comment (labels + close)
-                        |
-                    Approved items dispatched (priority 8)
-                        |
-                    Worker implements in worktree + PR
+pulse-wrapper.sh (weekly) --> awk complexity scan
+                                  |
+                              Files with 5+ violations
+                                  |
+                              Dedup against open issues (by repo-relative path)
+                                  |
+                              Create issues (simplification-debt + needs-maintainer-review)
 ```
+
+Configuration: `COMPLEXITY_SCAN_INTERVAL` (default 7 days), `COMPLEXITY_FILE_VIOLATION_THRESHOLD` (default 5).
+
+### 2. Manual analysis
+
+```text
+/code-simplifier (analyse) --> Issues created (needs-maintainer-review)
+```
+
+### Common pipeline (both paths)
+
+```text
+Issues created (needs-maintainer-review)
+    |
+Maintainer comments "approved" or "declined: reason"
+    |
+Pulse processes comment (labels + close)
+    |
+Approved items dispatched (priority 8)
+    |
+Worker implements in worktree + PR
+    |
+CI threshold ratchets down (.agents/configs/complexity-thresholds.conf)
+```
+
+### CI threshold ratchet (GH#5628)
+
+CI complexity thresholds are stored in `.agents/configs/complexity-thresholds.conf` instead of being hardcoded. After each batch of simplification PRs merges, lower the thresholds in a chore commit to prevent regression. The file contains `FUNCTION_COMPLEXITY_THRESHOLD`, `NESTING_DEPTH_THRESHOLD`, and `FILE_SIZE_THRESHOLD`.
 
 ## Pulse and Supervisor Integration
 

@@ -209,14 +209,11 @@ EOF
 # =============================================================================
 # Test 3: Supervisor dedup Phase 0.5 (DB-level)
 # =============================================================================
-test_supervisor_dedup_db() {
-	echo ""
-	echo "=== Test 3: Supervisor dedup Phase 0.5 (DB-level) ==="
-	info "Injecting duplicate task IDs into supervisor DB, verifying dedup"
 
-	local test_db="$TEST_DIR/test-supervisor.db"
+# Helper: create supervisor DB and inject duplicate task IDs
+_dedup_db_setup() {
+	local test_db="$1"
 
-	# Create a minimal supervisor DB with duplicate task IDs
 	sqlite3 "$test_db" <<'SQL'
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT NOT NULL,
@@ -239,7 +236,6 @@ INSERT INTO tasks (id, status, description, created_at) VALUES ('t202', 'queued'
 INSERT INTO tasks (id, status, description, created_at) VALUES ('t202', 'queued', 'Triple t202', '2026-02-12T10:05:00Z');
 SQL
 
-	# Verify duplicates exist
 	local dup_count
 	dup_count=$(sqlite3 "$test_db" "SELECT COUNT(*) FROM (SELECT id FROM tasks GROUP BY id HAVING COUNT(*) > 1);")
 
@@ -248,8 +244,13 @@ SQL
 	else
 		fail "Expected 2 duplicate IDs, found $dup_count"
 	fi
+	return 0
+}
 
-	# Simulate Phase 0.5 dedup logic (extracted from supervisor-helper.sh)
+# Helper: run Phase 0.5 dedup logic against the DB
+_dedup_db_run_dedup() {
+	local test_db="$1"
+
 	local duplicate_ids
 	duplicate_ids=$(sqlite3 "$test_db" "
 		SELECT id, COUNT(*) as cnt
@@ -287,8 +288,13 @@ SQL
 			done <<<"$all_instances"
 		done <<<"$duplicate_ids"
 	fi
+	return 0
+}
 
-	# Verify: no more duplicates in non-cancelled tasks
+# Helper: verify dedup results in the DB
+_dedup_db_verify() {
+	local test_db="$1"
+
 	local remaining_dups
 	remaining_dups=$(sqlite3 "$test_db" "
 		SELECT COUNT(*) FROM (
@@ -302,7 +308,6 @@ SQL
 		fail "Still $remaining_dups duplicate IDs after dedup"
 	fi
 
-	# Verify cancelled tasks have correct error message
 	local cancelled_count
 	cancelled_count=$(sqlite3 "$test_db" "SELECT COUNT(*) FROM tasks WHERE status = 'cancelled' AND error LIKE '%Phase 0.5 dedup%';")
 
@@ -312,7 +317,6 @@ SQL
 		fail "Expected 3 cancelled tasks, got $cancelled_count"
 	fi
 
-	# Verify originals are still queued
 	local queued_count
 	queued_count=$(sqlite3 "$test_db" "SELECT COUNT(*) FROM tasks WHERE status = 'queued';")
 
@@ -324,18 +328,28 @@ SQL
 	return 0
 }
 
+test_supervisor_dedup_db() {
+	echo ""
+	echo "=== Test 3: Supervisor dedup Phase 0.5 (DB-level) ==="
+	info "Injecting duplicate task IDs into supervisor DB, verifying dedup"
+
+	local test_db="$TEST_DIR/test-supervisor.db"
+
+	_dedup_db_setup "$test_db"
+	_dedup_db_run_dedup "$test_db"
+	_dedup_db_verify "$test_db"
+	return 0
+}
+
 # =============================================================================
 # Test 4: Supervisor dedup Phase 0.5b (TODO.md level)
 # =============================================================================
-test_supervisor_dedup_todo() {
-	echo ""
-	echo "=== Test 4: Supervisor dedup Phase 0.5b (TODO.md level) ==="
-	info "Injecting duplicate task IDs into TODO.md, verifying dedup"
 
-	local test_repo="$TEST_DIR/test-repo-dedup"
+# Helper: create TODO.md with intentional duplicate task IDs
+_dedup_todo_setup() {
+	local test_repo="$1"
+
 	mkdir -p "$test_repo"
-
-	# Create TODO.md with intentional duplicates
 	cat >"$test_repo/TODO.md" <<'EOF'
 # TODO
 
@@ -353,8 +367,14 @@ test_supervisor_dedup_todo() {
 
 - [ ] t303 Backlog task
 EOF
+	return 0
+}
 
-	# Extract open task IDs and find duplicates (simulating Phase 0.5b logic)
+# Helper: detect duplicates and rename them; writes changes_made count to $2 (temp file)
+_dedup_todo_run_dedup() {
+	local test_repo="$1"
+	local count_file="$2"
+
 	local task_lines
 	task_lines=$(grep -nE '^[[:space:]]*- \[ \] t[0-9]+' "$test_repo/TODO.md" | while IFS=: read -r lnum line_content; do
 		if [[ "$line_content" =~ ^[[:space:]]*-[[:space:]]\[[[:space:]]\][[:space:]](t[0-9]+(\.[0-9]+)*) ]]; then
@@ -369,10 +389,10 @@ EOF
 		pass "Detected duplicate task IDs in TODO.md: $(echo "$dup_ids" | tr '\n' ' ')"
 	else
 		fail "Failed to detect duplicate task IDs in TODO.md"
-		return
+		printf '%s\n' "0" >"$count_file"
+		return 0
 	fi
 
-	# Find highest task number for renaming
 	local max_num
 	max_num=$(grep -oE '(^|[[:space:]])t([0-9]+)' "$test_repo/TODO.md" | grep -oE '[0-9]+' | sort -n | tail -1 || echo "0")
 	max_num=$((10#${max_num}))
@@ -412,8 +432,15 @@ EOF
 	done <<<"$dup_ids"
 
 	info "Renamed $changes_made duplicate task IDs"
+	printf '%s\n' "$changes_made" >"$count_file"
+	return 0
+}
 
-	# Verify no more duplicates
+# Helper: verify no duplicates remain and rename count is correct
+_dedup_todo_verify() {
+	local test_repo="$1"
+	local changes_made="$2"
+
 	local post_task_ids
 	post_task_ids=$(grep -E '^[[:space:]]*- \[ \] t[0-9]+' "$test_repo/TODO.md" |
 		sed -E 's/^[[:space:]]*- \[ \] (t[0-9]+(\.[0-9]+)*).*/\1/')
@@ -427,7 +454,6 @@ EOF
 		fail "Still have duplicates after dedup: $post_dups"
 	fi
 
-	# Verify the renamed IDs are sequential
 	local renamed_ids
 	renamed_ids=$(echo "$post_task_ids" | sort -t't' -k1 -n | tail -"$changes_made")
 	info "Renamed tasks now have IDs: $(echo "$renamed_ids" | tr '\n' ' ')"
@@ -440,18 +466,33 @@ EOF
 	return 0
 }
 
+test_supervisor_dedup_todo() {
+	echo ""
+	echo "=== Test 4: Supervisor dedup Phase 0.5b (TODO.md level) ==="
+	info "Injecting duplicate task IDs into TODO.md, verifying dedup"
+
+	local test_repo="$TEST_DIR/test-repo-dedup"
+	local count_file="$TEST_DIR/dedup-todo-count.txt"
+
+	_dedup_todo_setup "$test_repo"
+	_dedup_todo_run_dedup "$test_repo" "$count_file"
+
+	local changes_made
+	changes_made=$(tr -d '[:space:]' <"$count_file")
+
+	_dedup_todo_verify "$test_repo" "$changes_made"
+	return 0
+}
+
 # =============================================================================
 # Test 5: Pre-commit hook rejects duplicate task IDs
 # =============================================================================
-test_precommit_duplicate_rejection() {
-	echo ""
-	echo "=== Test 5: Pre-commit hook rejects duplicate task IDs ==="
-	info "Simulating staged TODO.md with duplicates"
 
-	local test_repo="$TEST_DIR/test-repo-precommit"
+# Helper: initialise a git repo with a clean TODO.md baseline
+_precommit_setup() {
+	local test_repo="$1"
+
 	mkdir -p "$test_repo"
-
-	# Initialize git repo
 	(
 		cd "$test_repo"
 		git init -q
@@ -466,8 +507,13 @@ EOF
 		git add TODO.md
 		git commit -q -m "init"
 	)
+	return 0
+}
 
-	# Now create a TODO.md with duplicates and stage it
+# Helper: stage a TODO.md with duplicates and verify the hook detects them
+_precommit_check_duplicates() {
+	local test_repo="$1"
+
 	cat >"$test_repo/TODO.md" <<'EOF'
 # TODO
 
@@ -496,22 +542,18 @@ EOF
 		fail "Pre-commit logic failed to detect duplicate task IDs"
 	fi
 
-	# Verify the specific duplicate
 	if echo "$duplicates" | grep -q "t400"; then
 		pass "Correctly identified t400 as the duplicate"
 	else
 		fail "Expected t400 as duplicate, got: $duplicates"
 	fi
 
-	# Verify non-duplicates are not flagged
 	if ! echo "$duplicates" | grep -q "t401"; then
 		pass "t401 correctly not flagged as duplicate"
 	else
 		fail "t401 incorrectly flagged as duplicate"
 	fi
 
-	# Test that the hook would reject (non-zero exit)
-	# Simulate the validate_duplicate_task_ids return value
 	local dup_count
 	dup_count=$(echo "$duplicates" | grep -c "." || echo "0")
 
@@ -520,8 +562,13 @@ EOF
 	else
 		fail "Pre-commit hook would incorrectly allow commit"
 	fi
+	return 0
+}
 
-	# Test with clean TODO.md (no duplicates)
+# Helper: stage a clean TODO.md and verify the hook allows it
+_precommit_check_clean() {
+	local test_repo="$1"
+
 	cat >"$test_repo/TODO.md" <<'EOF'
 # TODO
 
@@ -546,6 +593,19 @@ EOF
 	else
 		fail "Pre-commit logic incorrectly flags clean TODO.md"
 	fi
+	return 0
+}
+
+test_precommit_duplicate_rejection() {
+	echo ""
+	echo "=== Test 5: Pre-commit hook rejects duplicate task IDs ==="
+	info "Simulating staged TODO.md with duplicates"
+
+	local test_repo="$TEST_DIR/test-repo-precommit"
+
+	_precommit_setup "$test_repo"
+	_precommit_check_duplicates "$test_repo"
+	_precommit_check_clean "$test_repo"
 	return 0
 }
 
@@ -846,15 +906,11 @@ EOF
 # =============================================================================
 # Test 11: .task-counter file validation
 # =============================================================================
-test_counter_validation() {
-	echo ""
-	echo "=== Test 11: .task-counter file validation ==="
-	info "Testing invalid counter file handling"
+# Helper: initialise a git repo without .task-counter for validation tests
+_counter_validation_setup() {
+	local test_repo="$1"
 
-	local test_repo="$TEST_DIR/test-repo-validate"
 	mkdir -p "$test_repo"
-
-	# Test with missing .task-counter
 	(
 		cd "$test_repo"
 		git init -q
@@ -867,37 +923,129 @@ EOF
 		git add TODO.md
 		git commit -q -m "init"
 	)
+	return 0
+}
+
+# Helper: verify missing .task-counter auto-bootstraps from TODO.md (GH#6569)
+_counter_validation_check_missing() {
+	local test_repo="$1"
+
+	# Remove any existing counter to simulate missing state
+	rm -f "$test_repo/.task-counter"
 
 	local output
 	output=$("$SCRIPT_DIR/claim-task-id.sh" --title "No counter test" --offline --no-issue --repo-path "$test_repo" 2>&1) || true
 
-	if echo "$output" | grep -qi "not found\|invalid\|missing\|error"; then
-		pass "Missing .task-counter correctly produces error"
+	local task_id
+	task_id=$(echo "$output" | grep "^task_id=" | cut -d= -f2 || echo "")
+
+	# TODO.md has t1, so seed=2, offline offset=100 → t102
+	if [[ -n "$task_id" ]] && [[ "$task_id" =~ ^t[0-9]+$ ]]; then
+		pass "Missing .task-counter auto-bootstraps from TODO.md (got $task_id)"
 	else
-		fail "Missing .task-counter did not produce expected error"
+		fail "Missing .task-counter should auto-bootstrap, got: $task_id (output: $output)"
 	fi
 
-	# Test with non-numeric .task-counter
+	# Verify BOOTSTRAP_COUNTER_OK marker was emitted
+	if echo "$output" | grep -q "BOOTSTRAP_COUNTER_OK"; then
+		pass "BOOTSTRAP_COUNTER_OK marker emitted for observability"
+	else
+		fail "BOOTSTRAP_COUNTER_OK marker not found in output"
+	fi
+
+	# Verify .task-counter was created locally
+	if [[ -f "$test_repo/.task-counter" ]]; then
+		pass ".task-counter file created after bootstrap"
+	else
+		fail ".task-counter file not created after bootstrap"
+	fi
+	return 0
+}
+
+# Helper: verify non-numeric .task-counter auto-bootstraps, and valid counter works
+_counter_validation_check_values() {
+	local test_repo="$1"
+
+	# Test with non-numeric .task-counter — should auto-bootstrap from TODO.md
 	echo "abc" >"$test_repo/.task-counter"
+	local output
 	output=$("$SCRIPT_DIR/claim-task-id.sh" --title "Bad counter test" --offline --no-issue --repo-path "$test_repo" 2>&1) || true
 
-	if echo "$output" | grep -qi "invalid\|error"; then
-		pass "Non-numeric .task-counter correctly produces error"
+	local task_id
+	task_id=$(echo "$output" | grep "^task_id=" | cut -d= -f2 || echo "")
+
+	if [[ -n "$task_id" ]] && [[ "$task_id" =~ ^t[0-9]+$ ]]; then
+		pass "Non-numeric .task-counter auto-bootstraps from TODO.md (got $task_id)"
 	else
-		fail "Non-numeric .task-counter did not produce expected error"
+		fail "Non-numeric .task-counter should auto-bootstrap, got: $task_id"
 	fi
 
 	# Test with valid .task-counter
 	echo "42" >"$test_repo/.task-counter"
 	output=$("$SCRIPT_DIR/claim-task-id.sh" --title "Valid counter test" --offline --no-issue --repo-path "$test_repo" 2>/dev/null) || true
 
-	local task_id
 	task_id=$(echo "$output" | grep "^task_id=" | cut -d= -f2 || echo "")
 
 	if [[ "$task_id" == "t142" ]]; then
 		pass "Valid .task-counter (42) correctly allocates t142 (42 + 100 offset)"
 	else
 		fail "Expected t142, got '$task_id'"
+	fi
+	return 0
+}
+
+test_counter_validation() {
+	echo ""
+	echo "=== Test 11: .task-counter file validation (GH#6569 auto-bootstrap) ==="
+	info "Testing auto-bootstrap when .task-counter is missing or invalid"
+
+	local test_repo="$TEST_DIR/test-repo-validate"
+
+	_counter_validation_setup "$test_repo"
+	_counter_validation_check_missing "$test_repo"
+	_counter_validation_check_values "$test_repo"
+	return 0
+}
+
+# =============================================================================
+# Test 12: Fresh repo bootstrap (no TODO.md, no .task-counter) — GH#6569
+# =============================================================================
+test_fresh_repo_bootstrap() {
+	echo ""
+	echo "=== Test 12: Fresh repo bootstrap (no TODO.md, no .task-counter) ==="
+	info "Testing auto-bootstrap seeds counter at 1 when no TODO.md exists"
+
+	local test_repo="$TEST_DIR/test-repo-fresh"
+	mkdir -p "$test_repo"
+	(
+		cd "$test_repo"
+		git init -q
+		git config user.email "test@test.com"
+		git config user.name "Test"
+		# No TODO.md, no .task-counter — truly fresh repo
+		touch README.md
+		git add README.md
+		git commit -q -m "init"
+	)
+
+	local output
+	output=$("$SCRIPT_DIR/claim-task-id.sh" --title "Fresh repo test" --offline --no-issue --repo-path "$test_repo" 2>&1) || true
+
+	local task_id
+	task_id=$(echo "$output" | grep "^task_id=" | cut -d= -f2 || echo "")
+
+	# Seed=1 (no TODO.md), offline offset=100 → t101
+	if [[ "$task_id" == "t101" ]]; then
+		pass "Fresh repo (no TODO.md) bootstraps at seed=1, allocates t101"
+	else
+		fail "Expected t101 for fresh repo, got '$task_id'"
+	fi
+
+	# Verify .task-counter was created
+	if [[ -f "$test_repo/.task-counter" ]]; then
+		pass ".task-counter created in fresh repo after bootstrap"
+	else
+		fail ".task-counter not created in fresh repo"
 	fi
 	return 0
 }
@@ -925,6 +1073,7 @@ test_highest_task_id
 test_edge_cases
 test_batch_allocation
 test_counter_validation
+test_fresh_repo_bootstrap
 
 # =============================================================================
 # Summary

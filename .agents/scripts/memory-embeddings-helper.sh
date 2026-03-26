@@ -230,13 +230,10 @@ print_setup_instructions() {
 }
 
 #######################################
-# Create the Python embedding engine
-# Supports both local and OpenAI providers
+# Write Python engine header: imports and model loading
 #######################################
-create_python_engine() {
-	mkdir -p "$MEMORY_DIR"
-	mkdir -p "$(dirname "$PYTHON_SCRIPT")"
-	cat >"$PYTHON_SCRIPT" <<'PYEOF'
+_write_python_header() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
 #!/usr/bin/env python3
 """Embedding engine for aidevops semantic memory.
 
@@ -281,7 +278,15 @@ def embed_text_local(text: str) -> list[float]:
     model = get_local_model()
     embedding = model.encode(text, normalize_embeddings=True)
     return embedding.tolist()
+PYEOF
+	return 0
+}
 
+#######################################
+# Write Python engine: OpenAI embedding and shared embed helpers
+#######################################
+_write_python_embed_functions() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
 
 def embed_text_openai(text: str) -> list[float]:
     api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -348,7 +353,15 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return float(dot / (norm_a * norm_b))
+PYEOF
+	return 0
+}
 
+#######################################
+# Write Python engine: DB init and cmd_embed/cmd_search
+#######################################
+_write_python_db_and_search() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
 
 def init_embeddings_db(db_path: str):
     conn = sqlite3.connect(db_path)
@@ -429,14 +442,19 @@ def cmd_search(provider: str, embeddings_db: str, memory_db: str, query: str, li
             })
     mem_conn.close()
     print(json.dumps(output))
+PYEOF
+	return 0
+}
 
+#######################################
+# Write Python hybrid helper: _hybrid_semantic_search()
+#######################################
+_write_python_hybrid_semantic() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
 
-def cmd_hybrid(provider: str, embeddings_db: str, memory_db: str, query: str, limit: int = 5):
-    """Hybrid search: combine FTS5 BM25 + semantic similarity using Reciprocal Rank Fusion."""
+def _hybrid_semantic_search(provider: str, embeddings_db: str, query: str, semantic_limit: int) -> list:
+    """Return top semantic candidates as [(memory_id, score)] sorted desc."""
     dim = get_embedding_dim(provider)
-
-    # 1. Semantic search (get 3x limit candidates)
-    semantic_limit = limit * 3
     query_embedding = embed_text(query, provider)
 
     emb_conn = init_embeddings_db(embeddings_db)
@@ -446,40 +464,82 @@ def cmd_hybrid(provider: str, embeddings_db: str, memory_db: str, query: str, li
     ).fetchall()
     emb_conn.close()
 
-    semantic_results = []
+    results = []
     for memory_id, emb_blob, emb_dim in rows:
         actual_dim = emb_dim if emb_dim else dim
         stored_embedding = unpack_embedding(emb_blob, actual_dim)
         score = cosine_similarity(query_embedding, stored_embedding)
-        semantic_results.append((memory_id, score))
+        results.append((memory_id, score))
 
-    semantic_results.sort(key=lambda x: x[1], reverse=True)
-    semantic_results = semantic_results[:semantic_limit]
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[:semantic_limit]
+PYEOF
+	return 0
+}
 
-    # 2. FTS5 keyword search (get 3x limit candidates)
-    mem_conn = sqlite3.connect(memory_db)
-    mem_conn.execute("PRAGMA busy_timeout=5000")
+#######################################
+# Write Python hybrid helper: _hybrid_fts5_search()
+#######################################
+_write_python_hybrid_fts5() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
 
-    # Escape query for FTS5 (wrap in double quotes for literal phrase)
+def _hybrid_fts5_search(mem_conn, query: str, semantic_limit: int) -> list:
+    """Return FTS5 BM25 candidates as [(memory_id, score)]. Falls back to [] on error."""
     escaped_query = query.replace('"', '""')
     fts_query = f'"{escaped_query}"'
 
-    fts_results = []
     try:
         fts_rows = mem_conn.execute(
-            f"""SELECT id, bm25(learnings) as score
-                FROM learnings
-                WHERE learnings MATCH ?
-                ORDER BY score
-                LIMIT ?""",
+            """SELECT id, bm25(learnings) as score
+               FROM learnings
+               WHERE learnings MATCH ?
+               ORDER BY score
+               LIMIT ?""",
             (fts_query, semantic_limit)
         ).fetchall()
-        fts_results = [(row[0], row[1]) for row in fts_rows]
+        return [(row[0], row[1]) for row in fts_rows]
     except sqlite3.OperationalError:
         # FTS5 query failed (e.g., special characters) — fall back to semantic only
-        pass
+        return []
+PYEOF
+	return 0
+}
 
-    # 3. Reciprocal Rank Fusion (RRF) with k=60
+#######################################
+# Write Python hybrid helper: _hybrid_usefulness_lookup()
+#######################################
+_write_python_hybrid_usefulness() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
+
+def _hybrid_usefulness_lookup(mem_conn, semantic_results: list, fts_results: list) -> dict:
+    """Fetch usefulness scores for all candidate IDs. Returns {id: score} dict."""
+    usefulness_lookup: dict[str, float] = {}
+    try:
+        all_ids = set(mid for mid, _ in semantic_results) | set(mid for mid, _ in fts_results)
+        if all_ids:
+            placeholders = ",".join("?" for _ in all_ids)
+            usefulness_rows = mem_conn.execute(
+                f"SELECT id, COALESCE(usefulness_score, 0.0) FROM learning_access WHERE id IN ({placeholders})",
+                list(all_ids)
+            ).fetchall()
+            usefulness_lookup = {row[0]: row[1] for row in usefulness_rows}
+    except sqlite3.OperationalError:
+        # usefulness_score column may not exist on older DBs — graceful fallback
+        pass
+    return usefulness_lookup
+PYEOF
+	return 0
+}
+
+#######################################
+# Write Python hybrid helper: _hybrid_rrf_fuse() and cmd_hybrid()
+#######################################
+_write_python_hybrid_rrf_and_cmd() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
+
+def _hybrid_rrf_fuse(semantic_results: list, fts_results: list,
+                     usefulness_lookup: dict, limit: int) -> list:
+    """Reciprocal Rank Fusion (k=60) with usefulness boost. Returns [(id, rrf_score)]."""
     k = 60
     rrf_scores: dict[str, float] = {}
 
@@ -489,34 +549,70 @@ def cmd_hybrid(provider: str, embeddings_db: str, memory_db: str, query: str, li
     for rank, (memory_id, _score) in enumerate(fts_results):
         rrf_scores[memory_id] = rrf_scores.get(memory_id, 0.0) + 1.0 / (k + rank + 1)
 
-    # Sort by combined RRF score
-    combined = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:limit]
+    # Apply usefulness boost: lambda=0.3, normalized to RRF scale.
+    # A usefulness_score of 3.0 adds ~0.015 to RRF score (enough to shift
+    # 1-2 positions among closely-ranked results without overriding relevance).
+    usefulness_lambda = 0.3
+    rrf_scale = 1.0 / (k + 1)  # max single-signal RRF contribution
+    for memory_id in rrf_scores:
+        u_score = usefulness_lookup.get(memory_id, 0.0)
+        if u_score != 0.0:
+            rrf_scores[memory_id] += u_score * usefulness_lambda * rrf_scale
 
-    # Build semantic score lookup for output
-    semantic_lookup = {mid: score for mid, score in semantic_results}
+    return sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:limit]
 
-    # Fetch memory content
-    output = []
-    for memory_id, rrf_score in combined:
-        row = mem_conn.execute(
-            "SELECT content, type, tags, confidence, created_at FROM learnings WHERE id = ?",
-            (memory_id,)
-        ).fetchone()
-        if row:
-            output.append({
-                "id": memory_id,
-                "content": row[0],
-                "type": row[1],
-                "tags": row[2],
-                "confidence": row[3],
-                "created_at": row[4],
-                "score": round(rrf_score, 4),
-                "semantic_score": round(semantic_lookup.get(memory_id, 0.0), 4),
-                "search_method": "hybrid",
-            })
-    mem_conn.close()
+
+def cmd_hybrid(provider: str, embeddings_db: str, memory_db: str, query: str, limit: int = 5):
+    """Hybrid search: combine FTS5 BM25 + semantic similarity using Reciprocal Rank Fusion."""
+    semantic_limit = limit * 3
+
+    semantic_results = _hybrid_semantic_search(provider, embeddings_db, query, semantic_limit)
+
+    mem_conn = sqlite3.connect(memory_db)
+    mem_conn.execute("PRAGMA busy_timeout=5000")
+
+    try:
+        fts_results = _hybrid_fts5_search(mem_conn, query, semantic_limit)
+        usefulness_lookup = _hybrid_usefulness_lookup(mem_conn, semantic_results, fts_results)
+
+        combined = _hybrid_rrf_fuse(semantic_results, fts_results, usefulness_lookup, limit)
+
+        semantic_lookup = {mid: score for mid, score in semantic_results}
+
+        output = []
+        for memory_id, rrf_score in combined:
+            row = mem_conn.execute(
+                "SELECT content, type, tags, confidence, created_at FROM learnings WHERE id = ?",
+                (memory_id,)
+            ).fetchone()
+            if row:
+                u_score = usefulness_lookup.get(memory_id, 0.0)
+                entry = {
+                    "id": memory_id,
+                    "content": row[0],
+                    "type": row[1],
+                    "tags": row[2],
+                    "confidence": row[3],
+                    "created_at": row[4],
+                    "score": round(rrf_score, 4),
+                    "semantic_score": round(semantic_lookup.get(memory_id, 0.0), 4),
+                    "search_method": "hybrid",
+                }
+                if u_score != 0.0:
+                    entry["usefulness_score"] = round(u_score, 2)
+                output.append(entry)
+    finally:
+        mem_conn.close()
     print(json.dumps(output))
+PYEOF
+	return 0
+}
 
+#######################################
+# Write Python engine: cmd_index and cmd_add
+#######################################
+_write_python_index_add() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
 
 def cmd_index(provider: str, memory_db: str, embeddings_db: str):
     dim = get_embedding_dim(provider)
@@ -599,7 +695,15 @@ def cmd_add(provider: str, memory_db: str, embeddings_db: str, memory_id: str):
     emb_conn.commit()
     emb_conn.close()
     print(json.dumps({"indexed": memory_id}))
+PYEOF
+	return 0
+}
 
+#######################################
+# Write Python engine: cmd_status and cmd_find_similar
+#######################################
+_write_python_status_find_similar() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
 
 def cmd_status(embeddings_db: str):
     db_path = Path(embeddings_db)
@@ -695,7 +799,15 @@ def cmd_find_similar(provider: str, embeddings_db: str, memory_db: str,
         "content": row[1][:200],
         "score": round(best_score, 4),
     }))
+PYEOF
+	return 0
+}
 
+#######################################
+# Write Python engine: main dispatcher
+#######################################
+_write_python_main() {
+	cat >>"$PYTHON_SCRIPT" <<'PYEOF'
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -726,6 +838,28 @@ if __name__ == "__main__":
         print(f"Unknown command: {command}")
         sys.exit(1)
 PYEOF
+	return 0
+}
+
+#######################################
+# Create the Python embedding engine
+# Delegates to section writers to keep each function under 100 lines
+#######################################
+create_python_engine() {
+	mkdir -p "$MEMORY_DIR"
+	mkdir -p "$(dirname "$PYTHON_SCRIPT")"
+	# Truncate/create the file before appending sections
+	: >"$PYTHON_SCRIPT"
+	_write_python_header
+	_write_python_embed_functions
+	_write_python_db_and_search
+	_write_python_hybrid_semantic
+	_write_python_hybrid_fts5
+	_write_python_hybrid_usefulness
+	_write_python_hybrid_rrf_and_cmd
+	_write_python_index_add
+	_write_python_status_find_similar
+	_write_python_main
 	chmod +x "$PYTHON_SCRIPT"
 	return 0
 }

@@ -7,6 +7,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.154] - 2026-03-25
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.1.106] - 2026-03-25
+
+### Added
+
+- extend complexity scan to .md agent docs, daily interval, longest-first (#5693)
+
+### Fixed
+
+- clarify advisory output string concatenation (PR #5689 follow-up) (#5691)
+- key commands shows 'aidevops security' not 'aidevops security scan'
+
+## [3.1.104] - 2026-03-25
+
+### Changed
+
+- Documentation: add asc-cli dependency check and update web apps section (#5690)
+
+## [3.1.94] - 2026-03-24
+
+### Changed
+
+- Refactor: reduce function complexity in oauth-pool-helper.sh (GH#5643) (#5654)
+
+## [3.1.89] - 2026-03-24
+
+### Changed
+
+- Refactor: disable proactive refresh, keep as commented-out option (#5613)
+
+## [3.1.88] - 2026-03-24
+
+### Fixed
+
+- handle 401/403 (server-side token revocation) in OAuth pool with auto-refresh (#5612)
+
+## [3.1.80] - 2026-03-23
+
+### Changed
+
+- Maintenance: add OpenCode to NPM_TOOLS with bun/npm auto-detection (#5570)
+
+### Fixed
+
+- add cooldown check to oauth-pool fallback account selection (#5552) (#5567)
+
+## [3.1.79] - 2026-03-23
+
+### Fixed
+
+- inject OAuth tokens via env vars — works on all OpenCode versions (#5561)
+
+## [3.1.78] - 2026-03-23
+
+### Added
+
+- add aidevops opencode-sandbox command for isolated version testing (#5548)
+
+## [3.1.77] - 2026-03-23
+
+### Changed
+
+- Maintenance: pin OpenCode to 1.2.27 — versions >1.2.27 break OAuth (#5547)
+
+## [3.1.76] - 2026-03-23
+
+### Fixed
+
+- Homebrew wrapper prefers git repo aidevops.sh over installed snapshot (#5545)
+
+## [3.1.75] - 2026-03-23
+
+### Fixed
+
+- correct OAuth setup docs — opencode auth login is API key only (#5544)
+
+## [3.1.74] - 2026-03-23
+
+### Fixed
+
+- npm wrapper prefers git repo aidevops.sh over bundled copy (#5543)
+
+## [3.1.73] - 2026-03-23
+
+### Changed
+
+- Maintenance: remove opencode-antigravity-auth plugin on update (#5542)
+
+## [3.1.72] - 2026-03-23
+
+### Fixed
+
+- pool injection idle status + headless dispatch timing race (#5541)
+- restore cmd_rotate (auth.json), cmd_status, cmd_assign_pending lost in PR #5535 merge (#5536)
+
+## [3.1.71] - 2026-03-23
+
+### Changed
+
+- Documentation: mention @auth-troubleshooting agent and free model fallback in README (#5539)
+
+## [3.1.70] - 2026-03-23
+
+### Changed
+
+- Refactor: move auth troubleshooting to subagent, pointer in AGENTS.md (#5538)
+
+## [3.1.69] - 2026-03-23
+
+### Added
+
+- add status/assign-pending commands and auth troubleshooting docs (#5537)
+
+## [3.1.68] - 2026-03-23
+
+### Added
+
+- add aidevops model-accounts-pool CLI command with rotate and reset-cooldowns (#5535)
+
 ## [3.1.63] - 2026-03-22
 
 ### Added

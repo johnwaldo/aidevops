@@ -60,6 +60,192 @@ check_opencode_prompt_drift() {
 	return 0
 }
 
+# _deploy_agents_clean_mode target_dir [preserved_dirs...]
+# Removes stale files from target_dir while preserving listed subdirectories.
+_deploy_agents_clean_mode() {
+	local target_dir="$1"
+	shift
+	local -a preserved_dirs=("$@")
+
+	print_info "Clean mode: removing stale files from $target_dir (preserving ${preserved_dirs[*]})"
+	local tmp_preserve
+	tmp_preserve="$(mktemp -d)"
+	trap 'rm -rf "${tmp_preserve:-}"' RETURN
+	if [[ -z "$tmp_preserve" || ! -d "$tmp_preserve" ]]; then
+		print_error "Failed to create temp dir for preserving agents"
+		return 1
+	fi
+	local preserve_failed=false
+	for pdir in "${preserved_dirs[@]}"; do
+		if [[ -d "$target_dir/$pdir" ]]; then
+			if ! cp -R "$target_dir/$pdir" "$tmp_preserve/$pdir"; then
+				preserve_failed=true
+			fi
+		fi
+	done
+	if [[ "$preserve_failed" == "true" ]]; then
+		print_error "Failed to preserve user/plugin agents; aborting clean"
+		rm -rf "$tmp_preserve"
+		return 1
+	fi
+	rm -rf "${target_dir:?}"/*
+	for pdir in "${preserved_dirs[@]}"; do
+		if [[ -d "$tmp_preserve/$pdir" ]]; then
+			cp -R "$tmp_preserve/$pdir" "$target_dir/$pdir"
+		fi
+	done
+	rm -rf "$tmp_preserve"
+	return 0
+}
+
+# _deploy_agents_copy source_dir target_dir [plugin_namespaces...]
+# Copies agent files using rsync (preferred) or tar fallback.
+# Returns 0 on success, 1 on failure.
+_deploy_agents_copy() {
+	local source_dir="$1"
+	local target_dir="$2"
+	shift 2
+
+	local deploy_ok=false
+	if command -v rsync &>/dev/null; then
+		local -a rsync_excludes=("--exclude=loop-state/" "--exclude=custom/" "--exclude=draft/")
+		for pns in "$@"; do
+			rsync_excludes+=("--exclude=${pns}/")
+		done
+		if rsync -a "${rsync_excludes[@]}" "$source_dir/" "$target_dir/"; then
+			deploy_ok=true
+		fi
+	else
+		# Fallback: use tar with exclusions to match rsync behavior
+		local -a tar_excludes=("--exclude=loop-state" "--exclude=custom" "--exclude=draft")
+		for pns in "$@"; do
+			tar_excludes+=("--exclude=$pns")
+		done
+		if (cd "$source_dir" && tar cf - "${tar_excludes[@]}" .) | (cd "$target_dir" && tar xf -); then
+			deploy_ok=true
+		fi
+	fi
+
+	if [[ "$deploy_ok" == "true" ]]; then
+		return 0
+	fi
+	return 1
+}
+
+# _inject_plan_reminder target_dir
+# Injects the extracted OpenCode plan-reminder into Plan+ if the placeholder is present.
+_inject_plan_reminder() {
+	local target_dir="$1"
+	local plan_reminder="$HOME/.aidevops/cache/opencode-prompts/plan-reminder.txt"
+	local plan_plus="$target_dir/plan-plus.md"
+	if [[ ! -f "$plan_reminder" || ! -f "$plan_plus" ]]; then
+		return 0
+	fi
+	if ! grep -q "OPENCODE-PLAN-REMINDER-INJECT" "$plan_plus"; then
+		return 0
+	fi
+	local tmp_file in_placeholder
+	tmp_file=$(mktemp)
+	trap 'rm -f "${tmp_file:-}"' RETURN
+	in_placeholder=false
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		if [[ "$line" == *"OPENCODE-PLAN-REMINDER-INJECT-START"* ]]; then
+			echo "$line" >>"$tmp_file"
+			cat "$plan_reminder" >>"$tmp_file"
+			in_placeholder=true
+		elif [[ "$line" == *"OPENCODE-PLAN-REMINDER-INJECT-END"* ]]; then
+			echo "$line" >>"$tmp_file"
+			in_placeholder=false
+		elif [[ "$in_placeholder" == false ]]; then
+			echo "$line" >>"$tmp_file"
+		fi
+	done <"$plan_plus"
+	mv "$tmp_file" "$plan_plus"
+	print_info "Injected OpenCode plan-reminder into Plan+"
+	return 0
+}
+
+# _deploy_agents_post_copy target_dir repo_dir source_dir plugins_file
+# Runs all post-copy steps: permissions, VERSION, advisories, plan-reminder,
+# mailbox migration, stale-file migration, and plugin deployment.
+_deploy_agents_post_copy() {
+	local target_dir="$1"
+	local repo_dir="$2"
+	local source_dir="$3"
+	local plugins_file="$4"
+
+	# Set permissions on scripts (top-level and modularised subdirectories)
+	chmod +x "$target_dir/scripts/"*.sh 2>/dev/null || true
+	find "$target_dir/scripts" -mindepth 2 -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
+
+	# Count what was deployed
+	local agent_count script_count
+	agent_count=$(find "$target_dir" -name "*.md" -type f | wc -l | tr -d ' ')
+	script_count=$(find "$target_dir/scripts" -name "*.sh" -type f 2>/dev/null | wc -l | tr -d ' ')
+	print_info "Deployed $agent_count agent files and $script_count scripts"
+
+	# Symlink OpenCode's node_modules into the plugin directory (t1551)
+	local oc_node_modules="$HOME/.config/opencode/node_modules"
+	local plugin_dir="$target_dir/plugins/opencode-aidevops"
+	if [[ -d "$oc_node_modules" && -d "$plugin_dir" ]]; then
+		ln -sf "$oc_node_modules" "$plugin_dir/node_modules" 2>/dev/null || true
+	fi
+
+	# Copy VERSION file from repo root to deployed agents
+	if [[ -f "$repo_dir/VERSION" ]]; then
+		if cp "$repo_dir/VERSION" "$target_dir/VERSION"; then
+			print_info "Copied VERSION file to deployed agents"
+		else
+			print_warning "Failed to copy VERSION file (Plan+ may not read version correctly)"
+		fi
+	else
+		print_warning "VERSION file not found in repo root"
+	fi
+
+	# Deploy security advisories (shown in session greeting until dismissed)
+	local advisories_source="$source_dir/advisories"
+	local advisories_target="$HOME/.aidevops/advisories"
+	if [[ -d "$advisories_source" ]]; then
+		mkdir -p "$advisories_target"
+		local adv_count=0
+		for adv_file in "$advisories_source"/*.advisory; do
+			[[ -f "$adv_file" ]] || continue
+			cp "$adv_file" "$advisories_target/"
+			adv_count=$((adv_count + 1))
+		done
+		if [[ "$adv_count" -gt 0 ]]; then
+			print_info "Deployed $adv_count security advisory/advisories"
+		fi
+	fi
+
+	# Inject extracted OpenCode plan-reminder into Plan+ if available
+	_inject_plan_reminder "$target_dir"
+
+	# Migrate mailbox from TOON files to SQLite (if old files exist)
+	local aidevops_workspace_dir="${AIDEVOPS_WORKSPACE_DIR:-$HOME/.aidevops/.agent-workspace}"
+	local mail_dir="${AIDEVOPS_MAIL_DIR:-${aidevops_workspace_dir}/mail}"
+	local mail_script="$target_dir/scripts/mail-helper.sh"
+	if [[ -x "$mail_script" ]] && find "$mail_dir" -name "*.toon" 2>/dev/null | grep -q .; then
+		if "$mail_script" migrate; then
+			print_success "Mailbox migration complete"
+		else
+			print_warning "Mailbox migration had issues (non-critical, old files preserved)"
+		fi
+	fi
+
+	# Migration: wavespeed.md moved from services/ai-generation/ to tools/video/ (v2.111+)
+	local old_wavespeed="$target_dir/services/ai-generation/wavespeed.md"
+	if [[ -f "$old_wavespeed" ]]; then
+		rm -f "$old_wavespeed"
+		rmdir "$target_dir/services/ai-generation" 2>/dev/null || true
+		print_info "Migrated wavespeed.md from services/ai-generation/ to tools/video/"
+	fi
+
+	# Deploy enabled plugins from plugins.json
+	deploy_plugins "$target_dir" "$plugins_file"
+	return 0
+}
+
 deploy_aidevops_agents() {
 	print_info "Deploying aidevops agents to ~/.aidevops/agents/..."
 
@@ -84,8 +270,7 @@ deploy_aidevops_agents() {
 	# Collect plugin namespace directories to preserve during deployment
 	local -a plugin_namespaces=()
 	if [[ -f "$plugins_file" ]] && command -v jq &>/dev/null; then
-		local ns
-		local safe_ns
+		local ns safe_ns
 		while IFS= read -r ns; do
 			if [[ -n "$ns" ]] && safe_ns=$(sanitize_plugin_namespace "$ns" 2>/dev/null); then
 				plugin_namespaces+=("$safe_ns")
@@ -98,47 +283,18 @@ deploy_aidevops_agents() {
 		create_backup_with_rotation "$target_dir" "agents"
 	fi
 
-	# Create target directory and copy agents
+	# Create target directory
 	mkdir -p "$target_dir"
 
 	# If clean mode, remove stale files first (preserving user and plugin directories)
 	if [[ "$CLEAN_MODE" == "true" ]]; then
-		# Build list of directories to preserve: custom, draft, plus plugin namespaces
 		local -a preserved_dirs=("custom" "draft")
 		if [[ ${#plugin_namespaces[@]} -gt 0 ]]; then
 			for pns in "${plugin_namespaces[@]}"; do
 				preserved_dirs+=("$pns")
 			done
 		fi
-		print_info "Clean mode: removing stale files from $target_dir (preserving ${preserved_dirs[*]})"
-		local tmp_preserve
-		tmp_preserve="$(mktemp -d)"
-		trap 'rm -rf "${tmp_preserve:-}"' RETURN
-		if [[ -z "$tmp_preserve" || ! -d "$tmp_preserve" ]]; then
-			print_error "Failed to create temp dir for preserving agents"
-			return 1
-		fi
-		local preserve_failed=false
-		for pdir in "${preserved_dirs[@]}"; do
-			if [[ -d "$target_dir/$pdir" ]]; then
-				if ! cp -R "$target_dir/$pdir" "$tmp_preserve/$pdir"; then
-					preserve_failed=true
-				fi
-			fi
-		done
-		if [[ "$preserve_failed" == "true" ]]; then
-			print_error "Failed to preserve user/plugin agents; aborting clean"
-			rm -rf "$tmp_preserve"
-			return 1
-		fi
-		rm -rf "${target_dir:?}"/*
-		# Restore preserved directories
-		for pdir in "${preserved_dirs[@]}"; do
-			if [[ -d "$tmp_preserve/$pdir" ]]; then
-				cp -R "$tmp_preserve/$pdir" "$target_dir/$pdir"
-			fi
-		done
-		rm -rf "$tmp_preserve"
+		_deploy_agents_clean_mode "$target_dir" "${preserved_dirs[@]}" || return 1
 	fi
 
 	# Copy all agent files and folders, excluding:
@@ -146,117 +302,17 @@ deploy_aidevops_agents() {
 	# - custom/ (user's private agents, never overwritten)
 	# - draft/ (user's experimental agents, never overwritten)
 	# - plugin namespace directories (managed separately)
-	# Use rsync for selective exclusion
-	local deploy_ok=false
-	if command -v rsync &>/dev/null; then
-		local -a rsync_excludes=("--exclude=loop-state/" "--exclude=custom/" "--exclude=draft/")
-		if [[ ${#plugin_namespaces[@]} -gt 0 ]]; then
-			for pns in "${plugin_namespaces[@]}"; do
-				rsync_excludes+=("--exclude=${pns}/")
-			done
-		fi
-		if rsync -a "${rsync_excludes[@]}" "$source_dir/" "$target_dir/"; then
-			deploy_ok=true
-		fi
+	local copy_rc
+	if [[ ${#plugin_namespaces[@]} -gt 0 ]]; then
+		_deploy_agents_copy "$source_dir" "$target_dir" "${plugin_namespaces[@]}"
+		copy_rc=$?
 	else
-		# Fallback: use tar with exclusions to match rsync behavior
-		local -a tar_excludes=("--exclude=loop-state" "--exclude=custom" "--exclude=draft")
-		if [[ ${#plugin_namespaces[@]} -gt 0 ]]; then
-			for pns in "${plugin_namespaces[@]}"; do
-				tar_excludes+=("--exclude=$pns")
-			done
-		fi
-		if (cd "$source_dir" && tar cf - "${tar_excludes[@]}" .) | (cd "$target_dir" && tar xf -); then
-			deploy_ok=true
-		fi
+		_deploy_agents_copy "$source_dir" "$target_dir"
+		copy_rc=$?
 	fi
-
-	if [[ "$deploy_ok" == "true" ]]; then
+	if [[ "$copy_rc" -eq 0 ]]; then
 		print_success "Deployed agents to $target_dir"
-
-		# Set permissions on scripts (top-level and modularised subdirectories)
-		chmod +x "$target_dir/scripts/"*.sh 2>/dev/null || true
-		find "$target_dir/scripts" -mindepth 2 -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
-
-		# Count what was deployed
-		local agent_count
-		agent_count=$(find "$target_dir" -name "*.md" -type f | wc -l | tr -d ' ')
-		local script_count
-		script_count=$(find "$target_dir/scripts" -name "*.sh" -type f 2>/dev/null | wc -l | tr -d ' ')
-
-		print_info "Deployed $agent_count agent files and $script_count scripts"
-
-		# Symlink OpenCode's node_modules into the plugin directory (t1551)
-		# The cursor proxy vendored files import @bufbuild/protobuf and zod,
-		# which are installed in OpenCode's config node_modules but not
-		# resolvable from the deployed plugin path (~/.aidevops/agents/).
-		local oc_node_modules="$HOME/.config/opencode/node_modules"
-		local plugin_dir="$target_dir/plugins/opencode-aidevops"
-		if [[ -d "$oc_node_modules" && -d "$plugin_dir" ]]; then
-			ln -sf "$oc_node_modules" "$plugin_dir/node_modules" 2>/dev/null || true
-		fi
-
-		# Copy VERSION file from repo root to deployed agents
-		if [[ -f "$repo_dir/VERSION" ]]; then
-			if cp "$repo_dir/VERSION" "$target_dir/VERSION"; then
-				print_info "Copied VERSION file to deployed agents"
-			else
-				print_warning "Failed to copy VERSION file (Plan+ may not read version correctly)"
-			fi
-		else
-			print_warning "VERSION file not found in repo root"
-		fi
-
-		# Inject extracted OpenCode plan-reminder into Plan+ if available
-		local plan_reminder="$HOME/.aidevops/cache/opencode-prompts/plan-reminder.txt"
-		local plan_plus="$target_dir/plan-plus.md"
-		if [[ -f "$plan_reminder" && -f "$plan_plus" ]]; then
-			# Check if plan-plus.md has the placeholder marker
-			if grep -q "OPENCODE-PLAN-REMINDER-INJECT" "$plan_plus"; then
-				# Replace placeholder with extracted content using sed
-				# (awk -v doesn't handle multi-line content with special chars well)
-				local tmp_file
-				tmp_file=$(mktemp)
-				trap 'rm -f "${tmp_file:-}"' RETURN
-				local in_placeholder=false
-				while IFS= read -r line || [[ -n "$line" ]]; do
-					if [[ "$line" == *"OPENCODE-PLAN-REMINDER-INJECT-START"* ]]; then
-						echo "$line" >>"$tmp_file"
-						cat "$plan_reminder" >>"$tmp_file"
-						in_placeholder=true
-					elif [[ "$line" == *"OPENCODE-PLAN-REMINDER-INJECT-END"* ]]; then
-						echo "$line" >>"$tmp_file"
-						in_placeholder=false
-					elif [[ "$in_placeholder" == false ]]; then
-						echo "$line" >>"$tmp_file"
-					fi
-				done <"$plan_plus"
-				mv "$tmp_file" "$plan_plus"
-				print_info "Injected OpenCode plan-reminder into Plan+"
-			fi
-		fi
-		# Migrate mailbox from TOON files to SQLite (if old files exist)
-		local aidevops_workspace_dir="${AIDEVOPS_WORKSPACE_DIR:-$HOME/.aidevops/.agent-workspace}"
-		local mail_dir="${AIDEVOPS_MAIL_DIR:-${aidevops_workspace_dir}/mail}"
-		local mail_script="$target_dir/scripts/mail-helper.sh"
-		if [[ -x "$mail_script" ]] && find "$mail_dir" -name "*.toon" 2>/dev/null | grep -q .; then
-			if "$mail_script" migrate; then
-				print_success "Mailbox migration complete"
-			else
-				print_warning "Mailbox migration had issues (non-critical, old files preserved)"
-			fi
-		fi
-
-		# Migration: wavespeed.md moved from services/ai-generation/ to tools/video/ (v2.111+)
-		local old_wavespeed="$target_dir/services/ai-generation/wavespeed.md"
-		if [[ -f "$old_wavespeed" ]]; then
-			rm -f "$old_wavespeed"
-			rmdir "$target_dir/services/ai-generation" 2>/dev/null || true
-			print_info "Migrated wavespeed.md from services/ai-generation/ to tools/video/"
-		fi
-
-		# Deploy enabled plugins from plugins.json
-		deploy_plugins "$target_dir" "$plugins_file"
+		_deploy_agents_post_copy "$target_dir" "$repo_dir" "$source_dir" "$plugins_file"
 	else
 		print_error "Failed to deploy agents"
 		return 1
@@ -268,14 +324,33 @@ deploy_aidevops_agents() {
 inject_agents_reference() {
 	print_info "Adding aidevops reference to AI assistant configurations..."
 
+	# Delegate to prompt-injection-adapter.sh (t1665.3) which handles all runtimes.
+	# The adapter deploys AGENTS.md references via each runtime's native mechanism:
+	# OpenCode (json-instructions), Claude (AGENTS.md autodiscovery), Codex, Cursor,
+	# Droid, Gemini, Windsurf, Continue, Kilo, Kiro, Aider.
+	local adapter_script="${INSTALL_DIR}/.agents/scripts/prompt-injection-adapter.sh"
+
+	if [[ -f "$adapter_script" ]]; then
+		# shellcheck source=/dev/null
+		source "$adapter_script"
+		deploy_prompts_for_all_runtimes
+	else
+		# Fallback: adapter not yet deployed — use legacy inline logic
+		# This path is only hit during initial setup before .agents/ is deployed.
+		print_warning "prompt-injection-adapter.sh not found — using legacy deployment"
+		_inject_agents_reference_legacy
+	fi
+
+	return 0
+}
+
+# Legacy fallback for inject_agents_reference — used only when the adapter
+# script is not yet available (e.g., during initial setup before .agents/ deploy).
+# Will be removed once t1665 migration is complete.
+_inject_agents_reference_legacy() {
 	local reference_line='Add ~/.aidevops/agents/AGENTS.md to context for AI DevOps capabilities.'
 
 	# AI assistant agent directories - these receive AGENTS.md reference
-	# Format: "config_dir:agents_subdir" where agents_subdir is the folder containing agent files
-	# Only Claude Code (companion CLI) and .opencode are included here.
-	# OpenCode excluded: its agent/ dir treats every .md as a subagent, so AGENTS.md
-	# would show as a mode. OpenCode gets the reference via opencode.json instructions
-	# field and the config-root AGENTS.md (deployed by deploy_opencode_greeting below).
 	local ai_agent_dirs=(
 		"$HOME/.claude:commands"
 		"$HOME/.opencode:."
@@ -291,16 +366,12 @@ inject_agents_reference() {
 
 		# Only process if the config directory exists (tool is installed)
 		if [[ -d "$config_dir" ]]; then
-			# Create agents subdirectory if needed
 			mkdir -p "$agents_dir"
 
-			# Check if AGENTS.md exists and has our reference
 			if [[ -f "$agents_file" ]]; then
-				# Check first line for our reference
 				local first_line
 				first_line=$(head -1 "$agents_file" 2>/dev/null || echo "")
-				if [[ "$first_line" != *"~/.aidevops/agents/AGENTS.md"* ]]; then
-					# Prepend reference to existing file
+				if [[ "$first_line" != *"aidevops/agents/AGENTS.md"* ]]; then
 					local temp_file
 					temp_file=$(mktemp)
 					trap 'rm -f "${temp_file:-}"' RETURN
@@ -314,7 +385,6 @@ inject_agents_reference() {
 					print_info "Reference already exists in $agents_file"
 				fi
 			else
-				# Create new file with just the reference
 				echo "$reference_line" >"$agents_file"
 				print_success "Created $agents_file with aidevops reference"
 				((++updated_count))
@@ -328,17 +398,15 @@ inject_agents_reference() {
 		print_success "Updated $updated_count AI assistant configuration(s)"
 	fi
 
-	# Clean up stale AGENTS.md from OpenCode agent dir (was incorrectly showing as subagent)
+	# Clean up stale AGENTS.md from OpenCode agent dir
 	rm -f "$HOME/.config/opencode/agent/AGENTS.md"
 
 	# Deploy OpenCode config-level AGENTS.md from managed template
-	# This controls the session greeting (auto-loaded by OpenCode from config root)
 	local opencode_config_dir="$HOME/.config/opencode"
 	local opencode_config_agents="$opencode_config_dir/AGENTS.md"
 	local template_source="$INSTALL_DIR/templates/opencode-config-agents.md"
 
 	if [[ -d "$opencode_config_dir" && -f "$template_source" ]]; then
-		# Backup if file exists and differs from template
 		if [[ -f "$opencode_config_agents" ]]; then
 			if ! diff -q "$template_source" "$opencode_config_agents" &>/dev/null; then
 				create_backup_with_rotation "$opencode_config_agents" "opencode-agents"
@@ -351,6 +419,113 @@ inject_agents_reference() {
 		fi
 	fi
 
+	# Deploy Codex instructions.md (Codex reads ~/.codex/instructions.md as system prompt)
+	_deploy_codex_instructions
+
+	# Deploy Cursor AGENTS.md (Cursor reads ~/.cursor/rules/*.md as context)
+	_deploy_cursor_agents_reference
+
+	# Deploy Droid AGENTS.md (Droid reads ~/.factory/skills/*.md as context)
+	_deploy_droid_agents_reference
+
+	return 0
+}
+
+# Deploy instructions.md to Codex config directory.
+# Codex reads ~/.codex/instructions.md as its system-level instructions.
+_deploy_codex_instructions() {
+	local codex_dir="$HOME/.codex"
+	local instructions_file="$codex_dir/instructions.md"
+
+	# Only deploy if Codex is installed or config dir exists
+	if [[ ! -d "$codex_dir" ]] && ! command -v codex >/dev/null 2>&1; then
+		return 0
+	fi
+
+	mkdir -p "$codex_dir"
+
+	local reference_content
+	reference_content="Add ~/.aidevops/agents/AGENTS.md to context for AI DevOps capabilities."
+
+	if [[ -f "$instructions_file" ]]; then
+		# Check if our reference is already present
+		# shellcheck disable=SC2088  # Tilde is a literal grep pattern, not a path
+		if grep -q '~/.aidevops/agents/AGENTS.md' "$instructions_file" 2>/dev/null; then
+			print_info "Codex instructions.md already has aidevops reference"
+			return 0
+		fi
+		# Prepend reference to existing instructions
+		local temp_file
+		temp_file=$(mktemp)
+		echo "$reference_content" >"$temp_file"
+		echo "" >>"$temp_file"
+		cat "$instructions_file" >>"$temp_file"
+		mv "$temp_file" "$instructions_file"
+		print_success "Added aidevops reference to $instructions_file"
+	else
+		echo "$reference_content" >"$instructions_file"
+		print_success "Created $instructions_file with aidevops reference"
+	fi
+	return 0
+}
+
+# Deploy AGENTS.md reference to Cursor rules directory.
+# Cursor reads ~/.cursor/rules/*.md files as additional context.
+_deploy_cursor_agents_reference() {
+	local cursor_dir="$HOME/.cursor"
+	local rules_dir="$cursor_dir/rules"
+	local agents_file="$rules_dir/aidevops.md"
+
+	# Only deploy if Cursor is installed or config dir exists
+	if [[ ! -d "$cursor_dir" ]] && ! command -v cursor >/dev/null 2>&1 && ! command -v agent >/dev/null 2>&1; then
+		return 0
+	fi
+
+	mkdir -p "$rules_dir"
+
+	local reference_content
+	reference_content="Add ~/.aidevops/agents/AGENTS.md to context for AI DevOps capabilities."
+
+	if [[ -f "$agents_file" ]]; then
+		# shellcheck disable=SC2088  # Tilde is a literal grep pattern, not a path
+		if grep -q '~/.aidevops/agents/AGENTS.md' "$agents_file" 2>/dev/null; then
+			print_info "Cursor rules/aidevops.md already has aidevops reference"
+			return 0
+		fi
+	fi
+
+	echo "$reference_content" >"$agents_file"
+	print_success "Deployed aidevops reference to $agents_file"
+	return 0
+}
+
+# Deploy AGENTS.md reference to Droid skills directory.
+# Droid reads ~/.factory/skills/*.md files as additional context.
+_deploy_droid_agents_reference() {
+	local factory_dir="$HOME/.factory"
+	local skills_dir="$factory_dir/skills"
+	local agents_file="$skills_dir/aidevops.md"
+
+	# Only deploy if Droid is installed or config dir exists
+	if [[ ! -d "$factory_dir" ]] && ! command -v droid >/dev/null 2>&1; then
+		return 0
+	fi
+
+	mkdir -p "$skills_dir"
+
+	local reference_content
+	reference_content="Add ~/.aidevops/agents/AGENTS.md to context for AI DevOps capabilities."
+
+	if [[ -f "$agents_file" ]]; then
+		# shellcheck disable=SC2088  # Tilde is a literal grep pattern, not a path
+		if grep -q '~/.aidevops/agents/AGENTS.md' "$agents_file" 2>/dev/null; then
+			print_info "Droid skills/aidevops.md already has aidevops reference"
+			return 0
+		fi
+	fi
+
+	echo "$reference_content" >"$agents_file"
+	print_success "Deployed aidevops reference to $agents_file"
 	return 0
 }
 
@@ -506,6 +681,97 @@ setup_beads() {
 	return 0
 }
 
+# _install_bv_tool: install the bv (beads_viewer) TUI tool.
+# Returns 0 if installed, 1 if skipped or failed.
+_install_bv_tool() {
+	read -r -p "  Install bv (TUI with PageRank, critical path, graph analytics)? [Y/n]: " install_viewer
+	if [[ ! "$install_viewer" =~ ^[Yy]?$ ]]; then
+		print_info "Install later:"
+		print_info "  Homebrew: brew tap dicklesworthstone/tap && brew install dicklesworthstone/tap/bv"
+		print_info "  Go: go install github.com/Dicklesworthstone/beads_viewer/cmd/bv@latest"
+		return 1
+	fi
+	if command -v brew &>/dev/null; then
+		if run_with_spinner "Installing bv via Homebrew" brew install dicklesworthstone/tap/bv; then
+			print_info "Run: bv (in a beads-enabled project)"
+			return 0
+		else
+			print_warning "Homebrew install failed - try manually:"
+			print_info "  brew install dicklesworthstone/tap/bv"
+			return 1
+		fi
+	elif command -v go &>/dev/null; then
+		if run_with_spinner "Installing bv via Go" go install github.com/Dicklesworthstone/beads_viewer/cmd/bv@latest; then
+			print_info "Run: bv (in a beads-enabled project)"
+			return 0
+		else
+			print_warning "Go install failed"
+			return 1
+		fi
+	else
+		# Offer verified install script (download-then-execute, not piped)
+		read -r -p "  Install bv via install script? [Y/n]: " use_script
+		if [[ "$use_script" =~ ^[Yy]?$ ]]; then
+			if verified_install "bv (beads viewer)" "https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/main/install.sh"; then
+				print_info "Run: bv (in a beads-enabled project)"
+				return 0
+			else
+				print_warning "Install script failed - try manually:"
+				print_info "  Homebrew: brew tap dicklesworthstone/tap && brew install dicklesworthstone/tap/bv"
+				return 1
+			fi
+		else
+			print_info "Install later:"
+			print_info "  Homebrew: brew tap dicklesworthstone/tap && brew install dicklesworthstone/tap/bv"
+			print_info "  Go: go install github.com/Dicklesworthstone/beads_viewer/cmd/bv@latest"
+			return 1
+		fi
+	fi
+}
+
+# _install_beads_node_tools: install beads-ui and bdui via npm.
+# Echoes the count of tools installed to stdout.
+_install_beads_node_tools() {
+	local count=0
+	if ! command -v npm &>/dev/null; then
+		echo "$count"
+		return 0
+	fi
+	read -r -p "  Install beads-ui (Web dashboard)? [Y/n]: " install_web
+	if [[ "$install_web" =~ ^[Yy]?$ ]]; then
+		if run_with_spinner "Installing beads-ui" npm_global_install beads-ui; then
+			print_info "Run: beads-ui"
+			count=$((count + 1))
+		fi
+	fi
+	read -r -p "  Install bdui (React/Ink TUI)? [Y/n]: " install_bdui
+	if [[ "$install_bdui" =~ ^[Yy]?$ ]]; then
+		if run_with_spinner "Installing bdui" npm_global_install bdui; then
+			print_info "Run: bdui"
+			count=$((count + 1))
+		fi
+	fi
+	echo "$count"
+	return 0
+}
+
+# _install_perles: install the perles BQL query language TUI via cargo.
+# Returns 0 if installed, 1 if skipped or unavailable.
+_install_perles() {
+	if ! command -v cargo &>/dev/null; then
+		return 1
+	fi
+	read -r -p "  Install perles (BQL query language TUI)? [Y/n]: " install_perles
+	if [[ ! "$install_perles" =~ ^[Yy]?$ ]]; then
+		return 1
+	fi
+	if run_with_spinner "Installing perles (Rust compile)" cargo install perles; then
+		print_info "Run: perles"
+		return 0
+	fi
+	return 1
+}
+
 setup_beads_ui() {
 	echo ""
 	print_info "Beads UI tools provide enhanced visualization:"
@@ -526,76 +792,18 @@ setup_beads_ui() {
 
 	# bv (beads_viewer) - Go TUI installed via Homebrew
 	# https://github.com/Dicklesworthstone/beads_viewer
-	read -r -p "  Install bv (TUI with PageRank, critical path, graph analytics)? [Y/n]: " install_viewer
-	if [[ "$install_viewer" =~ ^[Yy]?$ ]]; then
-		if command -v brew &>/dev/null; then
-			# brew install user/tap/formula auto-taps
-			if run_with_spinner "Installing bv via Homebrew" brew install dicklesworthstone/tap/bv; then
-				print_info "Run: bv (in a beads-enabled project)"
-				((++installed_count))
-			else
-				print_warning "Homebrew install failed - try manually:"
-				print_info "  brew install dicklesworthstone/tap/bv"
-			fi
-		else
-			# No Homebrew - try install script or Go
-			print_warning "Homebrew not found"
-			if command -v go &>/dev/null; then
-				# Go available - use go install
-				if run_with_spinner "Installing bv via Go" go install github.com/Dicklesworthstone/beads_viewer/cmd/bv@latest; then
-					print_info "Run: bv (in a beads-enabled project)"
-					((++installed_count))
-				else
-					print_warning "Go install failed"
-				fi
-			else
-				# Offer verified install script (download-then-execute, not piped)
-				read -r -p "  Install bv via install script? [Y/n]: " use_script
-				if [[ "$use_script" =~ ^[Yy]?$ ]]; then
-					if verified_install "bv (beads viewer)" "https://raw.githubusercontent.com/Dicklesworthstone/beads_viewer/main/install.sh"; then
-						print_info "Run: bv (in a beads-enabled project)"
-						((++installed_count))
-					else
-						print_warning "Install script failed - try manually:"
-						print_info "  Homebrew: brew tap dicklesworthstone/tap && brew install dicklesworthstone/tap/bv"
-					fi
-				else
-					print_info "Install later:"
-					print_info "  Homebrew: brew tap dicklesworthstone/tap && brew install dicklesworthstone/tap/bv"
-					print_info "  Go: go install github.com/Dicklesworthstone/beads_viewer/cmd/bv@latest"
-				fi
-			fi
-		fi
+	if _install_bv_tool; then
+		installed_count=$((installed_count + 1))
 	fi
 
-	# beads-ui (Node.js)
-	if command -v npm &>/dev/null; then
-		read -r -p "  Install beads-ui (Web dashboard)? [Y/n]: " install_web
-		if [[ "$install_web" =~ ^[Yy]?$ ]]; then
-			if run_with_spinner "Installing beads-ui" npm_global_install beads-ui; then
-				print_info "Run: beads-ui"
-				((++installed_count))
-			fi
-		fi
-
-		read -r -p "  Install bdui (React/Ink TUI)? [Y/n]: " install_bdui
-		if [[ "$install_bdui" =~ ^[Yy]?$ ]]; then
-			if run_with_spinner "Installing bdui" npm_global_install bdui; then
-				print_info "Run: bdui"
-				((++installed_count))
-			fi
-		fi
-	fi
+	# beads-ui and bdui (Node.js)
+	local node_count
+	node_count=$(_install_beads_node_tools)
+	installed_count=$((installed_count + node_count))
 
 	# perles (Rust)
-	if command -v cargo &>/dev/null; then
-		read -r -p "  Install perles (BQL query language TUI)? [Y/n]: " install_perles
-		if [[ "$install_perles" =~ ^[Yy]?$ ]]; then
-			if run_with_spinner "Installing perles (Rust compile)" cargo install perles; then
-				print_info "Run: perles"
-				((++installed_count))
-			fi
-		fi
+	if _install_perles; then
+		installed_count=$((installed_count + 1))
 	fi
 
 	if [[ $installed_count -gt 0 ]]; then

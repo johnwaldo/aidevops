@@ -55,7 +55,15 @@
 #
 # Offline fallback:
 #   - Reads local .task-counter + 100 offset to avoid collisions
+#   - If local .task-counter is missing, bootstraps from TODO.md highest ID
 #   - Reconciliation required when back online
+#
+# Auto-bootstrap (GH#6569 — repo-agnostic):
+#   - If .task-counter is missing on remote, bootstrap_remote_counter() seeds it
+#   - Seed precedence: highest task ID in TODO.md + 1, otherwise 1
+#   - Bootstrap uses the same CAS git plumbing — safe from any branch
+#   - Emits BOOTSTRAP_COUNTER_OK / BOOTSTRAP_COUNTER_FAILED for observability
+#   - Concurrent bootstrap: if another session wins the push, we retry read
 #
 # Migration from TODO.md scanning:
 #   - If .task-counter doesn't exist, initialize from TODO.md highest ID
@@ -286,6 +294,101 @@ get_highest_task_id() {
 	echo "$highest"
 }
 
+# Compute seed value for .task-counter bootstrap from TODO.md (or default 1).
+# Reads TODO.md from the repo root; falls back to 1 if not found or empty.
+# Returns the seed value (highest task ID + 1, minimum 1).
+_compute_counter_seed() {
+	local repo_path="$1"
+	local todo_file="${repo_path}/TODO.md"
+	local seed=1
+
+	if [[ -f "$todo_file" ]]; then
+		local todo_content
+		todo_content=$(cat "$todo_file" 2>/dev/null || true)
+		if [[ -n "$todo_content" ]]; then
+			local highest
+			highest=$(get_highest_task_id "$todo_content")
+			if [[ "$highest" =~ ^[0-9]+$ ]] && [[ "$highest" -gt 0 ]]; then
+				seed=$((highest + 1))
+			fi
+		fi
+	fi
+
+	echo "$seed"
+	return 0
+}
+
+# Bootstrap .task-counter on <remote>/<counter_branch> when it is missing.
+# Seeds from TODO.md highest task ID (or 1 for fresh repos).
+# Uses the same git plumbing as allocate_counter_cas to stay branch-safe.
+# Returns 0 on success (counter now exists on remote), 1 on failure.
+bootstrap_remote_counter() {
+	local repo_path="$1"
+
+	cd "$repo_path" || return 1
+
+	log_info "BOOTSTRAP_COUNTER: .task-counter missing on ${REMOTE_NAME}/${COUNTER_BRANCH} — bootstrapping"
+
+	local seed
+	seed=$(_compute_counter_seed "$repo_path")
+	log_info "BOOTSTRAP_COUNTER: seeding from TODO.md → counter=${seed}"
+
+	# Create a blob with the seed value
+	local blob_sha
+	blob_sha=$(echo "$seed" | git hash-object -w --stdin 2>/dev/null) || {
+		log_warn "BOOTSTRAP_COUNTER: failed to create blob"
+		return 1
+	}
+
+	# Check whether .task-counter already exists in the remote tree
+	local existing_tree
+	existing_tree=$(git ls-tree "${REMOTE_NAME}/${COUNTER_BRANCH}" 2>/dev/null || true)
+
+	local tree_sha
+	if echo "$existing_tree" | grep -q "${COUNTER_FILE}$"; then
+		# Replace existing (invalid) entry
+		tree_sha=$(echo "$existing_tree" | sed "s|[0-9a-f]\{40,64\}	${COUNTER_FILE}$|${blob_sha}	${COUNTER_FILE}|" | git mktree 2>/dev/null) || {
+			log_warn "BOOTSTRAP_COUNTER: failed to create tree (replace)"
+			return 1
+		}
+	else
+		# Add new entry to existing tree
+		tree_sha=$(
+			{
+				echo "$existing_tree"
+				printf '100644 blob %s\t%s\n' "$blob_sha" "$COUNTER_FILE"
+			} | git mktree 2>/dev/null
+		) || {
+			log_warn "BOOTSTRAP_COUNTER: failed to create tree (add)"
+			return 1
+		}
+	fi
+
+	local parent_sha
+	parent_sha=$(git rev-parse "${REMOTE_NAME}/${COUNTER_BRANCH}" 2>/dev/null) || {
+		log_warn "BOOTSTRAP_COUNTER: failed to resolve ${REMOTE_NAME}/${COUNTER_BRANCH}"
+		return 1
+	}
+
+	local commit_sha
+	commit_sha=$(git commit-tree "$tree_sha" -p "$parent_sha" -m "chore: bootstrap .task-counter (seed=${seed})" 2>/dev/null) || {
+		log_warn "BOOTSTRAP_COUNTER: failed to create commit"
+		return 1
+	}
+
+	if ! git push "$REMOTE_NAME" "${commit_sha}:refs/heads/${COUNTER_BRANCH}" 2>/dev/null; then
+		log_warn "BOOTSTRAP_COUNTER: push failed (conflict — another session may have bootstrapped)"
+		git fetch "$REMOTE_NAME" "$COUNTER_BRANCH" 2>/dev/null || true
+		# Not a hard failure — the remote may now have a valid counter from the other session
+		return 1
+	fi
+
+	git fetch "$REMOTE_NAME" "$COUNTER_BRANCH" 2>/dev/null || true
+	log_info "BOOTSTRAP_COUNTER_OK: counter initialized to ${seed} on ${REMOTE_NAME}/${COUNTER_BRANCH}"
+	echo "BOOTSTRAP_COUNTER_OK"
+	return 0
+}
+
 # Read .task-counter from <remote>/<counter_branch> (fetches first)
 read_remote_counter() {
 	local repo_path="$1"
@@ -339,10 +442,19 @@ allocate_counter_cas() {
 
 	cd "$repo_path" || return 1
 
-	# Step 1: Read current counter from <remote>/<counter_branch>
+	# Step 1: Read current counter from <remote>/<counter_branch>.
+	# If missing/invalid, auto-bootstrap from TODO.md (GH#6569).
 	local current_value
 	if ! current_value=$(read_remote_counter "$repo_path"); then
-		return 1
+		log_info "Counter missing — attempting auto-bootstrap (GH#6569)"
+		local bootstrap_result
+		bootstrap_result=$(bootstrap_remote_counter "$repo_path") || true
+		# After bootstrap attempt, retry reading the counter.
+		# If another session bootstrapped concurrently, we still get a valid value.
+		if ! current_value=$(read_remote_counter "$repo_path"); then
+			log_error "BOOTSTRAP_COUNTER_FAILED: counter unavailable after bootstrap attempt"
+			return 1
+		fi
 	fi
 
 	local first_id="$current_value"
@@ -452,6 +564,7 @@ allocate_online() {
 }
 
 # Offline allocation (with safety offset)
+# Falls back to TODO.md seed when local .task-counter is missing (GH#6569).
 allocate_offline() {
 	local repo_path="$1"
 	local count="$2"
@@ -460,8 +573,14 @@ allocate_offline() {
 
 	local current_value
 	if ! current_value=$(read_local_counter "$repo_path"); then
-		log_error "Cannot read local ${COUNTER_FILE}"
-		return 1
+		# Auto-bootstrap local counter from TODO.md (GH#6569)
+		log_warn "Local ${COUNTER_FILE} missing — bootstrapping from TODO.md for offline use"
+		local seed
+		seed=$(_compute_counter_seed "$repo_path")
+		log_info "BOOTSTRAP_COUNTER: offline seed from TODO.md → ${seed}"
+		echo "$seed" >"${repo_path}/${COUNTER_FILE}"
+		current_value="$seed"
+		log_info "BOOTSTRAP_COUNTER_OK: local counter initialized to ${seed}"
 	fi
 
 	local first_id=$((current_value + OFFLINE_OFFSET))
@@ -682,6 +801,179 @@ check_framework_routing() {
 	return 0
 }
 
+# Resolve allocation: online (with dry-run shortcut) or offline fallback.
+# Sets caller-local variables first_id and is_offline via stdout protocol:
+#   prints "first_id=NNN" and "is_offline=true|false" on success,
+#   or returns non-zero on hard failure.
+# Callers eval the output to populate their locals.
+_main_resolve_allocation() {
+	local first_id_out=""
+	local is_offline_out="false"
+
+	if [[ "$OFFLINE_MODE" == "false" ]]; then
+		if [[ "$DRY_RUN" == "true" ]]; then
+			local current
+			current=$(read_remote_counter "$REPO_PATH" 2>/dev/null || read_local_counter "$REPO_PATH" 2>/dev/null || echo "?")
+			if [[ "$current" =~ ^[0-9]+$ ]]; then
+				log_info "Would allocate t${current}..t$((current + ALLOC_COUNT - 1)) (counter at ${current})"
+			else
+				log_info "Would allocate task ID (counter unreadable: ${current})"
+			fi
+			echo "task_id=tDRY_RUN"
+			echo "ref=DRY_RUN"
+			return 0
+		fi
+
+		if first_id_out=$(allocate_online "$REPO_PATH" "$ALLOC_COUNT"); then
+			log_success "Allocated task ID: t${first_id_out}"
+		else
+			log_warn "Online allocation failed, falling back to offline mode"
+			is_offline_out="true"
+		fi
+	else
+		is_offline_out="true"
+	fi
+
+	if [[ "$is_offline_out" == "true" ]]; then
+		if [[ "$DRY_RUN" == "true" ]]; then
+			log_info "Would allocate task ID in offline mode"
+			echo "task_id=tDRY_RUN"
+			echo "ref=offline"
+			return 2
+		fi
+
+		if ! first_id_out=$(allocate_offline "$REPO_PATH" "$ALLOC_COUNT"); then
+			log_error "Offline allocation failed"
+			return 1
+		fi
+	fi
+
+	# Communicate results back to caller via stdout key=value pairs
+	echo "_alloc_first_id=${first_id_out}"
+	echo "_alloc_is_offline=${is_offline_out}"
+	return 0
+}
+
+# Create issues for all allocated IDs (optional, non-blocking).
+# Populates caller-provided variables via stdout key=value pairs:
+#   _issue_ref_prefix, _issue_has_any, _issue_first_num, _issue_nums_csv
+_main_create_issues() {
+	local first_id="$1"
+	local platform="$2"
+
+	local ref_prefix=""
+	local last_id=$((first_id + ALLOC_COUNT - 1))
+	local -a issue_nums=()
+	local has_any_issue=false
+	local first_issue_num=""
+
+	if check_cli "$platform"; then
+		case "$platform" in
+		github) ref_prefix="GH" ;;
+		gitlab) ref_prefix="GL" ;;
+		esac
+
+		# Guard: skip issue creation if TASK_TITLE is empty (batch without --title)
+		if [[ -z "$TASK_TITLE" ]]; then
+			log_warn "No --title provided — skipping issue creation for batch allocation"
+		else
+			local i
+			for ((i = first_id; i <= last_id; i++)); do
+				local issue_title="t${i}: ${TASK_TITLE}"
+				local issue_num=""
+
+				case "$platform" in
+				github)
+					issue_num=$(create_github_issue "$issue_title" "$TASK_DESCRIPTION" "$TASK_LABELS" "$REPO_PATH") || true
+					;;
+				gitlab)
+					issue_num=$(create_gitlab_issue "$issue_title" "$TASK_DESCRIPTION" "$TASK_LABELS" "$REPO_PATH") || true
+					;;
+				esac
+
+				if [[ -n "$issue_num" ]]; then
+					log_success "Created issue: ${ref_prefix}#${issue_num}"
+					issue_nums+=("$issue_num")
+					has_any_issue=true
+					if [[ -z "$first_issue_num" ]]; then
+						first_issue_num="$issue_num"
+					fi
+				else
+					log_warn "Issue creation failed for t${i} (non-fatal — ID is secured)"
+					issue_nums+=("")
+				fi
+			done
+		fi
+	else
+		log_warn "CLI for $platform not found — skipping issue creation"
+	fi
+
+	# Communicate results back to caller via stdout key=value pairs
+	echo "_issue_ref_prefix=${ref_prefix}"
+	echo "_issue_has_any=${has_any_issue}"
+	echo "_issue_first_num=${first_issue_num}"
+	# CSV of issue numbers (empty slots preserved as empty fields)
+	local csv=""
+	local k
+	for ((k = 0; k < ${#issue_nums[@]}; k++)); do
+		if [[ $k -gt 0 ]]; then csv="${csv},"; fi
+		csv="${csv}${issue_nums[$k]}"
+	done
+	echo "_issue_nums_csv=${csv}"
+	return 0
+}
+
+# Emit machine-readable output lines to stdout.
+_main_output_results() {
+	local first_id="$1"
+	local is_offline="$2"
+	local ref_prefix="$3"
+	local has_any_issue="$4"
+	local first_issue_num="$5"
+	local issue_nums_csv="$6"
+
+	local last_id=$((first_id + ALLOC_COUNT - 1))
+
+	if [[ "$ALLOC_COUNT" -eq 1 ]]; then
+		echo "task_id=t${first_id}"
+	else
+		echo "task_id=t${first_id}"
+		echo "task_id_last=t${last_id}"
+		echo "task_count=${ALLOC_COUNT}"
+	fi
+
+	if [[ "$has_any_issue" == "true" ]] && [[ -n "$first_issue_num" ]]; then
+		echo "ref=${ref_prefix}#${first_issue_num}"
+		local remote_url
+		remote_url=$(cd "$REPO_PATH" && git remote get-url "$REMOTE_NAME" 2>/dev/null | sed 's/\.git$//' || echo "")
+		if [[ -n "$remote_url" ]]; then
+			echo "issue_url=${remote_url}/issues/${first_issue_num}"
+		fi
+		# Output refs for all issues in batch (new — for callers that parse all output)
+		if [[ "$ALLOC_COUNT" -gt 1 ]]; then
+			# Reconstruct issue_nums array from CSV
+			local -a issue_nums=()
+			local IFS_SAVE="$IFS"
+			IFS=',' read -r -a issue_nums <<<"$issue_nums_csv"
+			IFS="$IFS_SAVE"
+			local j
+			for ((j = 0; j < ALLOC_COUNT; j++)); do
+				local tid=$((first_id + j))
+				if [[ -n "${issue_nums[$j]}" ]]; then
+					echo "ref_t${tid}=${ref_prefix}#${issue_nums[$j]}"
+				fi
+			done
+		fi
+	elif [[ "$is_offline" == "true" ]]; then
+		echo "ref=offline"
+		echo "reconcile=true"
+	else
+		echo "ref=none"
+	fi
+
+	return 0
+}
+
 # Main execution
 main() {
 	parse_args "$@"
@@ -706,134 +998,38 @@ main() {
 
 	# --- Allocate the ID(s) first (the critical atomic step) ---
 
-	local first_id=""
-	local is_offline="false"
+	local _alloc_first_id="" _alloc_is_offline=""
+	local alloc_output alloc_rc=0
+	alloc_output=$(_main_resolve_allocation) || alloc_rc=$?
 
-	if [[ "$OFFLINE_MODE" == "false" ]]; then
-		if [[ "$DRY_RUN" == "true" ]]; then
-			local current
-			current=$(read_remote_counter "$REPO_PATH" 2>/dev/null || read_local_counter "$REPO_PATH" 2>/dev/null || echo "?")
-			if [[ "$current" =~ ^[0-9]+$ ]]; then
-				log_info "Would allocate t${current}..t$((current + ALLOC_COUNT - 1)) (counter at ${current})"
-			else
-				log_info "Would allocate task ID (counter unreadable: ${current})"
-			fi
-			echo "task_id=tDRY_RUN"
-			echo "ref=DRY_RUN"
-			return 0
-		fi
-
-		if first_id=$(allocate_online "$REPO_PATH" "$ALLOC_COUNT"); then
-			log_success "Allocated task ID: t${first_id}"
-		else
-			log_warn "Online allocation failed, falling back to offline mode"
-			is_offline="true"
-		fi
-	else
-		is_offline="true"
+	# Dry-run paths print directly and return early
+	if echo "$alloc_output" | grep -q "^task_id=tDRY_RUN"; then
+		echo "$alloc_output"
+		return $alloc_rc
 	fi
 
-	if [[ "$is_offline" == "true" ]]; then
-		if [[ "$DRY_RUN" == "true" ]]; then
-			log_info "Would allocate task ID in offline mode"
-			echo "task_id=tDRY_RUN"
-			echo "ref=offline"
-			return 2
-		fi
-
-		if ! first_id=$(allocate_offline "$REPO_PATH" "$ALLOC_COUNT"); then
-			log_error "Offline allocation failed"
-			return 1
-		fi
+	if [[ $alloc_rc -ne 0 ]]; then
+		return $alloc_rc
 	fi
+
+	# Parse allocation results
+	eval "$(echo "$alloc_output" | grep -E '^_alloc_(first_id|is_offline)=')"
+	local first_id="$_alloc_first_id"
+	local is_offline="$_alloc_is_offline"
 
 	# --- Create issues AFTER IDs are secured (optional, non-blocking) ---
-	# For batch allocations (--count N), create one issue per allocated ID.
 
-	local ref_prefix=""
-	local last_id=$((first_id + ALLOC_COUNT - 1))
-	# Associative-style parallel arrays: issue_nums[0..N-1] for each allocated ID
-	local -a issue_nums=()
-	local has_any_issue=false
-	local first_issue_num="" # Track first successful issue number (not relying on issue_nums[0])
-
+	local _issue_ref_prefix="" _issue_has_any="" _issue_first_num="" _issue_nums_csv=""
 	if [[ "$NO_ISSUE" == "false" ]] && [[ "$is_offline" == "false" ]] && [[ "$platform" != "unknown" ]]; then
-		if check_cli "$platform"; then
-			case "$platform" in
-			github) ref_prefix="GH" ;;
-			gitlab) ref_prefix="GL" ;;
-			esac
-
-			# Guard: skip issue creation if TASK_TITLE is empty (batch without --title)
-			if [[ -z "$TASK_TITLE" ]]; then
-				log_warn "No --title provided — skipping issue creation for batch allocation"
-			else
-				local i
-				for ((i = first_id; i <= last_id; i++)); do
-					local issue_title="t${i}: ${TASK_TITLE}"
-					local issue_num=""
-
-					case "$platform" in
-					github)
-						issue_num=$(create_github_issue "$issue_title" "$TASK_DESCRIPTION" "$TASK_LABELS" "$REPO_PATH") || true
-						;;
-					gitlab)
-						issue_num=$(create_gitlab_issue "$issue_title" "$TASK_DESCRIPTION" "$TASK_LABELS" "$REPO_PATH") || true
-						;;
-					esac
-
-					if [[ -n "$issue_num" ]]; then
-						log_success "Created issue: ${ref_prefix}#${issue_num}"
-						issue_nums+=("$issue_num")
-						has_any_issue=true
-						if [[ -z "$first_issue_num" ]]; then
-							first_issue_num="$issue_num"
-						fi
-					else
-						log_warn "Issue creation failed for t${i} (non-fatal — ID is secured)"
-						issue_nums+=("")
-					fi
-				done
-			fi
-		else
-			log_warn "CLI for $platform not found — skipping issue creation"
-		fi
+		local issue_output
+		issue_output=$(_main_create_issues "$first_id" "$platform")
+		eval "$(echo "$issue_output" | grep -E '^_issue_(ref_prefix|has_any|first_num|nums_csv)=')"
 	fi
 
 	# --- Output machine-readable results ---
 
-	if [[ "$ALLOC_COUNT" -eq 1 ]]; then
-		echo "task_id=t${first_id}"
-	else
-		echo "task_id=t${first_id}"
-		echo "task_id_last=t${last_id}"
-		echo "task_count=${ALLOC_COUNT}"
-	fi
-
-	if [[ "$has_any_issue" == "true" ]] && [[ -n "$first_issue_num" ]]; then
-		# Output ref for first successful issue (primary — backwards compatible)
-		echo "ref=${ref_prefix}#${first_issue_num}"
-		local remote_url
-		remote_url=$(cd "$REPO_PATH" && git remote get-url "$REMOTE_NAME" 2>/dev/null | sed 's/\.git$//' || echo "")
-		if [[ -n "$remote_url" ]]; then
-			echo "issue_url=${remote_url}/issues/${first_issue_num}"
-		fi
-		# Output refs for all issues in batch (new — for callers that parse all output)
-		if [[ "$ALLOC_COUNT" -gt 1 ]]; then
-			local j
-			for ((j = 0; j < ALLOC_COUNT; j++)); do
-				local tid=$((first_id + j))
-				if [[ -n "${issue_nums[$j]}" ]]; then
-					echo "ref_t${tid}=${ref_prefix}#${issue_nums[$j]}"
-				fi
-			done
-		fi
-	elif [[ "$is_offline" == "true" ]]; then
-		echo "ref=offline"
-		echo "reconcile=true"
-	else
-		echo "ref=none"
-	fi
+	_main_output_results "$first_id" "$is_offline" \
+		"$_issue_ref_prefix" "$_issue_has_any" "$_issue_first_num" "$_issue_nums_csv"
 
 	if [[ "$is_offline" == "true" ]]; then
 		return 2

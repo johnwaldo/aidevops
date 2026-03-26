@@ -30,9 +30,6 @@ set -euo pipefail
 # Version: 1.0.0
 # License: MIT
 
-# Common constants
-# Common constants
-
 # Constants
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
 source "${SCRIPT_DIR}/shared-constants.sh"
@@ -267,7 +264,6 @@ mcp_setup() {
     "pdf_generation",
     "javascript_execution"
   ]
-    return 0
 }
 EOF
 
@@ -281,14 +277,11 @@ EOF
 	return 0
 }
 
-# Setup CapSolver integration for CAPTCHA solving
-capsolver_setup() {
-	print_header "Setting up CapSolver Integration for CAPTCHA Solving"
+# Write CapSolver config: API and authentication section
+_capsolver_config_header() {
+	local config_file="$1"
 
-	local capsolver_config="$CONFIG_DIR/capsolver-config.json"
-
-	print_info "Creating CapSolver configuration..."
-	cat >"$capsolver_config" <<EOF
+	cat >"$config_file" <<'EOF'
 {
   "provider": "capsolver",
   "description": "CapSolver configuration for automated CAPTCHA solving with Crawl4AI",
@@ -306,6 +299,15 @@ capsolver_setup() {
       "header": "clientKey"
     }
   },
+EOF
+	return 0
+}
+
+# Write CapSolver config: reCAPTCHA type definitions
+_capsolver_config_recaptcha_types() {
+	local config_file="$1"
+
+	cat >>"$config_file" <<'EOF'
   "supported_captcha_types": {
     "recaptcha_v2": {
       "type": "ReCaptchaV2TaskProxyLess",
@@ -317,7 +319,7 @@ capsolver_setup() {
     },
     "recaptcha_v3": {
       "type": "ReCaptchaV3TaskProxyLess",
-      "description": "reCAPTCHA v3 invisible solving with score ≥0.7",
+      "description": "reCAPTCHA v3 invisible solving with score >=0.7",
       "response_field": "gRecaptchaResponse",
       "injection_method": "fetch_hook",
       "pricing": "$0.5/1000 requests",
@@ -327,22 +329,30 @@ capsolver_setup() {
       "type": "ReCaptchaV2EnterpriseTaskProxyLess",
       "description": "reCAPTCHA v2 Enterprise solving",
       "response_field": "gRecaptchaResponse",
-      "pricing": "$_arg1/1000 requests",
+      "pricing": "$1/1000 requests",
       "avg_solve_time": "< 9 seconds"
     },
     "recaptcha_v3_enterprise": {
       "type": "ReCaptchaV3EnterpriseTaskProxyLess",
-      "description": "reCAPTCHA v3 Enterprise solving with score ≥0.9",
+      "description": "reCAPTCHA v3 Enterprise solving with score >=0.9",
       "response_field": "gRecaptchaResponse",
-      "pricing": "$_arg3/1000 requests",
+      "pricing": "$3/1000 requests",
       "avg_solve_time": "< 3 seconds"
     },
+EOF
+	return 0
+}
+
+# Write CapSolver config: non-reCAPTCHA type definitions
+_capsolver_config_other_types() {
+	local config_file="$1"
+	cat >>"$config_file" <<'EOF'
     "cloudflare_turnstile": {
       "type": "AntiTurnstileTaskProxyLess",
       "description": "Cloudflare Turnstile CAPTCHA solving",
       "response_field": "token",
       "injection_target": "cf-turnstile-response",
-      "pricing": "$_arg3/1000 requests",
+      "pricing": "$3/1000 requests",
       "avg_solve_time": "< 3 seconds"
     },
     "cloudflare_challenge": {
@@ -375,6 +385,14 @@ capsolver_setup() {
       "pricing": "$0.5/1000 requests",
       "avg_solve_time": "< 5 seconds"
     },
+EOF
+	return 0
+}
+
+# Write CapSolver config: remaining types, integration methods, SDK, and pricing
+_capsolver_config_footer() {
+	local config_file="$1"
+	cat >>"$config_file" <<'EOF'
     "image_to_text": {
       "type": "ImageToTextTask",
       "description": "OCR image CAPTCHA solving",
@@ -406,15 +424,30 @@ capsolver_setup() {
     "developer_plan": "Contact for better pricing",
     "balance_check": "GET /getBalance endpoint"
   }
-    return 0
 }
 EOF
+	return 0
+}
+
+# Write CapSolver JSON configuration file (orchestrator)
+_capsolver_write_config() {
+	local capsolver_config="$1"
+
+	print_info "Creating CapSolver configuration..."
+	_capsolver_config_header "$capsolver_config"
+	_capsolver_config_recaptcha_types "$capsolver_config"
+	_capsolver_config_other_types "$capsolver_config"
+	_capsolver_config_footer "$capsolver_config"
 
 	print_success "CapSolver configuration created at $capsolver_config"
+	return 0
+}
 
-	# Create Python example script
-	local example_script="$CONFIG_DIR/capsolver-example.py"
-	cat >"$example_script" <<'EOF'
+# Write CapSolver example: imports and setup section
+_capsolver_example_header() {
+	local script_file="$1"
+
+	cat >"$script_file" <<'EOF'
 #!/usr/bin/env python3
 """
 CapSolver + Crawl4AI Integration Example
@@ -430,6 +463,15 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 CAPSOLVER_API_KEY = "CAP-xxxxxxxxxxxxxxxxxxxxx"
 capsolver.api_key = CAPSOLVER_API_KEY
 
+EOF
+	return 0
+}
+
+# Write CapSolver example: reCAPTCHA v2 solve function
+_capsolver_example_recaptcha_v2() {
+	local script_file="$1"
+
+	cat >>"$script_file" <<'EOF'
 async def solve_recaptcha_v2_example():
     """Example: Solving reCAPTCHA v2 checkbox"""
     site_url = "https://recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php"
@@ -442,24 +484,21 @@ async def solve_recaptcha_v2_example():
     )
 
     async with AsyncWebCrawler(config=browser_config) as crawler:
-        # Initial page load
         await crawler.arun(
             url=site_url,
             cache_mode=CacheMode.BYPASS,
             session_id="captcha_session"
         )
 
-        # Solve CAPTCHA using CapSolver
-        print("🔄 Solving reCAPTCHA v2...")
+        print("Solving reCAPTCHA v2...")
         solution = capsolver.solve({
             "type": "ReCaptchaV2TaskProxyLess",
             "websiteURL": site_url,
             "websiteKey": site_key,
         })
         token = solution["gRecaptchaResponse"]
-        print(f"✅ Token obtained: {token[:50]}...")
+        print(f"Token obtained: {token[:50]}...")
 
-        # Inject token and submit
         js_code = f"""
             const textarea = document.getElementById('g-recaptcha-response');
             if (textarea) {{
@@ -482,87 +521,105 @@ async def solve_recaptcha_v2_example():
         )
 
         result = await crawler.arun(url=site_url, config=run_config)
-        print("🎉 CAPTCHA solved successfully!")
+        print("CAPTCHA solved successfully!")
         return result.markdown
 
+EOF
+	return 0
+}
+
+# Write CapSolver example: Cloudflare Turnstile solve function
+_capsolver_example_turnstile() {
+	local script_file="$1"
+	cat >>"$script_file" <<'EOF'
 async def solve_cloudflare_turnstile_example():
     """Example: Solving Cloudflare Turnstile"""
     site_url = "https://clifford.io/demo/cloudflare-turnstile"
     site_key = "0x4AAAAAAAGlwMzq_9z6S9Mh"
-
     browser_config = BrowserConfig(
-        verbose=True,
-        headless=False,
-        use_persistent_context=True,
+        verbose=True, headless=False, use_persistent_context=True,
     )
-
     async with AsyncWebCrawler(config=browser_config) as crawler:
-        # Initial page load
         await crawler.arun(
-            url=site_url,
-            cache_mode=CacheMode.BYPASS,
+            url=site_url, cache_mode=CacheMode.BYPASS,
             session_id="turnstile_session"
         )
-
-        # Solve Turnstile using CapSolver
-        print("🔄 Solving Cloudflare Turnstile...")
+        print("Solving Cloudflare Turnstile...")
         solution = capsolver.solve({
             "type": "AntiTurnstileTaskProxyLess",
             "websiteURL": site_url,
             "websiteKey": site_key,
         })
         token = solution["token"]
-        print(f"✅ Token obtained: {token[:50]}...")
-
-        # Inject token and submit
+        print(f"Token obtained: {token[:50]}...")
         js_code = f"""
             document.querySelector('input[name="cf-turnstile-response"]').value = '{token}';
             document.querySelector('button[type="submit"]').click();
         """
-
         wait_condition = """() => {
             const items = document.querySelectorAll('h1');
             return items.length === 0;
         }"""
-
         run_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             session_id="turnstile_session",
-            js_code=js_code,
-            js_only=True,
+            js_code=js_code, js_only=True,
             wait_for=f"js:{wait_condition}"
         )
-
         result = await crawler.arun(url=site_url, config=run_config)
-        print("🎉 Turnstile solved successfully!")
+        print("Turnstile solved successfully!")
         return result.markdown
 
+EOF
+	return 0
+}
+
+# Write CapSolver example: main entry point
+_capsolver_example_main() {
+	local script_file="$1"
+
+	cat >>"$script_file" <<'EOF'
 async def main():
     """Main function to run examples"""
-    print("🚀 CapSolver + Crawl4AI Integration Examples")
+    print("CapSolver + Crawl4AI Integration Examples")
     print("=" * 50)
 
     try:
-        # Example 1: reCAPTCHA v2
-        print("\n📋 Example 1: reCAPTCHA v2")
+        print("\nExample 1: reCAPTCHA v2")
         result1 = await solve_recaptcha_v2_example()
 
-        # Example 2: Cloudflare Turnstile
-        print("\n📋 Example 2: Cloudflare Turnstile")
+        print("\nExample 2: Cloudflare Turnstile")
         result2 = await solve_cloudflare_turnstile_example()
 
-        print("\n✅ All examples completed successfully!")
+        print("\nAll examples completed successfully!")
 
     except Exception as e:
-        print(f"❌ Error: {e}")
-        print("💡 Make sure to set your CapSolver API key!")
+        print(f"Error: {e}")
+        print("Make sure to set your CapSolver API key!")
 
 if __name__ == "__main__":
     asyncio.run(main())
 EOF
+	return 0
+}
+
+# Write CapSolver Python example script (orchestrator)
+_capsolver_write_example() {
+	local example_script="$1"
+
+	_capsolver_example_header "$example_script"
+	_capsolver_example_recaptcha_v2 "$example_script"
+	_capsolver_example_turnstile "$example_script"
+	_capsolver_example_main "$example_script"
 
 	chmod +x "$example_script"
 	print_success "Python example script created at $example_script"
+	return 0
+}
+
+# Print CapSolver next-steps instructions
+_capsolver_print_instructions() {
+	local example_script="$1"
 
 	print_info "CapSolver Integration Setup Complete!"
 	print_info ""
@@ -581,6 +638,19 @@ EOF
 	print_info ""
 	print_info "💰 Pricing: Starting from $0.4/1000 requests"
 	print_info "🔗 Documentation: https://docs.capsolver.com/"
+	return 0
+}
+
+# Setup CapSolver integration for CAPTCHA solving
+capsolver_setup() {
+	print_header "Setting up CapSolver Integration for CAPTCHA Solving"
+
+	local capsolver_config="$CONFIG_DIR/capsolver-config.json"
+	local example_script="$CONFIG_DIR/capsolver-example.py"
+
+	_capsolver_write_config "$capsolver_config"
+	_capsolver_write_example "$example_script"
+	_capsolver_print_instructions "$example_script"
 
 	return 0
 }
@@ -618,7 +688,6 @@ crawl_url() {
       "cache_mode": "bypass"
     }
   }
-    return 0
 }
 EOF
 	)
@@ -688,7 +757,6 @@ extract_structured() {
       "cache_mode": "bypass"
     }
   }
-    return 0
 }
 EOF
 	)
@@ -712,6 +780,218 @@ EOF
 		return 1
 	fi
 
+	return 0
+}
+
+# Write CAPTCHA script: imports, API key setup, and function signature
+_captcha_script_header() {
+	local script_file="$1"
+	local url="$2"
+	local captcha_type="$3"
+	local site_key="$4"
+
+	cat >"$script_file" <<EOF
+#!/usr/bin/env python3
+import asyncio
+import capsolver
+import os
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
+
+api_key = os.getenv('CAPSOLVER_API_KEY')
+if not api_key:
+    print("Error: CAPSOLVER_API_KEY environment variable not set")
+    print("Set it with: export CAPSOLVER_API_KEY='CAP-xxxxxxxxxxxxxxxxxxxxx'")
+    exit(1)
+
+capsolver.api_key = api_key
+
+async def crawl_with_captcha():
+    url = "$url"
+    captcha_type = "$captcha_type"
+    site_key = "$site_key"
+
+    browser_config = BrowserConfig(
+        verbose=True,
+        headless=False,
+        use_persistent_context=True,
+    )
+
+    async with AsyncWebCrawler(config=browser_config) as crawler:
+        print(f"Loading page: {url}")
+        await crawler.arun(
+            url=url,
+            cache_mode=CacheMode.BYPASS,
+            session_id="captcha_crawl_session"
+        )
+
+EOF
+	return 0
+}
+
+# Write CAPTCHA script: reCAPTCHA v2 and v3 solve handlers
+_captcha_script_recaptcha_handlers() {
+	local script_file="$1"
+
+	cat >>"$script_file" <<'PYEOF'
+        if captcha_type == "recaptcha_v2":
+            if not site_key:
+                print("Error: site_key required for reCAPTCHA v2")
+                return
+            print("Solving reCAPTCHA v2...")
+            solution = capsolver.solve({
+                "type": "ReCaptchaV2TaskProxyLess",
+                "websiteURL": url,
+                "websiteKey": site_key,
+            })
+            token = solution["gRecaptchaResponse"]
+            js_code = f'''
+                const textarea = document.getElementById('g-recaptcha-response');
+                if (textarea) {{
+                    textarea.value = '{token}';
+                    console.log('reCAPTCHA v2 token injected');
+                }}
+            '''
+
+        elif captcha_type == "recaptcha_v3":
+            if not site_key:
+                print("Error: site_key required for reCAPTCHA v3")
+                return
+            print("Solving reCAPTCHA v3...")
+            solution = capsolver.solve({
+                "type": "ReCaptchaV3TaskProxyLess",
+                "websiteURL": url,
+                "websiteKey": site_key,
+                "pageAction": "submit",
+            })
+            token = solution["gRecaptchaResponse"]
+            js_code = f'''
+                const originalFetch = window.fetch;
+                window.fetch = function(...args) {{
+                    if (typeof args[0] === 'string' && args[0].includes('recaptcha')) {{
+                        console.log('Hooking reCAPTCHA v3 request');
+                    }}
+                    return originalFetch.apply(this, args);
+                }};
+                console.log('reCAPTCHA v3 hook installed');
+            '''
+
+PYEOF
+	return 0
+}
+
+# Write CAPTCHA script: turnstile, AWS WAF, and fallback handlers
+_captcha_script_other_handlers() {
+	local script_file="$1"
+
+	cat >>"$script_file" <<'PYEOF'
+        elif captcha_type == "turnstile":
+            if not site_key:
+                print("Error: site_key required for Cloudflare Turnstile")
+                return
+            print("Solving Cloudflare Turnstile...")
+            solution = capsolver.solve({
+                "type": "AntiTurnstileTaskProxyLess",
+                "websiteURL": url,
+                "websiteKey": site_key,
+            })
+            token = solution["token"]
+            js_code = f'''
+                const input = document.querySelector('input[name="cf-turnstile-response"]');
+                if (input) {{
+                    input.value = '{token}';
+                    console.log('Turnstile token injected');
+                }}
+            '''
+
+        elif captcha_type == "aws_waf":
+            print("Solving AWS WAF...")
+            solution = capsolver.solve({
+                "type": "AntiAwsWafTaskProxyLess",
+                "websiteURL": url,
+            })
+            cookie = solution["cookie"]
+            js_code = f'''
+                document.cookie = 'aws-waf-token={cookie};path=/';
+                console.log('AWS WAF cookie set');
+                location.reload();
+            '''
+
+        else:
+            print(f"Error: Unsupported CAPTCHA type: {captcha_type}")
+            return
+
+PYEOF
+	return 0
+}
+
+# Write CAPTCHA script: execute JS, return result, and main entry point
+_captcha_script_runner() {
+	local script_file="$1"
+
+	cat >>"$script_file" <<'PYEOF'
+        run_config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            session_id="captcha_crawl_session",
+            js_code=js_code,
+            js_only=True,
+        )
+
+        result = await crawler.arun(url=url, config=run_config)
+        print("CAPTCHA solved and page crawled successfully!")
+
+        return result.markdown
+
+if __name__ == "__main__":
+    result = asyncio.run(crawl_with_captcha())
+    if result:
+        print("Crawled content:")
+        print(result[:500] + "..." if len(result) > 500 else result)
+PYEOF
+	return 0
+}
+
+# Write the Python CAPTCHA-crawl temp script to a file (orchestrator)
+_captcha_write_script() {
+	local temp_script="$1"
+	local url="$2"
+	local captcha_type="$3"
+	local site_key="$4"
+
+	_captcha_script_header "$temp_script" "$url" "$captcha_type" "$site_key"
+	_captcha_script_recaptcha_handlers "$temp_script"
+	_captcha_script_other_handlers "$temp_script"
+	_captcha_script_runner "$temp_script"
+	return 0
+}
+
+# Validate env, run the CAPTCHA Python script, and save optional output
+_captcha_run_script() {
+	local temp_script="$1"
+	local output_file="$2"
+
+	# Check if CapSolver API key is set
+	if [[ -z "$CAPSOLVER_API_KEY" ]]; then
+		print_error "CAPSOLVER_API_KEY environment variable not set"
+		print_info "Set it with: export CAPSOLVER_API_KEY='CAP-xxxxxxxxxxxxxxxxxxxxx'"
+		print_info "Get your API key from: https://dashboard.capsolver.com/dashboard/overview"
+		rm -f "$temp_script"
+		return 1
+	fi
+
+	print_info "Running CAPTCHA-enabled crawl..."
+	if python3 "$temp_script"; then
+		print_success "CAPTCHA crawl completed successfully"
+		if [[ -n "$output_file" ]]; then
+			python3 "$temp_script" >"$output_file" 2>&1
+			print_info "Results saved to: $output_file"
+		fi
+	else
+		print_error "CAPTCHA crawl failed"
+		rm -f "$temp_script"
+		return 1
+	fi
+
+	rm -f "$temp_script"
 	return 0
 }
 
@@ -741,175 +1021,10 @@ captcha_crawl() {
 		sleep "$CRAWL4AI_STARTUP_WAIT"
 	fi
 
-	# Create Python script for CAPTCHA crawling
 	local temp_script="/tmp/captcha_crawl_$$.py"
-	cat >"$temp_script" <<EOF
-#!/usr/bin/env python3
-import asyncio
-import capsolver
-import os
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
-
-# Get CapSolver API key from environment
-api_key = os.getenv('CAPSOLVER_API_KEY')
-if not api_key:
-    print("❌ Error: CAPSOLVER_API_KEY environment variable not set")
-    print("💡 Set it with: export CAPSOLVER_API_KEY='CAP-xxxxxxxxxxxxxxxxxxxxx'")
-    exit(1)
-
-capsolver.api_key = api_key
-
-async def crawl_with_captcha():
-    url = "$url"
-    captcha_type = "$captcha_type"
-    site_key = "$site_key"
-
-    browser_config = BrowserConfig(
-        verbose=True,
-        headless=False,
-        use_persistent_context=True,
-    )
-
-    async with AsyncWebCrawler(config=browser_config) as crawler:
-        # Initial page load
-        print(f"🔄 Loading page: {url}")
-        await crawler.arun(
-            url=url,
-            cache_mode=CacheMode.BYPASS,
-            session_id="captcha_crawl_session"
-        )
-
-        # Solve CAPTCHA based on type
-        if captcha_type == "recaptcha_v2":
-            if not site_key:
-                print("❌ Error: site_key required for reCAPTCHA v2")
-                return
-
-            print("🔄 Solving reCAPTCHA v2...")
-            solution = capsolver.solve({
-                "type": "ReCaptchaV2TaskProxyLess",
-                "websiteURL": url,
-                "websiteKey": site_key,
-            })
-            token = solution["gRecaptchaResponse"]
-
-            js_code = f'''
-                const textarea = document.getElementById('g-recaptcha-response');
-                if (textarea) {{
-                    textarea.value = '{token}';
-                    console.log('✅ reCAPTCHA v2 token injected');
-                }}
-            '''
-
-        elif captcha_type == "recaptcha_v3":
-            if not site_key:
-                print("❌ Error: site_key required for reCAPTCHA v3")
-                return
-
-            print("🔄 Solving reCAPTCHA v3...")
-            solution = capsolver.solve({
-                "type": "ReCaptchaV3TaskProxyLess",
-                "websiteURL": url,
-                "websiteKey": site_key,
-                "pageAction": "submit",
-            })
-            token = solution["gRecaptchaResponse"]
-
-            js_code = f'''
-                const originalFetch = window.fetch;
-                window.fetch = function(...args) {{
-                    if (typeof args[0] === 'string' && args[0].includes('recaptcha')) {{
-                        console.log('🔄 Hooking reCAPTCHA v3 request');
-                        // Replace token in request
-                    }}
-                    return originalFetch.apply(this, args);
-                }};
-                console.log('✅ reCAPTCHA v3 hook installed');
-            '''
-
-        elif captcha_type == "turnstile":
-            if not site_key:
-                print("❌ Error: site_key required for Cloudflare Turnstile")
-                return
-
-            print("🔄 Solving Cloudflare Turnstile...")
-            solution = capsolver.solve({
-                "type": "AntiTurnstileTaskProxyLess",
-                "websiteURL": url,
-                "websiteKey": site_key,
-            })
-            token = solution["token"]
-
-            js_code = f'''
-                const input = document.querySelector('input[name="cf-turnstile-response"]');
-                if (input) {{
-                    input.value = '{token}';
-                    console.log('✅ Turnstile token injected');
-                }}
-            '''
-
-        elif captcha_type == "aws_waf":
-            print("🔄 Solving AWS WAF...")
-            solution = capsolver.solve({
-                "type": "AntiAwsWafTaskProxyLess",
-                "websiteURL": url,
-            })
-            cookie = solution["cookie"]
-
-            js_code = f'''
-                document.cookie = 'aws-waf-token={cookie};path=/';
-                console.log('✅ AWS WAF cookie set');
-                location.reload();
-            '''
-
-        else:
-            print(f"❌ Error: Unsupported CAPTCHA type: {captcha_type}")
-            return
-
-        # Execute JavaScript and continue crawling
-        run_config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            session_id="captcha_crawl_session",
-            js_code=js_code,
-            js_only=True,
-        )
-
-        result = await crawler.arun(url=url, config=run_config)
-        print("🎉 CAPTCHA solved and page crawled successfully!")
-
-        return result.markdown
-
-if __name__ == "__main__":
-    result = asyncio.run(crawl_with_captcha())
-    if result:
-        print("📄 Crawled content:")
-        print(result[:500] + "..." if len(result) > 500 else result)
-EOF
-
-	# Check if CapSolver API key is set
-	if [[ -z "$CAPSOLVER_API_KEY" ]]; then
-		print_error "CAPSOLVER_API_KEY environment variable not set"
-		print_info "Set it with: export CAPSOLVER_API_KEY='CAP-xxxxxxxxxxxxxxxxxxxxx'"
-		print_info "Get your API key from: https://dashboard.capsolver.com/dashboard/overview"
-		rm -f "$temp_script"
-		return 1
-	fi
-
-	print_info "Running CAPTCHA-enabled crawl..."
-	if python3 "$temp_script"; then
-		print_success "CAPTCHA crawl completed successfully"
-		if [[ -n "$output_file" ]]; then
-			python3 "$temp_script" >"$output_file" 2>&1
-			print_info "Results saved to: $output_file"
-		fi
-	else
-		print_error "CAPTCHA crawl failed"
-		rm -f "$temp_script"
-		return 1
-	fi
-
-	rm -f "$temp_script"
-	return 0
+	_captcha_write_script "$temp_script" "$url" "$captcha_type" "$site_key"
+	_captcha_run_script "$temp_script" "$output_file"
+	return $?
 }
 
 # Check service status

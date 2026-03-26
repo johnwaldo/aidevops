@@ -100,7 +100,9 @@ model_id_to_tier() {
 	*sonnet*) echo "sonnet" ;;
 	*haiku*) echo "haiku" ;;
 	*flash* | gemini-2.0*) echo "flash" ;;
-	*pro* | gpt-4.1 | o3) echo "pro" ;;
+	*pro* | gpt-4.1 | o3 | gpt-5.2) echo "pro" ;;
+	gpt-5.4 | gpt-5.4-*) echo "opus" ;;
+	gpt-5.3-codex | gpt-5.3-codex-*) echo "sonnet" ;;
 	o4-mini | gpt-4.1-mini | gpt-4o-mini | deepseek* | llama* | gpt-4.1-nano) echo "haiku" ;;
 	gpt-4o) echo "sonnet" ;;
 	*) echo "" ;;
@@ -180,18 +182,18 @@ opus|claude-opus-4-6|Architecture decisions, complex multi-step reasoning"
 # Task-to-Model Recommendations
 # =============================================================================
 
-readonly TASK_RECOMMENDATIONS="code review|claude-sonnet-4-6|o4-mini|gemini-2.5-flash
-code implementation|claude-sonnet-4-6|gpt-4.1|gemini-2.5-pro
+readonly TASK_RECOMMENDATIONS="code review|claude-sonnet-4-6|gpt-5.3-codex|gemini-2.5-flash
+code implementation|claude-sonnet-4-6|gpt-5.3-codex|gemini-2.5-pro
 architecture design|claude-opus-4-6|o3|gemini-2.5-pro
-bug fixing|claude-sonnet-4-6|gpt-4.1|o4-mini
-refactoring|claude-sonnet-4-6|gpt-4.1|gemini-2.5-pro
+bug fixing|claude-sonnet-4-6|gpt-5.3-codex|o4-mini
+refactoring|claude-sonnet-4-6|gpt-5.3-codex|gemini-2.5-pro
 documentation|claude-sonnet-4-6|gpt-4o|gemini-2.5-flash
-testing|claude-sonnet-4-6|gpt-4.1|o4-mini
+testing|claude-sonnet-4-6|gpt-5.3-codex|o4-mini
 classification|claude-haiku-4-5|gpt-4.1-nano|gemini-2.5-flash
 summarization|gemini-2.5-flash|gpt-4o-mini|claude-haiku-4-5
-large codebase analysis|gemini-2.5-pro|gpt-4.1|claude-sonnet-4-6
-math reasoning|o3|deepseek-r1|gemini-2.5-pro
-security audit|claude-opus-4-6|o3|claude-sonnet-4-6
+large codebase analysis|gemini-2.5-pro|gpt-5.3-codex|claude-sonnet-4-6
+math reasoning|gpt-5.4|deepseek-r1|gemini-2.5-pro
+security audit|claude-opus-4-6|gpt-5.4|claude-sonnet-4-6
 data extraction|gemini-2.5-flash|gpt-4o-mini|claude-haiku-4-5
 commit messages|claude-haiku-4-5|gpt-4.1-nano|gemini-2.5-flash
 pr description|claude-sonnet-4-6|gpt-4o|gemini-2.5-flash"
@@ -481,10 +483,10 @@ cmd_recommend() {
 	if [[ "$found" != "true" ]]; then
 		echo "No exact task match. Showing general recommendations:"
 		echo ""
-		echo "  High capability: claude-opus-4-6 or o3"
-		echo "  Balanced:        claude-sonnet-4-6 or gpt-4.1"
+		echo "  High capability: claude-opus-4-6 or gpt-5.4"
+		echo "  Balanced:        claude-sonnet-4-6 or gpt-5.3-codex"
 		echo "  Budget:          gemini-2.5-flash or gpt-4.1-nano"
-		echo "  Large context:   gemini-2.5-pro or gpt-4.1 (1M tokens)"
+		echo "  Large context:   gemini-2.5-pro or gpt-5.3-codex"
 		echo ""
 		echo "Available task types:"
 		echo "$TASK_RECOMMENDATIONS" | cut -d'|' -f1 | while IFS= read -r t; do
@@ -648,45 +650,16 @@ cmd_providers() {
 # Dispatch the same review prompt to multiple models, collect results, diff.
 # =============================================================================
 
-# Judge scoring for cross-review (t1329)
-# Dispatches all model outputs to a judge model, parses structured JSON scores,
-# records results via cmd_score, and feeds into the pattern tracker.
-# Defined before cmd_cross_review (its caller) for readability.
-#
-# Args:
-#   $1 - original prompt
-#   $2 - models_str (comma-separated)
-#   $3 - output_dir
-#   $4 - judge_model tier
-#   $5 - prompt_version (may be empty)
-#   $6 - prompt_file (may be empty)
-#   $7+ - model_names array
-_cross_review_judge_score() {
-	local original_prompt="$1"
-	local models_str="$2"
-	local output_dir="$3"
-	local judge_model="$4"
-	local prompt_version="$5"
-	local prompt_file="$6"
-	shift 6
+# Build judge prompt from model outputs
+# Args: output_dir, max_chars_per_model, original_prompt, model_names array
+# Output: judge_prompt, models_with_output array
+_judge_build_prompt() {
+	local output_dir="$1"
+	local max_chars_per_model="$2"
+	local original_prompt="$3"
+	shift 3
 	local -a model_names=("$@")
 
-	# Validate judge_model identifier (used in filenames and runner names)
-	if [[ ! "$judge_model" =~ ^[A-Za-z0-9._-]+$ ]]; then
-		print_error "Invalid judge model identifier: $judge_model"
-		return 1
-	fi
-
-	local runner_helper="${SCRIPT_DIR}/runner-helper.sh"
-	if [[ ! -x "$runner_helper" ]]; then
-		print_warning "runner-helper.sh not found — skipping judge scoring"
-		return 0
-	fi
-
-	echo "=== JUDGE SCORING (${judge_model}) ==="
-	echo ""
-
-	# Build judge prompt: include original prompt + all model responses
 	local judge_prompt
 	judge_prompt="You are a neutral judge evaluating AI model responses. Score each response on a 1-10 scale.
 
@@ -695,8 +668,6 @@ ${original_prompt}
 
 MODEL RESPONSES:
 "
-	# Bound per-model response size to keep judge payload within token limits
-	local max_chars_per_model=20000
 	local models_with_output=()
 	for model_tier in "${model_names[@]}"; do
 		local result_file="${output_dir}/${model_tier}.txt"
@@ -718,49 +689,24 @@ ${response_text}${truncated_marker}
 		fi
 	done
 
-	if [[ ${#models_with_output[@]} -lt 2 ]]; then
-		print_warning "Not enough model outputs for judge scoring (need 2+)"
-		return 0
-	fi
+	echo "$judge_prompt"
+	return 0
+}
 
-	judge_prompt+="
-SCORING INSTRUCTIONS:
-Score each model on these criteria (1-10 scale):
-- correctness: Factual accuracy and technical correctness
-- completeness: Coverage of all requirements and edge cases
-- quality: Code quality, best practices, maintainability
-- clarity: Clear explanation, good formatting, readability
-- adherence: Following the original prompt instructions precisely
+# Dispatch judge model and extract JSON output
+_judge_dispatch() {
+	local judge_model="$1"
+	local judge_prompt="$2"
+	local output_dir="$3"
 
-Respond with ONLY a valid JSON object in this exact format (no markdown, no explanation):
-{
-  \"task_type\": \"general\",
-  \"winner\": \"<model_tier_of_best_response>\",
-  \"reasoning\": \"<one sentence explaining the winner>\",
-  \"scores\": {
-    \"<model_tier>\": {
-      \"correctness\": <1-10>,
-      \"completeness\": <1-10>,
-      \"quality\": <1-10>,
-      \"clarity\": <1-10>,
-      \"adherence\": <1-10>
-    }
-  }
-}"
+	local runner_helper="${SCRIPT_DIR}/runner-helper.sh"
+	[[ ! -x "$runner_helper" ]] && return 1
 
-	# Sanitize judge_model before using in filenames/runner names
-	if [[ ! "$judge_model" =~ ^[A-Za-z0-9._-]+$ ]]; then
-		print_warning "Invalid judge model identifier: $judge_model — skipping scoring"
-		return 0
-	fi
-
-	# Dispatch to judge model
 	local judge_runner="cross-review-judge-$$"
 	local judge_output_file="${output_dir}/judge-${judge_model}.json"
+	local judge_err_log="${output_dir}/judge-errors.log"
 
 	echo "  Dispatching to judge (${judge_model})..."
-
-	local judge_err_log="${output_dir}/judge-errors.log"
 
 	"$runner_helper" create "$judge_runner" \
 		--model "$judge_model" \
@@ -774,16 +720,12 @@ Respond with ONLY a valid JSON object in this exact format (no markdown, no expl
 
 	"$runner_helper" destroy "$judge_runner" --force 2>>"$judge_err_log" || true
 
-	if [[ ! -f "$judge_output_file" || ! -s "$judge_output_file" ]]; then
-		print_warning "Judge model returned no output — skipping scoring"
-		return 0
-	fi
+	[[ ! -f "$judge_output_file" || ! -s "$judge_output_file" ]] && return 1
 
-	# Extract JSON from judge output (strip any surrounding text)
+	# Extract JSON from judge output
 	local judge_json
 	judge_json=$(grep -o '{.*}' "$judge_output_file" 2>>"$judge_err_log" | head -1 || true)
 	if [[ -z "$judge_json" ]]; then
-		# Try multiline JSON extraction via stdin (safe for paths with special chars)
 		judge_json=$(python3 -c "
 import sys, json, re
 text = sys.stdin.read()
@@ -797,90 +739,172 @@ if m:
 " <"$judge_output_file" 2>>"$judge_err_log" || true)
 	fi
 
-	if [[ -z "$judge_json" ]]; then
-		print_warning "Could not parse judge JSON output. Raw output saved to: $judge_output_file"
+	[[ -z "$judge_json" ]] && return 1
+	echo "$judge_json"
+	return 0
+}
+
+# Clamp a numeric value to integer in range 0-10
+_clamp_score() {
+	local val="$1"
+	if [[ ! "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+		echo "0"
 		return 0
 	fi
+	local int_val
+	int_val=$(printf '%.0f' "$val" 2>/dev/null || echo "0")
+	if [[ "$int_val" -gt 10 ]]; then
+		echo "10"
+	elif [[ "$int_val" -lt 0 ]]; then
+		echo "0"
+	else
+		echo "$int_val"
+	fi
+	return 0
+}
 
-	# Parse winner, task_type, and reasoning in a single Python call
-	local parsed_fields
-	parsed_fields=$(echo "$judge_json" | python3 -c "
+# Return the scoring instructions block appended to judge prompts.
+_judge_scoring_instructions() {
+	cat <<'INSTRUCTIONS'
+
+SCORING INSTRUCTIONS:
+Score each model on these criteria (1-10 scale):
+- correctness: Factual accuracy and technical correctness
+- completeness: Coverage of all requirements and edge cases
+- quality: Code quality, best practices, maintainability
+- clarity: Clear explanation, good formatting, readability
+- adherence: Following the original prompt instructions precisely
+
+Respond with ONLY a valid JSON object in this exact format (no markdown, no explanation):
+{
+  "task_type": "general",
+  "winner": "<model_tier_of_best_response>",
+  "reasoning": "<one sentence explaining the winner>",
+  "scores": {
+    "<model_tier>": {
+      "correctness": <1-10>,
+      "completeness": <1-10>,
+      "quality": <1-10>,
+      "clarity": <1-10>,
+      "adherence": <1-10>
+    }
+  }
+}
+INSTRUCTIONS
+	return 0
+}
+
+# Parse winner, task_type, and reasoning from judge JSON.
+# Outputs three lines: winner, task_type, reasoning.
+# Args: $1=judge_json $2=err_log
+_judge_parse_json_fields() {
+	local judge_json="$1"
+	local err_log="$2"
+	echo "$judge_json" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-# Truncate reasoning to 500 chars and strip control characters
 r = d.get('reasoning', '')[:500]
 r = ''.join(c for c in r if c.isprintable() or c in (' ', '\t'))
 print(d.get('winner', ''))
 print(d.get('task_type', 'general'))
 print(r)
-" 2>>"$judge_err_log" || true)
+" 2>>"$err_log" || true
+	return 0
+}
 
-	local winner task_type reasoning
-	if [[ -n "$parsed_fields" ]]; then
-		winner=$(echo "$parsed_fields" | head -1)
-		task_type=$(echo "$parsed_fields" | sed -n '2p')
-		reasoning=$(echo "$parsed_fields" | sed -n '3p')
-	else
-		winner=""
-		task_type="general"
-		reasoning=""
-	fi
-
-	# Sanitize task_type: restrict to known allowlist
+# Sanitize task_type against known allowlist; echoes validated value.
+# Args: $1=task_type
+_judge_validate_task_type() {
+	local task_type="$1"
 	local -a valid_task_types=(general code review analysis debug refactor test docs security)
-	local task_type_valid=false
+	local vt
 	for vt in "${valid_task_types[@]}"; do
 		if [[ "$task_type" == "$vt" ]]; then
-			task_type_valid=true
-			break
-		fi
-	done
-	if [[ "$task_type_valid" != "true" ]]; then
-		task_type="general"
-	fi
-
-	# Sanitize winner: must be one of the models with output
-	local winner_valid=false
-	if [[ -n "$winner" ]]; then
-		for m in "${models_with_output[@]}"; do
-			if [[ "$winner" == "$m" ]]; then
-				winner_valid=true
-				break
-			fi
-		done
-		if [[ "$winner_valid" != "true" ]]; then
-			print_warning "Judge returned unknown winner '${winner}' — ignoring"
-			winner=""
-		fi
-	fi
-
-	echo "  Judge winner: ${winner:-unknown}"
-	[[ -n "$reasoning" ]] && echo "  Reasoning: ${reasoning}"
-	echo ""
-
-	# Helper: clamp a numeric value to integer in range 0-10
-	# Handles decimals correctly (e.g. 8.5 → 9 via rounding, not 85)
-	_clamp_score() {
-		local val="$1"
-		# Accept only valid numeric format (digits with optional single decimal point)
-		if [[ ! "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-			echo "0"
+			echo "$task_type"
 			return 0
 		fi
-		# Round to nearest integer and clamp to 0-10
-		local int_val
-		int_val=$(printf '%.0f' "$val" 2>/dev/null || echo "0")
-		if [[ "$int_val" -gt 10 ]]; then
-			echo "10"
-		elif [[ "$int_val" -lt 0 ]]; then
-			echo "0"
-		else
-			echo "$int_val"
-		fi
-		return 0
-	}
+	done
+	echo "general"
+	return 0
+}
 
-	# Build cmd_score arguments from judge JSON
+# Sanitize winner against models_with_output list; echoes validated value or empty.
+# Args: $1=winner $2+=models_with_output
+_judge_validate_winner() {
+	local winner="$1"
+	shift
+	local -a models_with_output=("$@")
+	if [[ -z "$winner" ]]; then
+		return 0
+	fi
+	local m
+	for m in "${models_with_output[@]}"; do
+		if [[ "$winner" == "$m" ]]; then
+			echo "$winner"
+			return 0
+		fi
+	done
+	print_warning "Judge returned unknown winner '${winner}' — ignoring"
+	return 0
+}
+
+# Append per-model score args to score_args array from judge JSON.
+# Args: $1=judge_json $2=err_log $3+=models_with_output
+# Outputs one line per model: "--model M --correctness C ..."
+_judge_build_score_args() {
+	local judge_json="$1"
+	local err_log="$2"
+	shift 2
+	local -a models_with_output=("$@")
+	local model_tier
+	for model_tier in "${models_with_output[@]}"; do
+		local scores_line
+		scores_line=$(echo "$judge_json" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+s = d.get('scores', {}).get('${model_tier}', {})
+print(s.get('correctness', 0), s.get('completeness', 0), s.get('quality', 0), s.get('clarity', 0), s.get('adherence', 0))
+" 2>>"$err_log" || echo "0 0 0 0 0")
+		local corr comp qual clar adhr
+		read -r corr comp qual clar adhr <<<"$scores_line"
+		corr=$(_clamp_score "$corr")
+		comp=$(_clamp_score "$comp")
+		qual=$(_clamp_score "$qual")
+		clar=$(_clamp_score "$clar")
+		adhr=$(_clamp_score "$adhr")
+		echo "--model ${model_tier} --correctness ${corr} --completeness ${comp} --quality ${qual} --clarity ${clar} --adherence ${adhr}"
+	done
+	return 0
+}
+
+# Judge scoring for cross-review (t1329)
+# Dispatches all model outputs to a judge model, parses structured JSON scores,
+# records results via cmd_score, and feeds into the pattern tracker.
+# Defined before cmd_cross_review (its caller) for readability.
+#
+# Args:
+#   $1 - original prompt
+#   $2 - models_str (comma-separated)
+#   $3 - output_dir
+#   $4 - judge_model tier
+#   $5 - prompt_version (may be empty)
+#   $6 - prompt_file (may be empty)
+#   $7+ - model_names array
+# Record judge scores: parse JSON, build score_args, call cmd_score.
+# Args: $1=judge_json $2=judge_err_log $3=original_prompt $4=task_type $5=winner
+#       $6=judge_model $7=prompt_version $8=prompt_file $9+=models_with_output
+_judge_record_scores() {
+	local judge_json="$1"
+	local judge_err_log="$2"
+	local original_prompt="$3"
+	local task_type="$4"
+	local winner="$5"
+	local judge_model="$6"
+	local prompt_version="$7"
+	local prompt_file="$8"
+	shift 8
+	local -a models_with_output=("$@")
+
 	local -a score_args=(
 		--task "$original_prompt"
 		--type "$task_type"
@@ -890,41 +914,89 @@ print(r)
 	[[ -n "$prompt_version" ]] && score_args+=(--prompt-version "$prompt_version")
 	[[ -n "$prompt_file" ]] && score_args+=(--prompt-file "$prompt_file")
 
-	for model_tier in "${models_with_output[@]}"; do
-		# Extract all scores in a single Python call (avoids 5 subprocesses per model)
-		local scores_line
-		scores_line=$(echo "$judge_json" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-s = d.get('scores', {}).get('${model_tier}', {})
-print(s.get('correctness', 0), s.get('completeness', 0), s.get('quality', 0), s.get('clarity', 0), s.get('adherence', 0))
-" 2>>"$judge_err_log" || echo "0 0 0 0 0")
-		local corr comp qual clar adhr
-		read -r corr comp qual clar adhr <<<"$scores_line"
+	local score_line
+	while IFS= read -r score_line; do
+		[[ -z "$score_line" ]] && continue
+		# shellcheck disable=SC2206
+		local -a line_args=($score_line)
+		score_args+=("${line_args[@]}")
+	done < <(_judge_build_score_args "$judge_json" "$judge_err_log" "${models_with_output[@]}")
 
-		# Clamp all scores to valid integer range 0-10
-		corr=$(_clamp_score "$corr")
-		comp=$(_clamp_score "$comp")
-		qual=$(_clamp_score "$qual")
-		clar=$(_clamp_score "$clar")
-		adhr=$(_clamp_score "$adhr")
-
-		score_args+=(
-			--model "$model_tier"
-			--correctness "$corr"
-			--completeness "$comp"
-			--quality "$qual"
-			--clarity "$clar"
-			--adherence "$adhr"
-		)
-	done
-
-	# Record scores via cmd_score (also syncs to pattern tracker)
 	cmd_score "${score_args[@]}"
+	return 0
+}
+
+_cross_review_judge_score() {
+	local original_prompt="$1"
+	local models_str="$2"
+	local output_dir="$3"
+	local judge_model="$4"
+	local prompt_version="$5"
+	local prompt_file="$6"
+	shift 6
+	local -a model_names=("$@")
+	local judge_err_log="${output_dir}/judge-errors.log"
+	local judge_output_file="${output_dir}/judge-${judge_model}.json"
+
+	if [[ ! "$judge_model" =~ ^[A-Za-z0-9._-]+$ ]]; then
+		print_error "Invalid judge model identifier: $judge_model"
+		return 1
+	fi
+	if [[ ! -x "${SCRIPT_DIR}/runner-helper.sh" ]]; then
+		print_warning "runner-helper.sh not found — skipping judge scoring"
+		return 0
+	fi
+
+	echo "=== JUDGE SCORING (${judge_model}) ==="
+	echo ""
+
+	# Build judge prompt from model outputs
+	local judge_prompt
+	judge_prompt=$(_judge_build_prompt "$output_dir" "20000" "$original_prompt" "${model_names[@]}")
+
+	# Collect models that produced output
+	local -a models_with_output=()
+	local model_tier
+	for model_tier in "${model_names[@]}"; do
+		[[ -f "${output_dir}/${model_tier}.txt" && -s "${output_dir}/${model_tier}.txt" ]] &&
+			models_with_output+=("$model_tier")
+	done
+	if [[ ${#models_with_output[@]} -lt 2 ]]; then
+		print_warning "Not enough model outputs for judge scoring (need 2+)"
+		return 0
+	fi
+
+	judge_prompt+=$(_judge_scoring_instructions)
+
+	local judge_json
+	judge_json=$(_judge_dispatch "$judge_model" "$judge_prompt" "$output_dir") || {
+		print_warning "Could not parse judge JSON output. Check ${output_dir}/judge-errors.log"
+		return 0
+	}
+
+	# Parse and sanitize winner/task_type/reasoning
+	local parsed_fields winner task_type reasoning
+	parsed_fields=$(_judge_parse_json_fields "$judge_json" "$judge_err_log")
+	if [[ -n "$parsed_fields" ]]; then
+		winner=$(echo "$parsed_fields" | head -1)
+		task_type=$(echo "$parsed_fields" | sed -n '2p')
+		reasoning=$(echo "$parsed_fields" | sed -n '3p')
+	else
+		winner="" task_type="general" reasoning=""
+	fi
+	task_type=$(_judge_validate_task_type "$task_type")
+	winner=$(_judge_validate_winner "$winner" "${models_with_output[@]}")
+
+	echo "  Judge winner: ${winner:-unknown}"
+	[[ -n "$reasoning" ]] && echo "  Reasoning: ${reasoning}"
+	echo ""
+
+	_judge_record_scores "$judge_json" "$judge_err_log" "$original_prompt" \
+		"$task_type" "$winner" "$judge_model" "$prompt_version" "$prompt_file" \
+		"${models_with_output[@]}"
 
 	echo "Judge scores recorded. Judge output: $judge_output_file"
 	echo ""
-
 	return 0
 }
 
@@ -937,10 +1009,19 @@ print(s.get('correctness', 0), s.get('completeness', 0), s.get('quality', 0), s.
 # With --score: feeds outputs to a judge model (default: opus) for structured scoring
 # and records results in the model-comparisons DB + pattern tracker.
 #######################################
-cmd_cross_review() {
-	local prompt="" models_str="" workdir="" review_timeout="600" output_dir=""
-	local score_flag=false judge_model="opus"
-	local prompt_version="" prompt_file=""
+
+# Parse arguments for cmd_cross_review
+_cross_review_parse_args() {
+	local -n cr_prompt="$1"
+	local -n cr_models="$2"
+	local -n cr_workdir="$3"
+	local -n cr_timeout="$4"
+	local -n cr_output="$5"
+	local -n cr_score="$6"
+	local -n cr_judge="$7"
+	local -n cr_version="$8"
+	local -n cr_file="$9"
+	shift 9
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -949,7 +1030,7 @@ cmd_cross_review() {
 				print_error "--prompt requires a value"
 				return 1
 			}
-			prompt="$2"
+			cr_prompt="$2"
 			shift 2
 			;;
 		--models)
@@ -957,7 +1038,7 @@ cmd_cross_review() {
 				print_error "--models requires a value"
 				return 1
 			}
-			models_str="$2"
+			cr_models="$2"
 			shift 2
 			;;
 		--workdir)
@@ -965,7 +1046,7 @@ cmd_cross_review() {
 				print_error "--workdir requires a value"
 				return 1
 			}
-			workdir="$2"
+			cr_workdir="$2"
 			shift 2
 			;;
 		--timeout)
@@ -973,7 +1054,7 @@ cmd_cross_review() {
 				print_error "--timeout requires a value"
 				return 1
 			}
-			review_timeout="$2"
+			cr_timeout="$2"
 			shift 2
 			;;
 		--output)
@@ -981,11 +1062,11 @@ cmd_cross_review() {
 				print_error "--output requires a value"
 				return 1
 			}
-			output_dir="$2"
+			cr_output="$2"
 			shift 2
 			;;
 		--score)
-			score_flag=true
+			cr_score=true
 			shift
 			;;
 		--judge)
@@ -993,10 +1074,9 @@ cmd_cross_review() {
 				print_error "--judge requires a value"
 				return 1
 			}
-			judge_model="$2"
-			# Validate judge model identifier (used in filenames)
-			if [[ ! "$judge_model" =~ ^[A-Za-z0-9._-]+$ ]]; then
-				print_error "Invalid judge model identifier: $judge_model (only alphanumeric, dots, hyphens, underscores)"
+			cr_judge="$2"
+			if [[ ! "$cr_judge" =~ ^[A-Za-z0-9._-]+$ ]]; then
+				print_error "Invalid judge model identifier: $cr_judge (only alphanumeric, dots, hyphens, underscores)"
 				return 1
 			fi
 			shift 2
@@ -1006,7 +1086,7 @@ cmd_cross_review() {
 				print_error "--prompt-version requires a value"
 				return 1
 			}
-			prompt_version="$2"
+			cr_version="$2"
 			shift 2
 			;;
 		--prompt-file)
@@ -1014,7 +1094,7 @@ cmd_cross_review() {
 				print_error "--prompt-file requires a value"
 				return 1
 			}
-			prompt_file="$2"
+			cr_file="$2"
 			shift 2
 			;;
 		*)
@@ -1023,152 +1103,14 @@ cmd_cross_review() {
 			;;
 		esac
 	done
+	return 0
+}
 
-	if [[ -z "$prompt" ]]; then
-		print_error "--prompt is required"
-		echo "Usage: compare-models-helper.sh cross-review --prompt \"review this code\" --models \"sonnet,opus,pro\""
-		return 1
-	fi
-
-	# Default models: sonnet + opus (Anthropic second opinion)
-	if [[ -z "$models_str" ]]; then
-		models_str="sonnet,opus"
-	fi
-
-	# Set up output directory
-	if [[ -z "$output_dir" ]]; then
-		output_dir="${HOME}/.aidevops/.agent-workspace/tmp/cross-review-$(date +%Y%m%d%H%M%S)"
-	fi
-	mkdir -p "$output_dir"
-
-	# Set workdir
-	if [[ -z "$workdir" ]]; then
-		workdir="$(pwd)"
-	fi
-
-	local runner_helper="${SCRIPT_DIR}/runner-helper.sh"
-	if [[ ! -x "$runner_helper" ]]; then
-		print_error "runner-helper.sh not found at $runner_helper"
-		return 1
-	fi
-
-	# Parse models list
-	local -a model_array=()
-	IFS=',' read -ra model_array <<<"$models_str"
-
-	if [[ ${#model_array[@]} -lt 2 ]]; then
-		print_error "At least 2 models required for cross-review (got ${#model_array[@]})"
-		return 1
-	fi
-
-	echo ""
-	echo "Cross-Model Review"
-	echo "==================="
-	echo "Models: ${models_str}"
-	echo "Output: ${output_dir}"
-	echo "Timeout: ${review_timeout}s per model"
-	echo ""
-
-	# Create temporary runners for each model and dispatch in parallel
-	local -a pids=()
-	local -a runner_names=()
-	local -a model_names=()
-
-	for model_tier in "${model_array[@]}"; do
-		model_tier="${model_tier// /}"
-		[[ -z "$model_tier" ]] && continue
-
-		# Sanitize model identifier to prevent path traversal (reject chars outside safe set)
-		if [[ ! "$model_tier" =~ ^[A-Za-z0-9._-]+$ ]]; then
-			print_warning "Skipping invalid model identifier: $model_tier"
-			continue
-		fi
-
-		local runner_name="cross-review-${model_tier}-$$"
-		runner_names+=("$runner_name")
-		model_names+=("$model_tier")
-
-		# Resolve tier to full model string for display
-		local resolved_model
-		resolved_model=$(resolve_model_tier "$model_tier")
-
-		echo "  Dispatching to ${model_tier} (${resolved_model})..."
-
-		# Create runner, dispatch, capture output (errors logged per-model for debugging)
-		local model_err_log="${output_dir}/${model_tier}-errors.log"
-		(
-			local model_failed=0
-
-			"$runner_helper" create "$runner_name" \
-				--model "$model_tier" \
-				--description "Cross-review: $model_tier" \
-				--workdir "$workdir" 2>>"$model_err_log" || model_failed=1
-
-			local result_file="${output_dir}/${model_tier}.txt"
-			"$runner_helper" run "$runner_name" "$prompt" \
-				--model "$model_tier" \
-				--timeout "$review_timeout" \
-				--format json 2>>"$model_err_log" >"${output_dir}/${model_tier}.json" || model_failed=1
-
-			# Extract text response from JSON
-			if [[ -f "${output_dir}/${model_tier}.json" ]]; then
-				jq -r '.parts[]? | select(.type == "text") | .text' \
-					"${output_dir}/${model_tier}.json" 2>>"$model_err_log" >"$result_file" || model_failed=1
-			fi
-
-			# Clean up runner (always attempt cleanup, even on failure)
-			"$runner_helper" destroy "$runner_name" --force 2>>"$model_err_log" || true
-
-			# Fail if no usable output was produced
-			[[ -s "$result_file" ]] || model_failed=1
-			exit "$model_failed"
-		) &
-		pids+=($!)
-	done
-
-	# Wait for all dispatches to complete
-	echo ""
-	echo "Waiting for ${#pids[@]} models to respond..."
-	local failed=0
-	for i in "${!pids[@]}"; do
-		if ! wait "${pids[$i]}" 2>/dev/null; then
-			local err_log="${output_dir}/${model_names[$i]}-errors.log"
-			echo "  ${model_names[$i]}: failed (see ${err_log})"
-			failed=$((failed + 1))
-		else
-			echo "  ${model_names[$i]}: done"
-		fi
-	done
-
-	echo ""
-
-	# Collect and display results
-	local results_found=0
-	for model_tier in "${model_names[@]}"; do
-		local result_file="${output_dir}/${model_tier}.txt"
-		if [[ -f "$result_file" && -s "$result_file" ]]; then
-			results_found=$((results_found + 1))
-			echo "=== ${model_tier} ==="
-			echo ""
-			cat "$result_file"
-			echo ""
-			echo "---"
-			echo ""
-		fi
-	done
-
-	if [[ "$results_found" -lt 2 ]]; then
-		print_warning "Only $results_found model(s) returned results. Need at least 2 for comparison."
-		echo "Check output directory: $output_dir"
-		return 1
-	fi
-
-	# Generate diff summary if we have 2+ results
-	echo "=== DIFF SUMMARY ==="
-	echo ""
-	echo "Models compared: ${models_str}"
-	echo "Results: ${results_found}/${#model_names[@]} successful"
-	echo ""
+# Display diff summary for cross-review results
+_cross_review_show_diff() {
+	local output_dir="$1"
+	shift
+	local -a model_names=("$@")
 
 	# Word count comparison
 	echo "Response sizes:"
@@ -1188,7 +1130,6 @@ cmd_cross_review() {
 		local file_b="${output_dir}/${model_names[1]}.txt"
 		if [[ -f "$file_a" && -f "$file_b" ]]; then
 			echo "Diff (${model_names[0]} vs ${model_names[1]}):"
-			# diff exits 1 when files differ — capture separately to avoid pipefail
 			local diff_output diff_status
 			diff_output=$(diff --unified=3 "$file_a" "$file_b" 2>/dev/null) && diff_status=$? || diff_status=$?
 			if [[ "$diff_status" -le 1 && -n "$diff_output" ]]; then
@@ -1199,18 +1140,204 @@ cmd_cross_review() {
 			echo ""
 		fi
 	fi
+	return 0
+}
 
+# Dispatch one model in a subshell for cross-review; writes result to output_dir.
+# Args: $1=runner_helper $2=runner_name $3=model_tier $4=prompt $5=review_timeout $6=workdir $7=output_dir
+_cross_review_dispatch_one() {
+	local runner_helper="$1"
+	local runner_name="$2"
+	local model_tier="$3"
+	local prompt="$4"
+	local review_timeout="$5"
+	local workdir="$6"
+	local output_dir="$7"
+	local model_err_log="${output_dir}/${model_tier}-errors.log"
+	local result_file="${output_dir}/${model_tier}.txt"
+	local model_failed=0
+
+	"$runner_helper" create "$runner_name" \
+		--model "$model_tier" \
+		--description "Cross-review: $model_tier" \
+		--workdir "$workdir" 2>>"$model_err_log" || model_failed=1
+
+	"$runner_helper" run "$runner_name" "$prompt" \
+		--model "$model_tier" \
+		--timeout "$review_timeout" \
+		--format json 2>>"$model_err_log" >"${output_dir}/${model_tier}.json" || model_failed=1
+
+	# Extract text response from JSON
+	if [[ -f "${output_dir}/${model_tier}.json" ]]; then
+		jq -r '.parts[]? | select(.type == "text") | .text' \
+			"${output_dir}/${model_tier}.json" 2>>"$model_err_log" >"$result_file" || model_failed=1
+	fi
+
+	# Clean up runner (always attempt cleanup, even on failure)
+	"$runner_helper" destroy "$runner_name" --force 2>>"$model_err_log" || true
+
+	# Fail if no usable output was produced
+	[[ -s "$result_file" ]] || model_failed=1
+	return "$model_failed"
+}
+
+# Wait for parallel pids and report per-model status.
+# Args: $1=output_dir; remaining args alternate: pid model_name ...
+# Outputs count of failures to stdout as last line "failed=N".
+_cross_review_wait_results() {
+	local output_dir="$1"
+	shift
+	local failed=0
+	while [[ $# -ge 2 ]]; do
+		local pid="$1"
+		local model_name="$2"
+		shift 2
+		if ! wait "$pid" 2>/dev/null; then
+			local err_log="${output_dir}/${model_name}-errors.log"
+			echo "  ${model_name}: failed (see ${err_log})"
+			failed=$((failed + 1))
+		else
+			echo "  ${model_name}: done"
+		fi
+	done
+	echo "failed=${failed}"
+	return 0
+}
+
+cmd_cross_review() {
+	local prompt="" models_str="" workdir="" review_timeout="600" output_dir=""
+	local score_flag=false judge_model="opus"
+	local prompt_version="" prompt_file=""
+
+	# Parse arguments
+	_cross_review_parse_args prompt models_str workdir review_timeout output_dir score_flag judge_model prompt_version prompt_file "$@" || return 1
+
+	if [[ -z "$prompt" ]]; then
+		print_error "--prompt is required"
+		echo "Usage: compare-models-helper.sh cross-review --prompt \"review this code\" --models \"sonnet,opus,pro\""
+		return 1
+	fi
+
+	# Default models: sonnet + opus (Anthropic second opinion)
+	[[ -z "$models_str" ]] && models_str="sonnet,opus"
+
+	# Set up output directory and workdir
+	[[ -z "$output_dir" ]] && output_dir="${HOME}/.aidevops/.agent-workspace/tmp/cross-review-$(date +%Y%m%d%H%M%S)"
+	mkdir -p "$output_dir"
+	[[ -z "$workdir" ]] && workdir="$(pwd)"
+
+	local runner_helper="${SCRIPT_DIR}/runner-helper.sh"
+	if [[ ! -x "$runner_helper" ]]; then
+		print_error "runner-helper.sh not found at $runner_helper"
+		return 1
+	fi
+
+	# Parse and validate models list
+	local -a model_array=()
+	IFS=',' read -ra model_array <<<"$models_str"
+	if [[ ${#model_array[@]} -lt 2 ]]; then
+		print_error "At least 2 models required for cross-review (got ${#model_array[@]})"
+		return 1
+	fi
+
+	echo ""
+	echo "Cross-Model Review"
+	echo "==================="
+	echo "Models: ${models_str}"
+	echo "Output: ${output_dir}"
+	echo "Timeout: ${review_timeout}s per model"
+	echo ""
+
+	# Dispatch all models in parallel and wait
+	local -a model_names=()
+	_cross_review_dispatch_all "$runner_helper" "$prompt" "$review_timeout" \
+		"$workdir" "$output_dir" model_names "${model_array[@]}"
+
+	# Collect and display results
+	local results_found=0
+	local model_tier
+	for model_tier in "${model_names[@]}"; do
+		local result_file="${output_dir}/${model_tier}.txt"
+		if [[ -f "$result_file" && -s "$result_file" ]]; then
+			results_found=$((results_found + 1))
+			echo "=== ${model_tier} ==="
+			echo ""
+			cat "$result_file"
+			echo ""
+			echo "---"
+			echo ""
+		fi
+	done
+
+	if [[ "$results_found" -lt 2 ]]; then
+		print_warning "Only $results_found model(s) returned results. Need at least 2 for comparison."
+		echo "Check output directory: $output_dir"
+		return 1
+	fi
+
+	# Generate diff summary
+	echo "=== DIFF SUMMARY ==="
+	echo ""
+	echo "Models compared: ${models_str}"
+	echo "Results: ${results_found}/${#model_names[@]} successful"
+	echo ""
+	_cross_review_show_diff "$output_dir" "${model_names[@]}"
 	echo "Full results saved to: $output_dir"
 	echo ""
 
 	# Judge scoring pipeline (t1329)
-	# When --score is set, dispatch all outputs to a judge model for structured scoring.
 	if [[ "$score_flag" == "true" ]]; then
 		_cross_review_judge_score \
 			"$prompt" "$models_str" "$output_dir" "$judge_model" \
 			"$prompt_version" "$prompt_file" "${model_names[@]}"
 	fi
 
+	return 0
+}
+
+# Dispatch all models in parallel and wait for completion.
+# Populates the nameref array with validated model names.
+# Args: $1=runner_helper $2=prompt $3=timeout $4=workdir $5=output_dir $6=nameref_array $7+=model_array
+_cross_review_dispatch_all() {
+	local runner_helper="$1"
+	local prompt="$2"
+	local review_timeout="$3"
+	local workdir="$4"
+	local output_dir="$5"
+	local -n _da_model_names="$6"
+	shift 6
+	local -a model_array=("$@")
+
+	local -a pids=()
+	local model_tier
+	for model_tier in "${model_array[@]}"; do
+		model_tier="${model_tier// /}"
+		[[ -z "$model_tier" ]] && continue
+		if [[ ! "$model_tier" =~ ^[A-Za-z0-9._-]+$ ]]; then
+			print_warning "Skipping invalid model identifier: $model_tier"
+			continue
+		fi
+		local runner_name="cross-review-${model_tier}-$$"
+		_da_model_names+=("$model_tier")
+		local resolved_model
+		resolved_model=$(resolve_model_tier "$model_tier")
+		echo "  Dispatching to ${model_tier} (${resolved_model})..."
+		_cross_review_dispatch_one "$runner_helper" "$runner_name" "$model_tier" \
+			"$prompt" "$review_timeout" "$workdir" "$output_dir" &
+		pids+=($!)
+	done
+
+	echo ""
+	echo "Waiting for ${#pids[@]} models to respond..."
+	local wait_args=()
+	local i
+	for i in "${!pids[@]}"; do
+		wait_args+=("${pids[$i]}" "${_da_model_names[$i]}")
+	done
+	local wait_output
+	wait_output=$(_cross_review_wait_results "$output_dir" "${wait_args[@]}")
+	echo "$wait_output" | grep -v '^failed='
+	echo ""
 	return 0
 }
 
@@ -1353,7 +1480,7 @@ cmd_help() {
 	echo "Scoring examples:"
 	echo "  compare-models-helper.sh score --task 'fix React bug' --type code \\"
 	echo "    --model claude-sonnet-4-6 --correctness 9 --completeness 8 --quality 8 --clarity 9 --adherence 9 \\"
-	echo "    --model gpt-4.1 --correctness 8 --completeness 7 --quality 7 --clarity 8 --adherence 8 \\"
+	echo "    --model gpt-5.3-codex --correctness 8 --completeness 7 --quality 7 --clarity 8 --adherence 8 \\"
 	echo "    --winner claude-sonnet-4-6"
 	echo "  compare-models-helper.sh score --task 'review code' --prompt-file prompts/build.txt \\"
 	echo "    --model sonnet --correctness 9 --completeness 8 --quality 8 --clarity 9 --adherence 9"
@@ -1385,7 +1512,7 @@ cmd_help() {
 	echo ""
 	echo "Bench examples (t1393):"
 	echo "  compare-models-helper.sh bench 'What is 2+2?' claude-sonnet-4-6 gpt-4o"
-	echo "  compare-models-helper.sh bench 'Explain quicksort' claude-sonnet-4-6 gpt-4.1 gemini-2.5-pro --judge"
+	echo "  compare-models-helper.sh bench 'Explain quicksort' claude-sonnet-4-6 gpt-5.3-codex gemini-2.5-pro --judge"
 	echo "  compare-models-helper.sh bench --dataset prompts.jsonl claude-sonnet-4-6 gpt-4o --judge"
 	echo "  compare-models-helper.sh bench 'What is 2+2?' claude-sonnet-4-6 --dry-run"
 	echo "  compare-models-helper.sh bench --history --limit 10"
@@ -1552,10 +1679,110 @@ list_provider_models() {
 	return 0
 }
 
+# Check if a provider is available (has valid API key)
+_discover_check_provider() {
+	local provider="$1"
+	local -n found_ref="$2"
+	local -n source_ref="$3"
+	local -n active_key_ref="$4"
+
+	found_ref=false
+	source_ref=""
+	active_key_ref=""
+
+	local key_names
+	key_names=$(echo "$PROVIDER_ENV_KEYS" | grep "^${provider}|" | cut -d'|' -f2)
+	[[ -z "$key_names" ]] && return 1
+
+	local -a keys
+	IFS=',' read -ra keys <<<"$key_names"
+	for key_name in "${keys[@]}"; do
+		if check_provider_key "$key_name"; then
+			found_ref=true
+			source_ref="$FOUND_SOURCE"
+			active_key_ref="$key_name"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Scan all providers and print/collect status.
+# Args: $1=probe_flag $2=list_flag $3=json_flag
+# Outputs: "total|available|models" on last line for caller to parse.
+_discover_scan_providers() {
+	local probe_flag="$1"
+	local list_flag="$2"
+	local json_flag="$3"
+
+	local total_providers=0
+	local available_providers=0
+	local available_models=0
+	local -a json_entries=()
+
+	while IFS= read -r line; do
+		local provider
+		provider=$(echo "$line" | cut -d'|' -f1)
+		total_providers=$((total_providers + 1))
+		local found=false source="" active_key=""
+		_discover_check_provider "$provider" found source active_key
+
+		if [[ "$found" == "true" ]]; then
+			available_providers=$((available_providers + 1))
+			local status="configured" status_icon="Y"
+			if [[ "$probe_flag" == "true" ]]; then
+				if probe_provider "$provider" "$active_key"; then
+					status="verified"
+					status_icon="V"
+				else
+					status="key-invalid"
+					status_icon="!"
+				fi
+			fi
+			local model_count
+			model_count=$(echo "$MODEL_DATA" | grep -c "|${provider}|" || true)
+			available_models=$((available_models + model_count))
+			if [[ "$json_flag" == "true" ]]; then
+				json_entries+=("{\"provider\":\"${provider}\",\"status\":\"${status}\",\"source\":\"${source}\",\"models\":${model_count}}")
+			else
+				printf "  %s %-12s  %-12s  (source: %s, %d tracked models)\n" \
+					"$status_icon" "$provider" "$status" "$source" "$model_count"
+			fi
+			if [[ "$list_flag" == "true" && "$status" == "verified" ]]; then
+				local live_models
+				live_models=$(list_provider_models "$provider" "$active_key" 2>/dev/null)
+				if [[ -n "$live_models" ]]; then
+					local live_count
+					live_count=$(echo "$live_models" | wc -l | tr -d ' ')
+					echo "    Live models ($live_count):"
+					echo "$live_models" | head -20 | while IFS= read -r m; do
+						echo "      - $m"
+					done
+					local remaining=$((live_count - 20))
+					[[ "$remaining" -gt 0 ]] && echo "      ... and $remaining more"
+				fi
+			fi
+		else
+			if [[ "$json_flag" == "true" ]]; then
+				json_entries+=("{\"provider\":\"${provider}\",\"status\":\"not-configured\",\"source\":null,\"models\":0}")
+			else
+				printf "  - %-12s  not configured\n" "$provider"
+			fi
+		fi
+	done <<<"$PROVIDER_ENV_KEYS"
+
+	if [[ "$json_flag" == "true" ]]; then
+		echo "[$(
+			IFS=,
+			echo "${json_entries[*]}"
+		)]"
+	fi
+	echo "counts=${total_providers}|${available_providers}|${available_models}"
+	return 0
+}
+
 cmd_discover() {
-	local probe_flag=false
-	local list_flag=false
-	local json_flag=false
+	local probe_flag=false list_flag=false json_flag=false
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -1581,182 +1808,76 @@ cmd_discover() {
 	echo "========================"
 	echo ""
 
-	local total_providers=0
-	local available_providers=0
-	local available_models=0
-	local json_entries=()
+	local scan_output counts_line
+	scan_output=$(_discover_scan_providers "$probe_flag" "$list_flag" "$json_flag")
+	counts_line=$(echo "$scan_output" | grep '^counts=')
+	echo "$scan_output" | grep -v '^counts='
 
-	while IFS= read -r line; do
-		local provider key_names
-		provider=$(echo "$line" | cut -d'|' -f1)
-		key_names=$(echo "$line" | cut -d'|' -f2)
-
-		total_providers=$((total_providers + 1))
-		local found=false
-		local source=""
-		local active_key=""
-
-		# Check each possible key name for this provider
-		local -a keys
-		IFS=',' read -ra keys <<<"$key_names"
-		for key_name in "${keys[@]}"; do
-			if check_provider_key "$key_name"; then
-				found=true
-				source="$FOUND_SOURCE"
-				active_key="$key_name"
-				break
-			fi
-		done
-
-		if [[ "$found" == "true" ]]; then
-			available_providers=$((available_providers + 1))
-			local status="configured"
-			local status_icon="Y"
-
-			# Optionally probe the API
-			if [[ "$probe_flag" == "true" ]]; then
-				if probe_provider "$provider" "$active_key"; then
-					status="verified"
-					status_icon="V"
-				else
-					status="key-invalid"
-					status_icon="!"
-				fi
-			fi
-
-			# Count models from embedded database for this provider
-			local model_count
-			model_count=$(echo "$MODEL_DATA" | grep -c "|${provider}|" || true)
-			available_models=$((available_models + model_count))
-
-			if [[ "$json_flag" == "true" ]]; then
-				json_entries+=("{\"provider\":\"${provider}\",\"status\":\"${status}\",\"source\":\"${source}\",\"models\":${model_count}}")
-			else
-				printf "  %s %-12s  %-12s  (source: %s, %d tracked models)\n" \
-					"$status_icon" "$provider" "$status" "$source" "$model_count"
-			fi
-
-			# Optionally list live models from API
-			if [[ "$list_flag" == "true" && "$status" == "verified" ]]; then
-				local live_models
-				live_models=$(list_provider_models "$provider" "$active_key" 2>/dev/null)
-				if [[ -n "$live_models" ]]; then
-					local live_count
-					live_count=$(echo "$live_models" | wc -l | tr -d ' ')
-					echo "    Live models ($live_count):"
-					echo "$live_models" | head -20 | while IFS= read -r m; do
-						echo "      - $m"
-					done
-					local remaining=$((live_count - 20))
-					if [[ "$remaining" -gt 0 ]]; then
-						echo "      ... and $remaining more"
-					fi
-				fi
-			fi
-		else
-			if [[ "$json_flag" == "true" ]]; then
-				json_entries+=("{\"provider\":\"${provider}\",\"status\":\"not-configured\",\"source\":null,\"models\":0}")
-			else
-				printf "  - %-12s  not configured\n" "$provider"
-			fi
-		fi
-	done <<<"$PROVIDER_ENV_KEYS"
-
-	if [[ "$json_flag" == "true" ]]; then
-		echo "[$(
-			IFS=,
-			echo "${json_entries[*]}"
-		)]"
-	else
+	if [[ "$json_flag" != "true" ]]; then
+		local total_providers available_providers available_models
+		IFS='|' read -r total_providers available_providers available_models \
+			<<<"${counts_line#counts=}"
 		echo ""
 		echo "Summary: $available_providers/$total_providers providers configured, $available_models tracked models available"
 		echo ""
-
 		if [[ "$probe_flag" != "true" ]]; then
 			echo "Tip: Use --probe to verify API keys are valid"
 			echo "     Use --list-models to enumerate live models from each provider"
 		fi
-
-		# Show models grouped by availability
-		echo ""
-		echo "Available Models (from configured providers):"
-		echo ""
-		printf "  %-22s %-10s %-8s %-12s %-12s %-7s\n" \
-			"Model" "Provider" "Context" "Input/1M" "Output/1M" "Tier"
-		printf "  %-22s %-10s %-8s %-12s %-12s %-7s\n" \
-			"-----" "--------" "-------" "--------" "---------" "----"
-
-		echo "$MODEL_DATA" | while IFS= read -r model_line; do
-			local model_provider
-			model_provider=$(get_field "$model_line" 2)
-
-			# Check if this provider is available
-			local provider_available=false
-			while IFS= read -r pline; do
-				local pname pkeys
-				pname=$(echo "$pline" | cut -d'|' -f1)
-				pkeys=$(echo "$pline" | cut -d'|' -f2)
-				if [[ "$pname" == "$model_provider" ]]; then
-					local -a pkey_arr
-					IFS=',' read -ra pkey_arr <<<"$pkeys"
-					for pk in "${pkey_arr[@]}"; do
-						if check_provider_key "$pk"; then
-							provider_available=true
-							break
-						fi
-					done
-					break
-				fi
-			done <<<"$PROVIDER_ENV_KEYS"
-
-			if [[ "$provider_available" == "true" ]]; then
-				local mid mctx minput moutput mtier
-				mid=$(get_field "$model_line" 1)
-				mctx=$(get_field "$model_line" 4)
-				minput=$(get_field "$model_line" 5)
-				moutput=$(get_field "$model_line" 6)
-				mtier=$(get_field "$model_line" 7)
-				local ctx_fmt
-				ctx_fmt=$(format_context "$mctx")
-				printf "  %-22s %-10s %-8s %-12s %-12s %-7s\n" \
-					"$mid" "$model_provider" "$ctx_fmt" "\$$minput" "\$$moutput" "$mtier"
-			fi
-		done
-
-		echo ""
-		echo "Unavailable Models (provider not configured):"
-		echo ""
-
-		echo "$MODEL_DATA" | while IFS= read -r model_line; do
-			local model_provider
-			model_provider=$(get_field "$model_line" 2)
-
-			local provider_available=false pname pkeys
-			while IFS= read -r pline; do
-				pname=$(echo "$pline" | cut -d'|' -f1)
-				pkeys=$(echo "$pline" | cut -d'|' -f2)
-				if [[ "$pname" == "$model_provider" ]]; then
-					local -a pkey_arr
-					IFS=',' read -ra pkey_arr <<<"$pkeys"
-					for pk in "${pkey_arr[@]}"; do
-						if check_provider_key "$pk"; then
-							provider_available=true
-							break
-						fi
-					done
-					break
-				fi
-			done <<<"$PROVIDER_ENV_KEYS"
-
-			if [[ "$provider_available" != "true" ]]; then
-				local mid
-				mid=$(get_field "$model_line" 1)
-				echo "  - $mid ($model_provider)"
-			fi
-		done
+		_discover_print_available_models
+		_discover_print_unavailable_models
 	fi
 
 	echo ""
+	return 0
+}
+
+# Print table of models from configured providers.
+_discover_print_available_models() {
+	echo ""
+	echo "Available Models (from configured providers):"
+	echo ""
+	printf "  %-22s %-10s %-8s %-12s %-12s %-7s\n" \
+		"Model" "Provider" "Context" "Input/1M" "Output/1M" "Tier"
+	printf "  %-22s %-10s %-8s %-12s %-12s %-7s\n" \
+		"-----" "--------" "-------" "--------" "---------" "----"
+
+	echo "$MODEL_DATA" | while IFS= read -r model_line; do
+		local model_provider
+		model_provider=$(get_field "$model_line" 2)
+		local provider_available=false dummy1 dummy2
+		_discover_check_provider "$model_provider" provider_available dummy1 dummy2
+		if [[ "$provider_available" == "true" ]]; then
+			local mid mctx minput moutput mtier ctx_fmt
+			mid=$(get_field "$model_line" 1)
+			mctx=$(get_field "$model_line" 4)
+			minput=$(get_field "$model_line" 5)
+			moutput=$(get_field "$model_line" 6)
+			mtier=$(get_field "$model_line" 7)
+			ctx_fmt=$(format_context "$mctx")
+			printf "  %-22s %-10s %-8s %-12s %-12s %-7s\n" \
+				"$mid" "$model_provider" "$ctx_fmt" "\$$minput" "\$$moutput" "$mtier"
+		fi
+	done
+	return 0
+}
+
+# Print list of models from unconfigured providers.
+_discover_print_unavailable_models() {
+	echo ""
+	echo "Unavailable Models (provider not configured):"
+	echo ""
+	echo "$MODEL_DATA" | while IFS= read -r model_line; do
+		local model_provider
+		model_provider=$(get_field "$model_line" 2)
+		local provider_available=false dummy1 dummy2
+		_discover_check_provider "$model_provider" provider_available dummy1 dummy2
+		if [[ "$provider_available" != "true" ]]; then
+			local mid
+			mid=$(get_field "$model_line" 1)
+			echo "  - $mid ($model_provider)"
+		fi
+	done
 	return 0
 }
 
@@ -1822,12 +1943,17 @@ SQL
 #        --clarity 8 --adherence 9 --latency 1200 --tokens 500 \
 #        --strengths "Fast, accurate" --weaknesses "Verbose" \
 #        [--model "gpt-4.1" --correctness 8 ...]
-cmd_score() {
-	init_results_db || return 1
+# Parse score arguments and build model entries
+_score_parse_and_build() {
+	local -n sp_task="$1"
+	local -n sp_type="$2"
+	local -n sp_eval="$3"
+	local -n sp_winner="$4"
+	local -n sp_pv="$5"
+	local -n sp_pf="$6"
+	local -n sp_entries="$7"
+	shift 7
 
-	local task="" task_type="general" evaluator="" winner=""
-	local prompt_version="" prompt_file=""
-	local -a model_entries=()
 	local current_model="" current_correct=0 current_complete=0 current_quality=0
 	local current_clarity=0 current_adherence=0 current_latency=0 current_tokens=0
 	local current_strengths="" current_weaknesses="" current_response=""
@@ -1835,7 +1961,7 @@ cmd_score() {
 	flush_model() {
 		if [[ -n "$current_model" ]]; then
 			local overall=$(((current_correct + current_complete + current_quality + current_clarity + current_adherence) / 5))
-			model_entries+=("${current_model}|${current_correct}|${current_complete}|${current_quality}|${current_clarity}|${current_adherence}|${overall}|${current_latency}|${current_tokens}|${current_strengths}|${current_weaknesses}|${current_response}")
+			sp_entries+=("${current_model}|${current_correct}|${current_complete}|${current_quality}|${current_clarity}|${current_adherence}|${overall}|${current_latency}|${current_tokens}|${current_strengths}|${current_weaknesses}|${current_response}")
 		fi
 		current_model="" current_correct=0 current_complete=0 current_quality=0
 		current_clarity=0 current_adherence=0 current_latency=0 current_tokens=0
@@ -1845,27 +1971,27 @@ cmd_score() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--task)
-			task="$2"
+			sp_task="$2"
 			shift 2
 			;;
 		--type)
-			task_type="$2"
+			sp_type="$2"
 			shift 2
 			;;
 		--evaluator)
-			evaluator="$2"
+			sp_eval="$2"
 			shift 2
 			;;
 		--winner)
-			winner="$2"
+			sp_winner="$2"
 			shift 2
 			;;
 		--prompt-version)
-			prompt_version="$2"
+			sp_pv="$2"
 			shift 2
 			;;
 		--prompt-file)
-			prompt_file="$2"
+			sp_pf="$2"
 			shift 2
 			;;
 		--model)
@@ -1917,6 +2043,57 @@ cmd_score() {
 		esac
 	done
 	flush_model
+	return 0
+}
+
+# Sync scores to pattern tracker
+_score_sync_pattern_tracker() {
+	local task_type="$1"
+	shift
+	local -a model_entries=("$@")
+
+	local pt_helper="${SCRIPT_DIR}/pattern-tracker-helper.sh"
+	[[ ! -x "$pt_helper" ]] && return 0
+
+	for entry in "${model_entries[@]}"; do
+		IFS='|' read -r m_id m_cor m_com m_qua m_cla m_adh m_ove m_lat m_tok _ _ _ <<<"$entry"
+		local m_tier
+		m_tier=$(model_id_to_tier "$m_id")
+		[[ -z "$m_tier" ]] && m_tier="$m_id"
+
+		# Normalize 1-10 scores to 1-5 (halve, round)
+		local norm_cor norm_com norm_qua norm_cla norm_tok_arg=()
+		norm_cor=$(awk "BEGIN{v=int($m_cor/2+0.5); if(v<1)v=1; if(v>5)v=5; print v}")
+		norm_com=$(awk "BEGIN{v=int($m_com/2+0.5); if(v<1)v=1; if(v>5)v=5; print v}")
+		norm_qua=$(awk "BEGIN{v=int($m_qua/2+0.5); if(v<1)v=1; if(v>5)v=5; print v}")
+		norm_cla=$(awk "BEGIN{v=int($m_cla/2+0.5); if(v<1)v=1; if(v>5)v=5; print v}")
+		if [[ "$m_tok" =~ ^[0-9]+$ ]] && [[ "$m_tok" -gt 0 ]]; then
+			norm_tok_arg=(--tokens-out "$m_tok")
+		fi
+
+		"$pt_helper" score \
+			--model "$m_tier" \
+			--task-type "$task_type" \
+			--correctness "$norm_cor" \
+			--completeness "$norm_com" \
+			--code-quality "$norm_qua" \
+			--clarity "$norm_cla" \
+			"${norm_tok_arg[@]}" \
+			--source "compare-models" \
+			>/dev/null 2>&1 || true
+	done
+	return 0
+}
+
+cmd_score() {
+	init_results_db || return 1
+
+	local task="" task_type="general" evaluator="" winner=""
+	local prompt_version="" prompt_file=""
+	local -a model_entries=()
+
+	# Parse arguments and build model entries
+	_score_parse_and_build task task_type evaluator winner prompt_version prompt_file model_entries "$@"
 
 	if [[ -z "$task" ]]; then
 		echo "Usage: compare-models-helper.sh score --task 'description' --model 'model-id' --correctness N ..."
@@ -1952,21 +2129,50 @@ cmd_score() {
 		prompt_version=$(git log -1 --format='%h' -- "$prompt_file" 2>/dev/null) || prompt_version=""
 	fi
 
-	# Insert comparison record (escape all string values for SQL safety)
-	local comp_id safe_task safe_type safe_eval safe_winner safe_pv safe_pf
+	# Insert comparison + scores into DB
+	local comp_id
+	comp_id=$(_score_insert_comparison "$task" "$task_type" "$evaluator" "$winner" \
+		"$prompt_version" "$prompt_file" "${model_entries[@]}") || return 1
+
+	print_success "Comparison #$comp_id recorded ($task_type: ${#model_entries[@]} models scored)"
+
+	# Display summary table
+	_score_display_table "$winner" "${model_entries[@]}"
+
+	# Sync to unified pattern tracker backbone (t1094)
+	_score_sync_pattern_tracker "$task_type" "${model_entries[@]}"
+
+	return 0
+}
+
+# Insert a comparison record and its per-model scores into RESULTS_DB.
+# Echoes the new comparison ID on success.
+# Args: $1=task $2=task_type $3=evaluator $4=winner $5=prompt_version $6=prompt_file $7+=model_entries
+_score_insert_comparison() {
+	local task="$1"
+	local task_type="$2"
+	local evaluator="$3"
+	local winner="$4"
+	local prompt_version="$5"
+	local prompt_file="$6"
+	shift 6
+	local -a model_entries=("$@")
+
+	local safe_task safe_type safe_eval safe_winner safe_pv safe_pf
 	safe_task="${task//\'/\'\'}"
 	safe_type="${task_type//\'/\'\'}"
 	safe_eval="${evaluator//\'/\'\'}"
 	safe_winner="${winner//\'/\'\'}"
 	safe_pv="${prompt_version//\'/\'\'}"
 	safe_pf="${prompt_file//\'/\'\'}"
+	local comp_id
 	comp_id=$(sqlite3 "$RESULTS_DB" "INSERT INTO comparisons (task_description, task_type, evaluator_model, winner_model, prompt_version, prompt_file) VALUES ('${safe_task}', '${safe_type}', '${safe_eval}', '${safe_winner}', '${safe_pv}', '${safe_pf}'); SELECT last_insert_rowid();")
 
-	# Insert scores for each model (escape strings, validate numerics)
+	local entry
 	for entry in "${model_entries[@]}"; do
 		IFS='|' read -r m_id m_cor m_com m_qua m_cla m_adh m_ove m_lat m_tok m_str m_wea m_res <<<"$entry"
-
 		# Validate all numeric fields — reject non-integer values to prevent SQL injection
+		local n
 		for n in m_cor m_com m_qua m_cla m_adh m_ove m_lat m_tok; do
 			if ! [[ "${!n}" =~ ^[0-9]+$ ]]; then
 				print_error "Invalid numeric value for ${n}: ${!n}"
@@ -1974,12 +2180,12 @@ cmd_score() {
 			fi
 		done
 		# Clamp score fields to valid 0-10 range
+		local s
 		for s in m_cor m_com m_qua m_cla m_adh m_ove; do
 			if ((${!s} > 10)); then
 				printf -v "$s" "10"
 			fi
 		done
-
 		local safe_id="${m_id//\'/\'\'}"
 		local safe_str="${m_str//\'/\'\'}"
 		local safe_wea="${m_wea//\'/\'\'}"
@@ -1987,15 +2193,24 @@ cmd_score() {
 		sqlite3 "$RESULTS_DB" "INSERT INTO comparison_scores (comparison_id, model_id, correctness, completeness, code_quality, clarity, adherence, overall, latency_ms, tokens_used, strengths, weaknesses, response_file) VALUES ($comp_id, '${safe_id}', $m_cor, $m_com, $m_qua, $m_cla, $m_adh, $m_ove, $m_lat, $m_tok, '${safe_str}', '${safe_wea}', '${safe_res}');"
 	done
 
-	print_success "Comparison #$comp_id recorded ($task_type: ${#model_entries[@]} models scored)"
+	echo "$comp_id"
+	return 0
+}
 
-	# Display summary table
+# Display a formatted score summary table for model_entries.
+# Args: $1=winner $2+=model_entries
+_score_display_table() {
+	local winner="$1"
+	shift
+	local -a model_entries=("$@")
+
 	echo ""
 	printf "%-22s %5s %5s %5s %5s %5s %7s %8s %6s\n" \
 		"Model" "Corr" "Comp" "Qual" "Clar" "Adhr" "Overall" "Latency" "Tokens"
 	printf "%-22s %5s %5s %5s %5s %5s %7s %8s %6s\n" \
 		"-----" "----" "----" "----" "----" "----" "-------" "-------" "------"
 
+	local entry
 	for entry in "${model_entries[@]}"; do
 		IFS='|' read -r m_id m_cor m_com m_qua m_cla m_adh m_ove m_lat m_tok _ _ _ <<<"$entry"
 		local lat_fmt="${m_lat}ms"
@@ -2010,70 +2225,101 @@ cmd_score() {
 		echo "  Winner: $winner"
 	fi
 	echo ""
-
-	# Sync to unified pattern tracker backbone (t1094)
-	# Scores are 1-10 here; normalize to 1-5 for pattern tracker compatibility.
-	local pt_helper="${SCRIPT_DIR}/pattern-tracker-helper.sh"
-	if [[ -x "$pt_helper" ]]; then
-		local winner_tier=""
-		local loser_args=()
-		local winner_overall=0
-
-		for entry in "${model_entries[@]}"; do
-			IFS='|' read -r m_id m_cor m_com m_qua m_cla m_adh m_ove m_lat m_tok _ _ _ <<<"$entry"
-			local m_tier
-			m_tier=$(model_id_to_tier "$m_id")
-			[[ -z "$m_tier" ]] && m_tier="$m_id"
-
-			# Normalize 1-10 scores to 1-5 (halve, round)
-			local norm_cor norm_com norm_qua norm_cla norm_tok_arg=()
-			norm_cor=$(awk "BEGIN{v=int($m_cor/2+0.5); if(v<1)v=1; if(v>5)v=5; print v}")
-			norm_com=$(awk "BEGIN{v=int($m_com/2+0.5); if(v<1)v=1; if(v>5)v=5; print v}")
-			norm_qua=$(awk "BEGIN{v=int($m_qua/2+0.5); if(v<1)v=1; if(v>5)v=5; print v}")
-			norm_cla=$(awk "BEGIN{v=int($m_cla/2+0.5); if(v<1)v=1; if(v>5)v=5; print v}")
-			if [[ "$m_tok" =~ ^[0-9]+$ ]] && [[ "$m_tok" -gt 0 ]]; then
-				norm_tok_arg=(--tokens-out "$m_tok")
-			fi
-
-			"$pt_helper" score \
-				--model "$m_tier" \
-				--task-type "$task_type" \
-				--correctness "$norm_cor" \
-				--completeness "$norm_com" \
-				--code-quality "$norm_qua" \
-				--clarity "$norm_cla" \
-				"${norm_tok_arg[@]}" \
-				--source "compare-models" \
-				>/dev/null 2>&1 || true
-
-			# Track winner for ab-compare
-			if [[ -n "$winner" && "$m_id" == "$winner" ]]; then
-				winner_tier="$m_tier"
-				winner_overall="$m_ove"
-			elif [[ -n "$winner" && "$m_id" != "$winner" ]]; then
-				loser_args+=(--loser "$m_tier")
-			fi
-		done
-
-		# Record A/B comparison if a winner was declared
-		if [[ -n "$winner_tier" && "${#loser_args[@]}" -gt 0 ]]; then
-			local winner_avg_norm
-			winner_avg_norm=$(awk "BEGIN{printf \"%.1f\", $winner_overall / 2}")
-			"$pt_helper" ab-compare \
-				--winner "$winner_tier" \
-				"${loser_args[@]}" \
-				--task-type "$task_type" \
-				--winner-score "$winner_avg_norm" \
-				--models-compared "${#model_entries[@]}" \
-				--source "compare-models" \
-				>/dev/null 2>&1 || true
-		fi
-	fi
-
 	return 0
 }
 
 # View past comparison results
+# Display recent comparisons from results
+_results_show_recent() {
+	local limit="$1"
+
+	sqlite3 -separator '|' "$RESULTS_DB" "
+        SELECT c.id, c.created_at, c.task_type, c.task_description, c.winner_model,
+               COALESCE(c.prompt_version, ''), COALESCE(c.prompt_file, '')
+        FROM comparisons c
+        ORDER BY c.created_at DESC
+        LIMIT $limit;
+    " 2>/dev/null | while IFS='|' read -r cid cdate ctype cdesc cwinner cpv cpf; do
+		echo "  #$cid [$ctype] $(echo "$cdesc" | head -c 60) ($cdate)"
+		[[ -n "$cwinner" ]] && echo "    Winner: $cwinner"
+		if [[ -n "$cpv" ]]; then
+			local pv_display="$cpv"
+			[[ -n "$cpf" ]] && pv_display="${cpv} (${cpf})"
+			echo "    Prompt version: $pv_display"
+		fi
+
+		# Show scores for this comparison
+		sqlite3 -separator '|' "$RESULTS_DB" "
+            SELECT model_id, overall, correctness, completeness, code_quality, clarity, adherence
+            FROM comparison_scores
+            WHERE comparison_id = $cid
+            ORDER BY overall DESC;
+        " 2>/dev/null | while IFS='|' read -r mid ov co cm cq cl ca; do
+			printf "    %-20s overall:%d (corr:%d comp:%d qual:%d clar:%d adhr:%d)\n" \
+				"$mid" "$ov" "$co" "$cm" "$cq" "$cl" "$ca"
+		done
+		echo ""
+	done
+	return 0
+}
+
+# Display aggregate model rankings
+_results_show_rankings() {
+	local where_clause="$1"
+
+	echo "Aggregate Model Rankings"
+	echo "------------------------"
+	sqlite3 -separator '|' "$RESULTS_DB" "
+        SELECT model_id,
+               COUNT(*) as comparisons,
+               ROUND(AVG(overall), 1) as avg_overall,
+               SUM(CASE WHEN c.winner_model = cs.model_id THEN 1 ELSE 0 END) as wins
+        FROM comparison_scores cs
+        JOIN comparisons c ON c.id = cs.comparison_id
+        $where_clause
+        GROUP BY model_id
+        ORDER BY avg_overall DESC;
+    " 2>/dev/null | while IFS='|' read -r mid cnt avg wins; do
+		printf "  %-22s  avg:%s  wins:%s/%s\n" "$mid" "$avg" "$wins" "$cnt"
+	done
+	echo ""
+	return 0
+}
+
+# Build SQL WHERE clause for results filtering
+_results_build_where_clause() {
+	local model_filter="$1"
+	local type_filter="$2"
+	local pv_filter="$3"
+
+	# Escape string values for SQL safety
+	local safe_model="${model_filter//\'/\'\'}"
+	local safe_type="${type_filter//\'/\'\'}"
+	local safe_pv="${pv_filter//\'/\'\'}"
+
+	local where_clause=""
+	if [[ -n "$safe_model" ]]; then
+		where_clause="WHERE cs.model_id LIKE '%${safe_model}%'"
+	fi
+	if [[ -n "$safe_type" ]]; then
+		if [[ -n "$where_clause" ]]; then
+			where_clause="$where_clause AND c.task_type = '${safe_type}'"
+		else
+			where_clause="WHERE c.task_type = '${safe_type}'"
+		fi
+	fi
+	if [[ -n "$safe_pv" ]]; then
+		if [[ -n "$where_clause" ]]; then
+			where_clause="$where_clause AND c.prompt_version = '${safe_pv}'"
+		else
+			where_clause="WHERE c.prompt_version = '${safe_pv}'"
+		fi
+	fi
+
+	echo "$where_clause"
+	return 0
+}
+
 cmd_results() {
 	init_results_db || return 1
 
@@ -2108,29 +2354,9 @@ cmd_results() {
 		return 1
 	fi
 
-	# Escape string values for SQL safety (prevent injection via --model/--type/--prompt-version args)
-	local safe_model_filter="${model_filter//\'/\'\'}"
-	local safe_type_filter="${type_filter//\'/\'\'}"
-	local safe_pv_filter="${pv_filter//\'/\'\'}"
-
-	local where_clause=""
-	if [[ -n "$safe_model_filter" ]]; then
-		where_clause="WHERE cs.model_id LIKE '%${safe_model_filter}%'"
-	fi
-	if [[ -n "$safe_type_filter" ]]; then
-		if [[ -n "$where_clause" ]]; then
-			where_clause="$where_clause AND c.task_type = '${safe_type_filter}'"
-		else
-			where_clause="WHERE c.task_type = '${safe_type_filter}'"
-		fi
-	fi
-	if [[ -n "$safe_pv_filter" ]]; then
-		if [[ -n "$where_clause" ]]; then
-			where_clause="$where_clause AND c.prompt_version = '${safe_pv_filter}'"
-		else
-			where_clause="WHERE c.prompt_version = '${safe_pv_filter}'"
-		fi
-	fi
+	# Build WHERE clause
+	local where_clause
+	where_clause=$(_results_build_where_clause "$model_filter" "$type_filter" "$pv_filter")
 
 	echo ""
 	echo "Model Comparison Results (last $limit)"
@@ -2147,54 +2373,9 @@ cmd_results() {
 		return 0
 	fi
 
-	# Show recent comparisons
-	sqlite3 -separator '|' "$RESULTS_DB" "
-        SELECT c.id, c.created_at, c.task_type, c.task_description, c.winner_model,
-               COALESCE(c.prompt_version, ''), COALESCE(c.prompt_file, '')
-        FROM comparisons c
-        ORDER BY c.created_at DESC
-        LIMIT $limit;
-    " 2>/dev/null | while IFS='|' read -r cid cdate ctype cdesc cwinner cpv cpf; do
-		echo "  #$cid [$ctype] $(echo "$cdesc" | head -c 60) ($cdate)"
-		if [[ -n "$cwinner" ]]; then
-			echo "    Winner: $cwinner"
-		fi
-		if [[ -n "$cpv" ]]; then
-			local pv_display="$cpv"
-			[[ -n "$cpf" ]] && pv_display="${cpv} (${cpf})"
-			echo "    Prompt version: $pv_display"
-		fi
-
-		# Show scores for this comparison
-		sqlite3 -separator '|' "$RESULTS_DB" "
-            SELECT model_id, overall, correctness, completeness, code_quality, clarity, adherence
-            FROM comparison_scores
-            WHERE comparison_id = $cid
-            ORDER BY overall DESC;
-        " 2>/dev/null | while IFS='|' read -r mid ov co cm cq cl ca; do
-			printf "    %-20s overall:%d (corr:%d comp:%d qual:%d clar:%d adhr:%d)\n" \
-				"$mid" "$ov" "$co" "$cm" "$cq" "$cl" "$ca"
-		done
-		echo ""
-	done
-
-	# Show aggregate model rankings
-	echo "Aggregate Model Rankings"
-	echo "------------------------"
-	sqlite3 -separator '|' "$RESULTS_DB" "
-        SELECT model_id,
-               COUNT(*) as comparisons,
-               ROUND(AVG(overall), 1) as avg_overall,
-               SUM(CASE WHEN c.winner_model = cs.model_id THEN 1 ELSE 0 END) as wins
-        FROM comparison_scores cs
-        JOIN comparisons c ON c.id = cs.comparison_id
-        $where_clause
-        GROUP BY model_id
-        ORDER BY avg_overall DESC;
-    " 2>/dev/null | while IFS='|' read -r mid cnt avg wins; do
-		printf "  %-22s  avg:%s  wins:%s/%s\n" "$mid" "$avg" "$wins" "$cnt"
-	done
-	echo ""
+	# Show recent comparisons and rankings
+	_results_show_recent "$limit"
+	_results_show_rankings "$where_clause"
 
 	return 0
 }
@@ -2313,6 +2494,72 @@ _api_model_string() {
 #   $4 — output directory for result files
 # Output: writes result JSON to $4/$model_id.json
 # Returns: 0 on success, 1 on failure
+# Make API call to a model provider
+# Args: provider, api_model, api_key, escaped_prompt, max_tokens, raw_file
+# Returns: http_code
+_bench_api_call() {
+	local provider="$1"
+	local api_model="$2"
+	local api_key="$3"
+	local escaped_prompt="$4"
+	local max_tokens="$5"
+	local raw_file="$6"
+	local http_code
+
+	case "$provider" in
+	Anthropic)
+		http_code=$(curl -sS -o "$raw_file" -w "%{http_code}" --max-time 120 \
+			-H "x-api-key: ${api_key}" \
+			-H "anthropic-version: 2023-06-01" \
+			-H "${CONTENT_TYPE_JSON}" \
+			-d "{
+				\"model\": \"${api_model}\",
+				\"max_tokens\": ${max_tokens},
+				\"messages\": [{\"role\": \"user\", \"content\": ${escaped_prompt}}]
+			}" \
+			"https://api.anthropic.com/v1/messages" 2>/dev/null) || http_code="000"
+		;;
+	OpenAI)
+		http_code=$(curl -sS -o "$raw_file" -w "%{http_code}" --max-time 120 \
+			-H "Authorization: Bearer ${api_key}" \
+			-H "${CONTENT_TYPE_JSON}" \
+			-d "{
+				\"model\": \"${api_model}\",
+				\"max_tokens\": ${max_tokens},
+				\"messages\": [{\"role\": \"user\", \"content\": ${escaped_prompt}}]
+			}" \
+			"https://api.openai.com/v1/chat/completions" 2>/dev/null) || http_code="000"
+		;;
+	Google)
+		http_code=$(curl -sS -o "$raw_file" -w "%{http_code}" --max-time 120 \
+			-H "${CONTENT_TYPE_JSON}" \
+			-d "{
+				\"contents\": [{\"parts\": [{\"text\": ${escaped_prompt}}]}],
+				\"generationConfig\": {\"maxOutputTokens\": ${max_tokens}}
+			}" \
+			"https://generativelanguage.googleapis.com/v1beta/models/${api_model}:generateContent?key=${api_key}" \
+			2>/dev/null) || http_code="000"
+		;;
+	DeepSeek)
+		http_code=$(curl -sS -o "$raw_file" -w "%{http_code}" --max-time 120 \
+			-H "Authorization: Bearer ${api_key}" \
+			-H "${CONTENT_TYPE_JSON}" \
+			-d "{
+				\"model\": \"${api_model}\",
+				\"max_tokens\": ${max_tokens},
+				\"messages\": [{\"role\": \"user\", \"content\": ${escaped_prompt}}]
+			}" \
+			"https://api.deepseek.com/v1/chat/completions" 2>/dev/null) || http_code="000"
+		;;
+	*)
+		http_code="000"
+		;;
+	esac
+
+	echo "$http_code"
+	return 0
+}
+
 _bench_call_model() {
 	local model_id="$1"
 	local prompt="$2"
@@ -2351,63 +2598,18 @@ _bench_call_model() {
 		escaped_prompt="\"$(printf '%s' "$prompt" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g; s/\t/\\t/g')\""
 	fi
 
-	local start_ms response http_code end_ms latency_ms
+	local start_ms http_code end_ms latency_ms
 	start_ms=$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || date +%s000)
 
 	local result_file="${out_dir}/${actual_id}.json"
 	local raw_file="${out_dir}/${actual_id}-raw.json"
 
-	case "$provider" in
-	Anthropic)
-		http_code=$(curl -sS -o "$raw_file" -w "%{http_code}" --max-time 120 \
-			-H "x-api-key: ${api_key}" \
-			-H "anthropic-version: 2023-06-01" \
-			-H "${CONTENT_TYPE_JSON}" \
-			-d "{
-				\"model\": \"${api_model}\",
-				\"max_tokens\": ${max_tokens},
-				\"messages\": [{\"role\": \"user\", \"content\": ${escaped_prompt}}]
-			}" \
-			"https://api.anthropic.com/v1/messages" 2>/dev/null) || http_code="000"
-		;;
-	OpenAI)
-		http_code=$(curl -sS -o "$raw_file" -w "%{http_code}" --max-time 120 \
-			-H "Authorization: Bearer ${api_key}" \
-			-H "${CONTENT_TYPE_JSON}" \
-			-d "{
-				\"model\": \"${api_model}\",
-				\"max_tokens\": ${max_tokens},
-				\"messages\": [{\"role\": \"user\", \"content\": ${escaped_prompt}}]
-			}" \
-			"https://api.openai.com/v1/chat/completions" 2>/dev/null) || http_code="000"
-		;;
-	Google)
-		# Google uses a different API format
-		http_code=$(curl -sS -o "$raw_file" -w "%{http_code}" --max-time 120 \
-			-H "${CONTENT_TYPE_JSON}" \
-			-d "{
-				\"contents\": [{\"parts\": [{\"text\": ${escaped_prompt}}]}],
-				\"generationConfig\": {\"maxOutputTokens\": ${max_tokens}}
-			}" \
-			"https://generativelanguage.googleapis.com/v1beta/models/${api_model}:generateContent?key=${api_key}" \
-			2>/dev/null) || http_code="000"
-		;;
-	DeepSeek)
-		http_code=$(curl -sS -o "$raw_file" -w "%{http_code}" --max-time 120 \
-			-H "Authorization: Bearer ${api_key}" \
-			-H "${CONTENT_TYPE_JSON}" \
-			-d "{
-				\"model\": \"${api_model}\",
-				\"max_tokens\": ${max_tokens},
-				\"messages\": [{\"role\": \"user\", \"content\": ${escaped_prompt}}]
-			}" \
-			"https://api.deepseek.com/v1/chat/completions" 2>/dev/null) || http_code="000"
-		;;
-	*)
+	# Make API call
+	http_code=$(_bench_api_call "$provider" "$api_model" "$api_key" "$escaped_prompt" "$max_tokens" "$raw_file")
+	[[ "$http_code" == "000" ]] && {
 		echo "{\"error\":\"unsupported provider: ${provider}\"}" >"$result_file"
 		return 1
-		;;
-	esac
+	}
 
 	end_ms=$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || date +%s000)
 	latency_ms=$((end_ms - start_ms))
@@ -2640,11 +2842,20 @@ if m:
 #   --limit N         Limit history output (default: 20)
 #   --version TAG     Tag results with a prompt version (e.g. git short hash)
 #######################################
-cmd_bench() {
-	local prompt="" dataset_file="" max_tokens=1024 dry_run=false
-	local judge_flag=false history_flag=false history_limit=20
-	local prompt_version=""
-	local -a model_args=()
+
+# Parse command-line arguments for cmd_bench
+# Sets: prompt, dataset_file, max_tokens, dry_run, judge_flag, history_flag, history_limit, prompt_version, model_args
+_bench_parse_args() {
+	local -n args_prompt="$1"
+	local -n args_dataset="$2"
+	local -n args_max_tokens="$3"
+	local -n args_dry_run="$4"
+	local -n args_judge="$5"
+	local -n args_history="$6"
+	local -n args_limit="$7"
+	local -n args_version="$8"
+	local -n args_models="$9"
+	shift 9
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -2653,11 +2864,11 @@ cmd_bench() {
 				print_error "--dataset requires a file path"
 				return 1
 			}
-			dataset_file="$2"
+			args_dataset="$2"
 			shift 2
 			;;
 		--judge)
-			judge_flag=true
+			args_judge=true
 			shift
 			;;
 		--max-tokens)
@@ -2665,15 +2876,15 @@ cmd_bench() {
 				print_error "--max-tokens requires a value"
 				return 1
 			}
-			max_tokens="$2"
+			args_max_tokens="$2"
 			shift 2
 			;;
 		--dry-run)
-			dry_run=true
+			args_dry_run=true
 			shift
 			;;
 		--history)
-			history_flag=true
+			args_history=true
 			shift
 			;;
 		--limit)
@@ -2681,7 +2892,7 @@ cmd_bench() {
 				print_error "--limit requires a value"
 				return 1
 			}
-			history_limit="$2"
+			args_limit="$2"
 			shift 2
 			;;
 		--version)
@@ -2689,7 +2900,7 @@ cmd_bench() {
 				print_error "--version requires a value"
 				return 1
 			}
-			prompt_version="$2"
+			args_version="$2"
 			shift 2
 			;;
 		--*)
@@ -2697,25 +2908,30 @@ cmd_bench() {
 			return 1
 			;;
 		*)
-			# First non-option arg without --dataset is the prompt, rest are models
-			if [[ -z "$prompt" && -z "$dataset_file" ]]; then
-				prompt="$1"
+			if [[ -z "$args_prompt" && -z "$args_dataset" ]]; then
+				args_prompt="$1"
 			else
-				model_args+=("$1")
+				args_models+=("$1")
 			fi
 			shift
 			;;
 		esac
 	done
+	return 0
+}
 
-	# Handle --history subcommand
-	if [[ "$history_flag" == true ]]; then
-		_bench_show_history "$history_limit"
-		return $?
-	fi
+# Validate bench inputs and build prompts list
+# Returns: 0 on success, 1 on error
+_bench_validate_and_build() {
+	local -n val_prompt="$1"
+	local -n val_dataset="$2"
+	local -n val_max_tokens="$3"
+	local -n val_models="$4"
+	local -n val_prompts="$5"
+	local -n val_valid_models="$6"
 
 	# Validate inputs
-	if [[ -z "$prompt" && -z "$dataset_file" ]]; then
+	if [[ -z "$val_prompt" && -z "$val_dataset" ]]; then
 		print_error "Usage: compare-models-helper.sh bench \"prompt\" model1 model2 [model3...]"
 		echo "       compare-models-helper.sh bench --dataset file.jsonl model1 model2"
 		echo "       compare-models-helper.sh bench --history [--limit N]"
@@ -2730,46 +2946,41 @@ cmd_bench() {
 		return 1
 	fi
 
-	if [[ ${#model_args[@]} -lt 1 ]]; then
+	if [[ ${#val_models[@]} -lt 1 ]]; then
 		print_error "At least 1 model required for benchmarking"
 		return 1
 	fi
 
-	# Validate dataset file exists
-	if [[ -n "$dataset_file" && ! -f "$dataset_file" ]]; then
-		print_error "Dataset file not found: $dataset_file"
+	if [[ -n "$val_dataset" && ! -f "$val_dataset" ]]; then
+		print_error "Dataset file not found: $val_dataset"
 		return 1
 	fi
 
-	# Validate max_tokens is numeric
-	if ! [[ "$max_tokens" =~ ^[0-9]+$ ]]; then
-		print_error "Invalid --max-tokens value: $max_tokens"
+	if ! [[ "$val_max_tokens" =~ ^[0-9]+$ ]]; then
+		print_error "Invalid --max-tokens value: $val_max_tokens"
 		return 1
 	fi
 
 	# Build prompts list
-	local -a prompts=()
-	if [[ -n "$dataset_file" ]]; then
+	if [[ -n "$val_dataset" ]]; then
 		while IFS= read -r line; do
 			[[ -z "$line" ]] && continue
 			local p
-			# Support both dataset convention (.input) and legacy (.prompt)
 			p=$(printf '%s' "$line" | jq -r '(.input // .prompt) // empty' || true)
 			if [[ -n "$p" ]]; then
-				prompts+=("$p")
+				val_prompts+=("$p")
 			fi
-		done <"$dataset_file"
-		if [[ ${#prompts[@]} -eq 0 ]]; then
+		done <"$val_dataset"
+		if [[ ${#val_prompts[@]} -eq 0 ]]; then
 			print_error "No valid prompts found in dataset (expected JSONL with {\"input\":\"...\"} or {\"prompt\":\"...\"})"
 			return 1
 		fi
 	else
-		prompts+=("$prompt")
+		val_prompts+=("$val_prompt")
 	fi
 
 	# Validate models exist in MODEL_DATA
-	local -a valid_models=()
-	for m in "${model_args[@]}"; do
+	for m in "${val_models[@]}"; do
 		local info
 		info=$(_model_provider_info "$m")
 		if [[ -z "$info" ]]; then
@@ -2777,52 +2988,155 @@ cmd_bench() {
 		else
 			local actual_id
 			actual_id=$(echo "$info" | cut -d'|' -f3)
-			valid_models+=("$actual_id")
+			val_valid_models+=("$actual_id")
 		fi
 	done
 
-	if [[ ${#valid_models[@]} -lt 1 ]]; then
+	if [[ ${#val_valid_models[@]} -lt 1 ]]; then
 		print_error "No valid models found"
 		return 1
 	fi
 
-	# Dry-run mode
-	if [[ "$dry_run" == true ]]; then
-		echo ""
-		echo "Bench Plan (dry-run)"
-		echo "===================="
-		echo ""
-		echo "Prompts: ${#prompts[@]}"
-		echo "Models:  ${valid_models[*]}"
-		echo "Max tokens: $max_tokens"
-		echo "Judge: $judge_flag"
-		echo "Total API calls: $((${#prompts[@]} * ${#valid_models[@]}))"
-		echo ""
+	return 0
+}
 
-		# Estimate cost
-		echo "| Model                  | Est. Cost/prompt | Provider |"
-		echo "|------------------------|------------------|----------|"
-		for m in "${valid_models[@]}"; do
-			local match
-			match=$(echo "$MODEL_DATA" | grep "^${m}|" | head -1 || true)
-			if [[ -n "$match" ]]; then
-				local prov input_p output_p
-				prov=$(get_field "$match" 2)
-				input_p=$(get_field "$match" 5)
-				output_p=$(get_field "$match" 6)
-				# Estimate: ~200 input tokens, ~max_tokens output tokens
-				local est_cost
-				est_cost=$(awk "BEGIN{printf \"%.4f\", (200/1000000.0)*${input_p} + (${max_tokens}/1000000.0)*${output_p}}")
-				printf "| %-22s | \$%-15s | %-8s |\n" "$m" "$est_cost" "$prov"
+# Display dry-run plan with cost estimates
+_bench_show_plan() {
+	local max_tokens="$1"
+	local judge_flag="$2"
+	shift 2
+	local -a valid_models=("$@")
+
+	echo ""
+	echo "Bench Plan (dry-run)"
+	echo "===================="
+	echo ""
+	echo "Prompts: ${#valid_models[@]}"
+	echo "Models:  ${valid_models[*]}"
+	echo "Max tokens: $max_tokens"
+	echo "Judge: $judge_flag"
+	echo "Total API calls: $((${#valid_models[@]} * ${#valid_models[@]}))"
+	echo ""
+
+	# Estimate cost
+	echo "| Model                  | Est. Cost/prompt | Provider |"
+	echo "|------------------------|------------------|----------|"
+	for m in "${valid_models[@]}"; do
+		local match
+		match=$(echo "$MODEL_DATA" | grep "^${m}|" | head -1 || true)
+		if [[ -n "$match" ]]; then
+			local prov input_p output_p
+			prov=$(get_field "$match" 2)
+			input_p=$(get_field "$match" 5)
+			output_p=$(get_field "$match" 6)
+			local est_cost
+			est_cost=$(awk "BEGIN{printf \"%.4f\", (200/1000000.0)*${input_p} + (${max_tokens}/1000000.0)*${output_p}}")
+			printf "| %-22s | \$%-15s | %-8s |\n" "$m" "$est_cost" "$prov"
+		fi
+	done
+	echo ""
+
+	if [[ "$judge_flag" == true ]]; then
+		echo "Judge cost: ~\$0.001 per prompt (haiku-tier)"
+	fi
+	echo ""
+	echo "Run without --dry-run to execute."
+	return 0
+}
+
+# Display results table for a single prompt
+_bench_display_results() {
+	local bench_dir="$1"
+	local judge_flag="$2"
+	shift 2
+	local -a valid_models=("$@")
+
+	if [[ "$judge_flag" == true ]]; then
+		printf "| %-22s | %7s | %15s | %9s | %11s |\n" \
+			"Model" "Latency" "Tokens (in/out)" "Cost" "Judge Score"
+		printf "| %-22s | %7s | %15s | %9s | %11s |\n" \
+			"----------------------" "-------" "---------------" "---------" "-----------"
+	else
+		printf "| %-22s | %7s | %15s | %9s |\n" \
+			"Model" "Latency" "Tokens (in/out)" "Cost"
+		printf "| %-22s | %7s | %15s | %9s |\n" \
+			"----------------------" "-------" "---------------" "---------"
+	fi
+
+	for m in "${valid_models[@]}"; do
+		local result_file="${bench_dir}/${m}.json"
+		if [[ ! -f "$result_file" ]]; then
+			if [[ "$judge_flag" == true ]]; then
+				printf "| %-22s | %7s | %15s | %9s | %11s |\n" "$m" "ERROR" "-" "-" "-"
+			else
+				printf "| %-22s | %7s | %15s | %9s |\n" "$m" "ERROR" "-" "-"
 			fi
-		done
-		echo ""
+			continue
+		fi
+
+		local latency tokens_in tokens_out error_msg
+		latency=$(jq -r '.latency_ms // 0' "$result_file" 2>/dev/null || echo "0")
+		tokens_in=$(jq -r '.tokens_in // 0' "$result_file" 2>/dev/null || echo "0")
+		tokens_out=$(jq -r '.tokens_out // 0' "$result_file" 2>/dev/null || echo "0")
+		error_msg=$(jq -r '.error // ""' "$result_file" 2>/dev/null || echo "")
+
+		if [[ -n "$error_msg" ]]; then
+			if [[ "$judge_flag" == true ]]; then
+				printf "| %-22s | %7s | %15s | %9s | %11s |\n" "$m" "FAIL" "$error_msg" "-" "-"
+			else
+				printf "| %-22s | %7s | %15s | %9s |\n" "$m" "FAIL" "$error_msg" "-"
+			fi
+			continue
+		fi
+
+		local latency_fmt
+		if [[ "$latency" -ge 1000 ]]; then
+			latency_fmt=$(awk "BEGIN{printf \"%.1fs\", ${latency}/1000.0}")
+		else
+			latency_fmt="${latency}ms"
+		fi
+
+		local tokens_fmt="${tokens_in}/${tokens_out}"
+		local cost
+		cost=$(_calc_bench_cost "$m" "$tokens_in" "$tokens_out")
+		local cost_fmt
+		cost_fmt=$(printf "\$%.4f" "$cost")
 
 		if [[ "$judge_flag" == true ]]; then
-			echo "Judge cost: ~\$0.001 per prompt (haiku-tier)"
+			local judge_fmt="${judge_score:-  -  }"
+			printf "| %-22s | %7s | %15s | %9s | %11s |\n" \
+				"$m" "$latency_fmt" "$tokens_fmt" "$cost_fmt" "$judge_fmt"
+		else
+			printf "| %-22s | %7s | %15s | %9s |\n" \
+				"$m" "$latency_fmt" "$tokens_fmt" "$cost_fmt"
 		fi
-		echo ""
-		echo "Run without --dry-run to execute."
+	done
+	return 0
+}
+
+cmd_bench() {
+	local prompt="" dataset_file="" max_tokens=1024 dry_run=false
+	local judge_flag=false history_flag=false history_limit=20
+	local prompt_version=""
+	local -a model_args=()
+
+	# Parse arguments
+	_bench_parse_args prompt dataset_file max_tokens dry_run judge_flag history_flag history_limit prompt_version model_args "$@" || return 1
+
+	# Handle --history subcommand
+	if [[ "$history_flag" == true ]]; then
+		_bench_show_history "$history_limit"
+		return $?
+	fi
+
+	# Validate and build prompts list
+	local -a prompts=()
+	local -a valid_models=()
+	_bench_validate_and_build prompt dataset_file max_tokens model_args prompts valid_models || return 1
+
+	# Dry-run mode
+	if [[ "$dry_run" == true ]]; then
+		_bench_show_plan "$max_tokens" "$judge_flag" "${valid_models[@]}"
 		return 0
 	fi
 
@@ -2838,134 +3152,99 @@ cmd_bench() {
 	echo ""
 
 	local prompt_idx=0
+	local p
 	for p in "${prompts[@]}"; do
 		prompt_idx=$((prompt_idx + 1))
 		local prompt_label="Prompt"
-		if [[ ${#prompts[@]} -gt 1 ]]; then
-			prompt_label="Prompt ${prompt_idx}/${#prompts[@]}"
-		fi
-
-		# Truncate prompt for display
-		local display_prompt="${p:0:80}"
-		[[ ${#p} -gt 80 ]] && display_prompt="${display_prompt}..."
-		echo "${prompt_label}: ${display_prompt}"
-		echo ""
-
-		# Create temp directory for this prompt's results
-		local bench_dir
-		bench_dir=$(mktemp -d "${TMPDIR:-/tmp}/bench-XXXXXX")
-
-		# Run models in parallel
-		local -a pids=()
-		for m in "${valid_models[@]}"; do
-			echo "  Calling ${m}..."
-			_bench_call_model "$m" "$p" "$max_tokens" "$bench_dir" &
-			pids+=($!)
-		done
-
-		# Wait for all
-		for pid in "${pids[@]}"; do
-			wait "$pid" 2>/dev/null || true
-		done
-
-		# Collect judge scores if enabled
-		local judge_models=()
-		local judge_scores_vals=()
-		if [[ "$judge_flag" == true ]]; then
-			echo "  Scoring with judge (haiku)..."
-			local judge_output
-			judge_output=$(_bench_judge_score "$p" "$bench_dir")
-			while IFS='|' read -r jm js; do
-				[[ -z "$jm" ]] && continue
-				judge_models+=("$jm")
-				judge_scores_vals+=("$js")
-			done <<<"$judge_output"
-		fi
-
-		# Build and display results table
-		echo ""
-		if [[ "$judge_flag" == true ]]; then
-			printf "| %-22s | %7s | %15s | %9s | %11s |\n" \
-				"Model" "Latency" "Tokens (in/out)" "Cost" "Judge Score"
-			printf "| %-22s | %7s | %15s | %9s | %11s |\n" \
-				"----------------------" "-------" "---------------" "---------" "-----------"
-		else
-			printf "| %-22s | %7s | %15s | %9s |\n" \
-				"Model" "Latency" "Tokens (in/out)" "Cost"
-			printf "| %-22s | %7s | %15s | %9s |\n" \
-				"----------------------" "-------" "---------------" "---------"
-		fi
-
-		for m in "${valid_models[@]}"; do
-			local result_file="${bench_dir}/${m}.json"
-			if [[ ! -f "$result_file" ]]; then
-				if [[ "$judge_flag" == true ]]; then
-					printf "| %-22s | %7s | %15s | %9s | %11s |\n" "$m" "ERROR" "-" "-" "-"
-				else
-					printf "| %-22s | %7s | %15s | %9s |\n" "$m" "ERROR" "-" "-"
-				fi
-				continue
-			fi
-
-			local latency tokens_in tokens_out error_msg
-			latency=$(jq -r '.latency_ms // 0' "$result_file" 2>/dev/null || echo "0")
-			tokens_in=$(jq -r '.tokens_in // 0' "$result_file" 2>/dev/null || echo "0")
-			tokens_out=$(jq -r '.tokens_out // 0' "$result_file" 2>/dev/null || echo "0")
-			error_msg=$(jq -r '.error // ""' "$result_file" 2>/dev/null || echo "")
-
-			if [[ -n "$error_msg" ]]; then
-				if [[ "$judge_flag" == true ]]; then
-					printf "| %-22s | %7s | %15s | %9s | %11s |\n" "$m" "FAIL" "$error_msg" "-" "-"
-				else
-					printf "| %-22s | %7s | %15s | %9s |\n" "$m" "FAIL" "$error_msg" "-"
-				fi
-				continue
-			fi
-
-			local latency_fmt
-			if [[ "$latency" -ge 1000 ]]; then
-				latency_fmt=$(awk "BEGIN{printf \"%.1fs\", ${latency}/1000.0}")
-			else
-				latency_fmt="${latency}ms"
-			fi
-
-			local tokens_fmt="${tokens_in}/${tokens_out}"
-			local cost
-			cost=$(_calc_bench_cost "$m" "$tokens_in" "$tokens_out")
-			local cost_fmt
-			cost_fmt=$(printf "\$%.4f" "$cost")
-
-			# Look up judge score from parallel arrays
-			local judge_score=""
-			for i in "${!judge_models[@]}"; do
-				if [[ "${judge_models[$i]}" == "$m" ]]; then
-					judge_score="${judge_scores_vals[$i]}"
-					break
-				fi
-			done
-
-			# Store result
-			_store_bench_result "$m" "$p" "$latency" "$tokens_in" "$tokens_out" "$cost" \
-				"$judge_score" "$prompt_version"
-
-			if [[ "$judge_flag" == true ]]; then
-				local judge_fmt="${judge_score:-  -  }"
-				printf "| %-22s | %7s | %15s | %9s | %11s |\n" \
-					"$m" "$latency_fmt" "$tokens_fmt" "$cost_fmt" "$judge_fmt"
-			else
-				printf "| %-22s | %7s | %15s | %9s |\n" \
-					"$m" "$latency_fmt" "$tokens_fmt" "$cost_fmt"
-			fi
-		done
-
-		echo ""
-
-		# Clean up temp dir
-		rm -rf "$bench_dir"
+		[[ ${#prompts[@]} -gt 1 ]] && prompt_label="Prompt ${prompt_idx}/${#prompts[@]}"
+		_bench_run_prompt "$p" "$prompt_label" "$max_tokens" "$judge_flag" "$prompt_version" "${valid_models[@]}"
 	done
 
 	echo "Results stored: $BENCH_RESULTS_FILE"
 	echo ""
+	return 0
+}
+
+# Run one prompt across all models, display results, and store them.
+# Args: $1=prompt $2=prompt_label $3=max_tokens $4=judge_flag $5=prompt_version $6+=valid_models
+_bench_run_prompt() {
+	local p="$1"
+	local prompt_label="$2"
+	local max_tokens="$3"
+	local judge_flag="$4"
+	local prompt_version="$5"
+	shift 5
+	local -a valid_models=("$@")
+
+	# Truncate prompt for display
+	local display_prompt="${p:0:80}"
+	[[ ${#p} -gt 80 ]] && display_prompt="${display_prompt}..."
+	echo "${prompt_label}: ${display_prompt}"
+	echo ""
+
+	# Create temp directory for this prompt's results
+	local bench_dir
+	bench_dir=$(mktemp -d "${TMPDIR:-/tmp}/bench-XXXXXX")
+
+	# Run models in parallel
+	local -a pids=()
+	local m
+	for m in "${valid_models[@]}"; do
+		echo "  Calling ${m}..."
+		_bench_call_model "$m" "$p" "$max_tokens" "$bench_dir" &
+		pids+=($!)
+	done
+	local pid
+	for pid in "${pids[@]}"; do
+		wait "$pid" 2>/dev/null || true
+	done
+
+	# Collect judge scores if enabled
+	local -a judge_models=()
+	local -a judge_scores_vals=()
+	if [[ "$judge_flag" == true ]]; then
+		echo "  Scoring with judge (haiku)..."
+		local judge_output
+		judge_output=$(_bench_judge_score "$p" "$bench_dir")
+		local jm js
+		while IFS='|' read -r jm js; do
+			[[ -z "$jm" ]] && continue
+			judge_models+=("$jm")
+			judge_scores_vals+=("$js")
+		done <<<"$judge_output"
+	fi
+
+	# Display results table
+	echo ""
+	_bench_display_results "$bench_dir" "$judge_flag" "${valid_models[@]}"
+
+	# Store results for each model
+	for m in "${valid_models[@]}"; do
+		local result_file="${bench_dir}/${m}.json"
+		[[ ! -f "$result_file" ]] && continue
+		local latency tokens_in tokens_out error_msg
+		latency=$(jq -r '.latency_ms // 0' "$result_file" 2>/dev/null || echo "0")
+		tokens_in=$(jq -r '.tokens_in // 0' "$result_file" 2>/dev/null || echo "0")
+		tokens_out=$(jq -r '.tokens_out // 0' "$result_file" 2>/dev/null || echo "0")
+		error_msg=$(jq -r '.error // ""' "$result_file" 2>/dev/null || echo "")
+		[[ -n "$error_msg" ]] && continue
+		local cost
+		cost=$(_calc_bench_cost "$m" "$tokens_in" "$tokens_out")
+		# Look up judge score from parallel arrays
+		local judge_score=""
+		local i
+		for i in "${!judge_models[@]}"; do
+			if [[ "${judge_models[$i]}" == "$m" ]]; then
+				judge_score="${judge_scores_vals[$i]}"
+				break
+			fi
+		done
+		_store_bench_result "$m" "$p" "$latency" "$tokens_in" "$tokens_out" "$cost" \
+			"$judge_score" "$prompt_version"
+	done
+
+	echo ""
+	rm -rf "$bench_dir"
 	return 0
 }
 

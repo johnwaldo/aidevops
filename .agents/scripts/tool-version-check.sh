@@ -64,11 +64,21 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# Detect how OpenCode was installed — build the right upgrade command.
+# update_cmd is executed via `bash -c` so it must be a self-contained string.
+# Use `command -v` path directly: bun-installed binaries live under ~/.bun/bin/,
+# so the path itself contains "bun". This avoids `readlink -f` which is a GNU
+# extension not available on macOS by default.
+# shellcheck disable=SC2016  # Single quotes intentional: string is a bash -c payload, must not expand at assignment time
+_oc_upgrade_cmd='if r=$(command -v opencode 2>/dev/null); [[ "$r" == *bun* ]]; then bun install -g opencode-ai@latest; else npm install -g opencode-ai@latest; fi'
+
 # Tool definitions
 # Format: category|display_name|cli_command|version_flag|package_name|update_command
 
 NPM_TOOLS=(
+	"npm|OpenCode|opencode|--version|opencode-ai|${_oc_upgrade_cmd}"
 	"npm|Claude Code CLI|claude|--version|@anthropic-ai/claude-code|npm install -g @anthropic-ai/claude-code@latest"
+	"npm|Codex CLI|codex|--version|@openai/codex|npm install -g @openai/codex@latest"
 	"npm|Augment CLI|auggie|--version|@augmentcode/auggie@prerelease|npm install -g @augmentcode/auggie@prerelease"
 	"npm|Repomix|repomix|--version|repomix|npm install -g repomix@latest"
 	"npm|DSPyGround|dspyground|--version|dspyground|npm install -g dspyground@latest"
@@ -84,7 +94,6 @@ NPM_TOOLS=(
 )
 
 BREW_TOOLS=(
-	"brew|OpenCode|opencode|--version|anomalyco/tap/opencode|brew upgrade anomalyco/tap/opencode"
 	"brew|GitHub CLI|gh|--version|gh|brew upgrade gh"
 	"brew|GitLab CLI|glab|--version|glab|brew upgrade glab"
 	"brew|Worktrunk|wt|--version|max-sixty/worktrunk/wt|brew upgrade max-sixty/worktrunk/wt"
@@ -106,6 +115,7 @@ PIP_TOOLS=(
 # which skips latest-version lookup and just reports installed version
 CUSTOM_TOOLS=(
 	"self|Cursor CLI|agent|--version|cursor-agent|agent update"
+	"self|Droid CLI|droid|--version|droid|curl -fsSL https://app.factory.ai/install.sh | bash"
 )
 
 # Counters
@@ -121,6 +131,44 @@ declare -a JSON_RESULTS=()
 # A well-behaved --version should return in <1s. 10s is generous enough for
 # slow interpreters (Python, Ruby) while still catching hung MCP servers.
 readonly VERSION_TIMEOUT=10
+
+# Get installed version for Python packages.
+# Tries pip show first (standard pip installs), then pipx list (pipx-isolated
+# tools like analytics-mcp), then uv tool list (uv-isolated tools like
+# outscraper-mcp-server). pip-only libraries (e.g. crawl4ai, dspy) have no
+# CLI binary so command -v always fails — this function handles all three cases.
+get_pip_installed_version() {
+	local pkg="$1"
+	local version
+
+	# 1. Try pip show (standard pip installs and library packages)
+	version=$(pip show "$pkg" 2>/dev/null | grep -i '^Version:' | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+	if [[ -n "$version" ]]; then
+		echo "$version"
+		return 0
+	fi
+
+	# 2. Try pipx list (packages installed in isolated pipx environments)
+	if command -v pipx &>/dev/null; then
+		version=$(pipx list --short 2>/dev/null | grep -i "^${pkg}" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+		if [[ -n "$version" ]]; then
+			echo "$version"
+			return 0
+		fi
+	fi
+
+	# 3. Try uv tool list (packages installed via uv tool install)
+	if command -v uv &>/dev/null; then
+		version=$(uv tool list 2>/dev/null | grep -i "^${pkg}" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+		if [[ -n "$version" ]]; then
+			echo "$version"
+			return 0
+		fi
+	fi
+
+	echo "not installed"
+	return 0
+}
 
 # Get installed version from npm global package.json
 # Fallback for tools where --version starts a server instead of printing a version
@@ -273,8 +321,13 @@ check_tool() {
 	local update_cmd="$6"
 
 	local installed
-	# Pass package name for npm tools so fallback to package.json works
-	if [[ "$category" == "npm" ]]; then
+	# pip tools: use pip show for version detection — pip-only libraries (e.g.
+	# crawl4ai, dspy) have no CLI binary so command -v always fails.
+	# npm tools: pass package name so fallback to package.json works.
+	# All other categories: standard CLI binary detection.
+	if [[ "$category" == "pip" ]]; then
+		installed=$(get_pip_installed_version "$pkg")
+	elif [[ "$category" == "npm" ]]; then
 		installed=$(get_installed_version "$cmd" "$ver_flag" "$pkg")
 	else
 		installed=$(get_installed_version "$cmd" "$ver_flag")
@@ -377,14 +430,8 @@ check_category() {
 	return 0
 }
 
-# Main
-main() {
-	if [[ "$JSON_OUTPUT" != "true" && "$QUIET" != "true" ]]; then
-		echo -e "${BOLD}${BLUE}Tool Version Check${NC}"
-		echo "=================="
-	fi
-
-	# Check requested categories
+# Dispatch category checks based on CATEGORY variable
+_check_all_categories() {
 	case "$CATEGORY" in
 	npm)
 		check_category "NPM" "${NPM_TOOLS[@]}"
@@ -413,33 +460,37 @@ main() {
 		fi
 		;;
 	esac
+	return 0
+}
 
-	# Output results
-	if [[ "$JSON_OUTPUT" == "true" ]]; then
-		echo "{"
-		echo "  \"summary\": {"
-		echo "    \"installed\": $INSTALLED_COUNT,"
-		echo "    \"outdated\": $OUTDATED_COUNT,"
-		echo "    \"not_installed\": $NOT_INSTALLED_COUNT,"
-		echo "    \"timeout\": $TIMEOUT_COUNT,"
-		echo "    \"unknown\": $UNKNOWN_COUNT"
-		echo "  },"
-		echo "  \"tools\": ["
-		local first=true
-		for result in "${JSON_RESULTS[@]}"; do
-			if [[ "$first" == "true" ]]; then
-				first=false
-			else
-				echo ","
-			fi
-			echo -n "    $result"
-		done
-		echo ""
-		echo "  ]"
-		echo "}"
-		return 0
-	fi
+# Emit JSON output for all results and return
+_output_json_results() {
+	echo "{"
+	echo "  \"summary\": {"
+	echo "    \"installed\": $INSTALLED_COUNT,"
+	echo "    \"outdated\": $OUTDATED_COUNT,"
+	echo "    \"not_installed\": $NOT_INSTALLED_COUNT,"
+	echo "    \"timeout\": $TIMEOUT_COUNT,"
+	echo "    \"unknown\": $UNKNOWN_COUNT"
+	echo "  },"
+	echo "  \"tools\": ["
+	local first=true
+	for result in "${JSON_RESULTS[@]}"; do
+		if [[ "$first" == "true" ]]; then
+			first=false
+		else
+			echo ","
+		fi
+		echo -n "    $result"
+	done
+	echo ""
+	echo "  ]"
+	echo "}"
+	return 0
+}
 
+# Print summary counts and handle auto-update or update instructions
+_output_summary_and_updates() {
 	# Summary (skip in quiet mode if nothing outdated)
 	if [[ "$QUIET" == "true" && $OUTDATED_COUNT -eq 0 ]]; then
 		return 0
@@ -460,7 +511,6 @@ main() {
 		echo ""
 	fi
 
-	# Handle updates
 	if [[ $OUTDATED_COUNT -gt 0 ]]; then
 		if [[ "$AUTO_UPDATE" == "true" ]]; then
 			echo -e "${BLUE}Updating outdated tools...${NC}"
@@ -502,6 +552,24 @@ main() {
 	else
 		echo -e "${GREEN}All installed tools are up to date!${NC}"
 	fi
+	return 0
+}
+
+# Main
+main() {
+	if [[ "$JSON_OUTPUT" != "true" && "$QUIET" != "true" ]]; then
+		echo -e "${BOLD}${BLUE}Tool Version Check${NC}"
+		echo "=================="
+	fi
+
+	_check_all_categories
+
+	if [[ "$JSON_OUTPUT" == "true" ]]; then
+		_output_json_results
+		return 0
+	fi
+
+	_output_summary_and_updates
 }
 
 main

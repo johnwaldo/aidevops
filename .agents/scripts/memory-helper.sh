@@ -82,9 +82,9 @@ source "${SCRIPT_DIR}/memory/recall.sh"
 source "${SCRIPT_DIR}/memory/maintenance.sh"
 
 #######################################
-# Show help
+# Help: usage and commands section
 #######################################
-cmd_help() {
+_help_usage_commands() {
 	cat <<'EOF'
 memory-helper.sh - Lightweight memory system for aidevops
 
@@ -97,6 +97,7 @@ USAGE:
 COMMANDS:
     store       Store a new learning (with automatic deduplication)
     recall      Search and retrieve learnings
+    feedback    Record retrieval feedback (mark a recalled memory as useful/not useful)
     log         Show recent auto-captured memories (alias for recall --recent --auto-only)
     history     Show version history for a memory (ancestors/descendants)
     latest      Find the latest version of a memory chain
@@ -113,7 +114,15 @@ COMMANDS:
     graduate    Promote validated memories into shared docs (delegates to memory-graduate-helper.sh)
     namespaces  List all memory namespaces
     help        Show this help
+EOF
+	return 0
+}
 
+#######################################
+# Help: store and recall options
+#######################################
+_help_store_recall_options() {
+	cat <<'EOF'
 GLOBAL OPTIONS:
     --namespace <name>    Use isolated memory namespace (per-runner)
                           Creates DB at: memory/namespaces/<name>/memory.db
@@ -162,6 +171,26 @@ RECALL OPTIONS:
     --stats               Show memory statistics
     --json                Output as JSON
 
+FEEDBACK OPTIONS:
+    <memory_id>           Memory ID to record feedback for (required)
+    --signal <type>       Signal type: cited, edited, led_to_new, reused, dead_end
+    --value <float>       Custom reward value (overrides --signal)
+
+FEEDBACK SIGNALS (retrieval feedback loop):
+    cited      (+1.0) — memory was referenced/linked in new content
+    edited     (+0.5) — memory was edited/updated after retrieval
+    led_to_new (+0.6) — a new memory was created after retrieving this one
+    reused     (+0.4) — same memory recalled across different queries
+    dead_end   (-0.15) — retrieved in top results but no follow-up action
+EOF
+	return 0
+}
+
+#######################################
+# Help: prune and dedup options
+#######################################
+_help_prune_dedup_options() {
+	cat <<'EOF'
 PRUNE OPTIONS:
     --older-than-days <n> Age threshold (default: 90)
     --dry-run             Show what would be deleted
@@ -206,7 +235,15 @@ STALENESS PREVENTION:
     - Recall updates last_accessed_at (used = valuable)
     - Prune removes old entries that were never accessed
     - Validate warns about potentially stale entries
+EOF
+	return 0
+}
 
+#######################################
+# Help: examples section
+#######################################
+_help_examples() {
+	cat <<'EOF'
 EXAMPLES:
     # Store a learning
     memory-helper.sh store --content "Use FTS5 for fast search" --type WORKING_SOLUTION
@@ -246,6 +283,15 @@ EXAMPLES:
     # Recall learnings (hybrid FTS5+semantic - best results)
     memory-helper.sh recall --query "authentication patterns" --hybrid
 
+    # Record feedback: memory was cited in new content
+    memory-helper.sh feedback mem_xxx --signal cited
+
+    # Record feedback: memory was a dead end (retrieved but not used)
+    memory-helper.sh feedback mem_xxx --signal dead_end
+
+    # Record feedback with custom reward value
+    memory-helper.sh feedback mem_xxx --value 0.8
+
     # Check for stale entries
     memory-helper.sh validate
 
@@ -259,7 +305,15 @@ EXAMPLES:
     memory-helper.sh dedup --dry-run
     memory-helper.sh dedup
     memory-helper.sh dedup --exact-only
+EOF
+	return 0
+}
 
+#######################################
+# Help: entity and namespace examples
+#######################################
+_help_entity_namespace_examples() {
+	cat <<'EOF'
 ENTITY EXAMPLES:
     # Store a learning linked to an entity
     memory-helper.sh store --content "Prefers concise responses" --entity ent_xxx --type USER_PREFERENCE
@@ -302,6 +356,18 @@ EOF
 }
 
 #######################################
+# Show help (orchestrates sub-sections)
+#######################################
+cmd_help() {
+	_help_usage_commands
+	_help_store_recall_options
+	_help_prune_dedup_options
+	_help_examples
+	_help_entity_namespace_examples
+	return 0
+}
+
+#######################################
 # Main entry point
 # Parses global --namespace flag before dispatching to commands
 #######################################
@@ -334,6 +400,7 @@ main() {
 	case "$command" in
 	store) cmd_store "$@" ;;
 	recall) cmd_recall "$@" ;;
+	feedback) cmd_feedback "$@" ;;
 	log) cmd_log "$@" ;;
 	history) cmd_history "$@" ;;
 	latest) cmd_latest "$@" ;;

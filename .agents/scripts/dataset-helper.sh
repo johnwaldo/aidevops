@@ -87,6 +87,274 @@ _require_jq() {
 }
 
 # =============================================================================
+# Validate sub-functions
+# =============================================================================
+
+# Print usage help for the validate command
+_validate_help() {
+	echo "Usage: dataset-helper.sh validate <file> [--strict]"
+	echo ""
+	echo "Validates a JSONL dataset file."
+	echo ""
+	echo "Checks:"
+	echo "  - Each line is valid JSON"
+	echo "  - Required fields present: id, input"
+	echo "  - No duplicate IDs"
+	echo ""
+	echo "Options:"
+	echo "  --strict  Also validate optional field types"
+	return 0
+}
+
+# Check a single line is valid JSON; print error and return 1 on failure
+_validate_line_json() {
+	local line="$1"
+	local line_num="$2"
+
+	if ! echo "$line" | jq empty 2>/dev/null; then
+		print_error "Line $line_num: Invalid JSON"
+		return 1
+	fi
+	return 0
+}
+
+# Check required fields (id, input) on a parsed line; return count of errors found
+# Outputs the entry id to stdout so the caller can track duplicates
+_validate_line_fields() {
+	local line="$1"
+	local line_num="$2"
+	local field_errors=0
+
+	local has_id has_input
+	has_id=$(echo "$line" | jq 'has("id")')
+	has_input=$(echo "$line" | jq 'has("input")')
+
+	if [[ "$has_id" != "true" ]]; then
+		print_error "Line $line_num: Missing required field 'id'"
+		field_errors=$((field_errors + 1))
+	fi
+
+	if [[ "$has_input" != "true" ]]; then
+		print_error "Line $line_num: Missing required field 'input'"
+		field_errors=$((field_errors + 1))
+	fi
+
+	# Echo the entry id so the caller can check for duplicates
+	if [[ "$has_id" == "true" ]]; then
+		echo "$line" | jq -r '.id'
+	fi
+
+	return "$field_errors"
+}
+
+# Run strict type-checking on optional fields; print errors, return count found
+_validate_line_strict() {
+	local line="$1"
+	local line_num="$2"
+	local strict_errors=0
+
+	local type_errors
+	type_errors=$(echo "$line" | jq '
+		[ if has("id") and (.id | type) != "string" then "id must be string" else empty end,
+		  if has("input") and (.input | type) != "string" then "input must be string" else empty end,
+		  if has("tags") and ((.tags | type) != "array" or any(.tags[]?; type != "string")) then "tags must be an array of strings" else empty end,
+		  if has("expected") and (.expected | type) != "string" and .expected != null then "expected must be string or null" else empty end,
+		  if has("context") and (.context | type) != "string" and .context != null then "context must be string or null" else empty end,
+		  if has("source") and (.source | type) != "string" then "source must be string" else empty end,
+		  if has("metadata") and (.metadata | type) != "object" and .metadata != null then "metadata must be object or null" else empty end
+		] | .[]' || echo "")
+
+	if [[ -n "$type_errors" ]]; then
+		while IFS= read -r err; do
+			[[ -z "$err" ]] && continue
+			# Remove surrounding quotes from jq string output
+			err="${err#\"}"
+			err="${err%\"}"
+			print_error "Line $line_num: $err"
+			strict_errors=$((strict_errors + 1))
+		done <<<"$type_errors"
+	fi
+
+	return "$strict_errors"
+}
+
+# =============================================================================
+# Add sub-functions
+# =============================================================================
+
+# Print usage help for the add command
+_add_help() {
+	echo "Usage: dataset-helper.sh add <file> --input \"...\" [options]"
+	echo ""
+	echo "Appends an entry to a dataset."
+	echo ""
+	echo "Options:"
+	echo "  --input \"text\"      Input prompt (required)"
+	echo "  --expected \"text\"   Expected output (optional)"
+	echo "  --context \"text\"    Context for grounding (optional)"
+	echo "  --tags \"a,b,c\"     Comma-separated tags (optional)"
+	echo "  --source \"text\"    Provenance: manual, trace:ID, generated:model (default: manual)"
+	echo "  --id \"text\"        Custom ID (default: auto-generated)"
+	echo "  --metadata '{}'    JSON object with extra fields (optional)"
+	return 0
+}
+
+# Validate parsed add inputs and resolve entry_id; echo resolved id to stdout
+# Returns 1 on validation failure
+_add_validate_inputs() {
+	local file_path="$1"
+	local input_text="$2"
+	local entry_id="$3"
+
+	if [[ -z "$file_path" ]]; then
+		print_error "File path is required"
+		echo "Usage: dataset-helper.sh add <file> --input \"...\""
+		return 1
+	fi
+
+	if [[ -z "$input_text" ]]; then
+		print_error "--input is required"
+		return 1
+	fi
+
+	_require_jq || return 1
+
+	if [[ ! -f "$file_path" ]]; then
+		print_error "Dataset file not found: $file_path"
+		echo "Create one first: dataset-helper.sh create <name>"
+		return 1
+	fi
+
+	# Auto-generate ID if not provided; echo the resolved id
+	if [[ -z "$entry_id" ]]; then
+		_generate_id
+	else
+		echo "$entry_id"
+	fi
+	return 0
+}
+
+# Build the base JSON entry from parsed fields; echo result to stdout
+_add_build_entry() {
+	local entry_id="$1"
+	local input_text="$2"
+	local tags_csv="$3"
+	local source_text="$4"
+	local expected_text="$5"
+	local context_text="$6"
+	local metadata_json="$7"
+
+	# Build tags array
+	local tags_json="[]"
+	if [[ -n "$tags_csv" ]]; then
+		tags_json=$(echo "$tags_csv" | tr ',' '\n' | jq -R . | jq -s .)
+	fi
+
+	# Build the base entry JSON
+	local entry
+	entry=$(jq -c -n \
+		--arg id "$entry_id" \
+		--arg input "$input_text" \
+		--argjson tags "$tags_json" \
+		--arg source "$source_text" \
+		'{id: $id, input: $input, tags: $tags, source: $source}')
+
+	# Add optional fields
+	if [[ -n "$expected_text" ]]; then
+		entry=$(echo "$entry" | jq -c --arg expected "$expected_text" '. + {expected: $expected}')
+	fi
+
+	if [[ -n "$context_text" ]]; then
+		entry=$(echo "$entry" | jq -c --arg context "$context_text" '. + {context: $context}')
+	fi
+
+	if [[ -n "$metadata_json" ]]; then
+		# Validate metadata is valid JSON object
+		if echo "$metadata_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+			entry=$(echo "$entry" | jq -c --argjson meta "$metadata_json" '. + {metadata: $meta}')
+		else
+			print_warning "Invalid metadata JSON (must be object), skipping"
+		fi
+	fi
+
+	echo "$entry"
+	return 0
+}
+
+# =============================================================================
+# Promote sub-functions
+# =============================================================================
+
+# Find a trace record in the observability metrics file; echo the JSON record
+# Returns 1 if not found
+_promote_find_trace() {
+	local trace_id="$1"
+	local metrics_file="$2"
+
+	# Try matching by request_id first
+	local trace_data
+	trace_data=$(jq -c --arg trace_id "$trace_id" 'select(.request_id == $trace_id)' <"$metrics_file" | head -1)
+
+	# Fallback: match by session_id
+	if [[ -z "$trace_data" ]]; then
+		trace_data=$(jq -c --arg trace_id "$trace_id" 'select(.session_id == $trace_id)' <"$metrics_file" | head -1)
+	fi
+
+	if [[ -z "$trace_data" ]]; then
+		return 1
+	fi
+
+	echo "$trace_data"
+	return 0
+}
+
+# Build a dataset entry from a trace record; echo the JSON entry to stdout
+_promote_build_entry() {
+	local trace_data="$1"
+	local trace_id="$2"
+	local tags_csv="$3"
+
+	# Extract fields from trace
+	local model project cost_total recorded_at
+	model=$(echo "$trace_data" | jq -r '.model // "unknown"')
+	project=$(echo "$trace_data" | jq -r '.project // "unknown"')
+	cost_total=$(echo "$trace_data" | jq -r '.cost_total // 0')
+	recorded_at=$(echo "$trace_data" | jq -r '.recorded_at // ""')
+
+	# Build tags
+	local tags_json="[\"promoted\"]"
+	if [[ -n "$tags_csv" ]]; then
+		tags_json=$(echo "promoted,$tags_csv" | tr ',' '\n' | jq -R . | jq -s 'unique')
+	fi
+
+	# Build metadata from trace
+	local metadata
+	metadata=$(jq -c -n \
+		--arg model "$model" \
+		--arg project "$project" \
+		--arg cost "$cost_total" \
+		--arg recorded_at "$recorded_at" \
+		--arg trace_id "$trace_id" \
+		'{model: $model, project: $project, cost: ($cost | tonumber), recorded_at: $recorded_at, original_trace_id: $trace_id}')
+
+	# Create dataset entry — input is a placeholder since traces don't store prompts
+	local entry_id
+	entry_id=$(_generate_id)
+
+	local entry
+	entry=$(jq -c -n \
+		--arg id "$entry_id" \
+		--arg input "[Promoted from trace $trace_id] Model: $model, Project: $project" \
+		--argjson tags "$tags_json" \
+		--arg source "trace:$trace_id" \
+		--argjson metadata "$metadata" \
+		'{id: $id, input: $input, tags: $tags, source: $source, metadata: $metadata}')
+
+	echo "$entry"
+	return 0
+}
+
+# =============================================================================
 # Commands
 # =============================================================================
 
@@ -153,41 +421,93 @@ cmd_create() {
 	return 0
 }
 
-# Validate a JSONL dataset file
-cmd_validate() {
-	local file_path=""
-	local strict=false
+# Parse validate command arguments.
+# Sets _VAL_FILE and _VAL_STRICT in caller scope.
+# Returns 0 on success, 1 on error.
+_validate_parse_args() {
+	_VAL_FILE=""
+	_VAL_STRICT=false
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--strict)
-			strict=true
+			_VAL_STRICT=true
 			shift
 			;;
 		--help | -h)
-			echo "Usage: dataset-helper.sh validate <file> [--strict]"
-			echo ""
-			echo "Validates a JSONL dataset file."
-			echo ""
-			echo "Checks:"
-			echo "  - Each line is valid JSON"
-			echo "  - Required fields present: id, input"
-			echo "  - No duplicate IDs"
-			echo ""
-			echo "Options:"
-			echo "  --strict  Also validate optional field types"
-			return 0
+			_validate_help
+			return 2
 			;;
 		-*)
 			print_error "Unknown option: $1"
 			return 1
 			;;
 		*)
-			file_path="$1"
+			_VAL_FILE="$1"
 			shift
 			;;
 		esac
 	done
+	return 0
+}
+
+# Iterate lines of a JSONL file, validate each, and return error count.
+# Outputs final line_num to stdout as "LINES:<n>".
+_validate_process_file() {
+	local file_path="$1"
+	local strict="$2"
+
+	local errors=0
+	local line_num=0
+	local seen_ids=""
+
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		line_num=$((line_num + 1))
+		[[ -z "$line" ]] && continue
+
+		if ! _validate_line_json "$line" "$line_num"; then
+			errors=$((errors + 1))
+			continue
+		fi
+
+		local entry_id
+		entry_id=$(_validate_line_fields "$line" "$line_num") || {
+			local field_err_count=$?
+			errors=$((errors + field_err_count))
+			entry_id=""
+		}
+
+		if [[ -n "$entry_id" ]]; then
+			if printf '%s' "$seen_ids" | grep -qxF -- "$entry_id"; then
+				print_error "Line $line_num: Duplicate ID '$entry_id'"
+				errors=$((errors + 1))
+			else
+				seen_ids="${seen_ids}${entry_id}
+"
+			fi
+		fi
+
+		if [[ "$strict" == "true" ]]; then
+			_validate_line_strict "$line" "$line_num" || {
+				local strict_err_count=$?
+				errors=$((errors + strict_err_count))
+			}
+		fi
+	done <"$file_path"
+
+	echo "LINES:${line_num}"
+	return "$errors"
+}
+
+# Validate a JSONL dataset file
+cmd_validate() {
+	_validate_parse_args "$@"
+	local parse_rc=$?
+	[[ "$parse_rc" -eq 2 ]] && return 0
+	[[ "$parse_rc" -ne 0 ]] && return 1
+
+	local file_path="$_VAL_FILE"
+	local strict="$_VAL_STRICT"
 
 	if [[ -z "$file_path" ]]; then
 		print_error "File path is required"
@@ -202,7 +522,6 @@ cmd_validate() {
 		return 1
 	fi
 
-	# Empty file is valid (newly created dataset)
 	local line_count
 	line_count=$(wc -l <"$file_path" | tr -d ' ')
 	if [[ "$line_count" -eq 0 ]]; then
@@ -210,76 +529,11 @@ cmd_validate() {
 		return 0
 	fi
 
-	local errors=0
-	local line_num=0
-	local seen_ids=""
-
-	while IFS= read -r line || [[ -n "$line" ]]; do
-		line_num=$((line_num + 1))
-
-		# Skip empty lines
-		[[ -z "$line" ]] && continue
-
-		# Check valid JSON
-		if ! echo "$line" | jq empty 2>/dev/null; then
-			print_error "Line $line_num: Invalid JSON"
-			errors=$((errors + 1))
-			continue
-		fi
-
-		# Check required fields
-		local has_id has_input
-		has_id=$(echo "$line" | jq 'has("id")')
-		has_input=$(echo "$line" | jq 'has("input")')
-
-		if [[ "$has_id" != "true" ]]; then
-			print_error "Line $line_num: Missing required field 'id'"
-			errors=$((errors + 1))
-		fi
-
-		if [[ "$has_input" != "true" ]]; then
-			print_error "Line $line_num: Missing required field 'input'"
-			errors=$((errors + 1))
-		fi
-
-		# Check for duplicate IDs (newline-separated list, bash 3.2 compatible)
-		if [[ "$has_id" == "true" ]]; then
-			local entry_id
-			entry_id=$(echo "$line" | jq -r '.id')
-			if printf '%s' "$seen_ids" | grep -qxF -- "$entry_id"; then
-				print_error "Line $line_num: Duplicate ID '$entry_id'"
-				errors=$((errors + 1))
-			else
-				seen_ids="${seen_ids}${entry_id}
-"
-			fi
-		fi
-
-		# Strict mode: validate optional field types
-		if [[ "$strict" == "true" ]]; then
-			local type_errors
-			type_errors=$(echo "$line" | jq '
-				[ if has("id") and (.id | type) != "string" then "id must be string" else empty end,
-				  if has("input") and (.input | type) != "string" then "input must be string" else empty end,
-				  if has("tags") and ((.tags | type) != "array" or any(.tags[]?; type != "string")) then "tags must be an array of strings" else empty end,
-				  if has("expected") and (.expected | type) != "string" and .expected != null then "expected must be string or null" else empty end,
-				  if has("context") and (.context | type) != "string" and .context != null then "context must be string or null" else empty end,
-				  if has("source") and (.source | type) != "string" then "source must be string" else empty end,
-				  if has("metadata") and (.metadata | type) != "object" and .metadata != null then "metadata must be object or null" else empty end
-				] | .[]' || echo "")
-
-			if [[ -n "$type_errors" ]]; then
-				while IFS= read -r err; do
-					[[ -z "$err" ]] && continue
-					# Remove surrounding quotes from jq string output
-					err="${err#\"}"
-					err="${err%\"}"
-					print_error "Line $line_num: $err"
-					errors=$((errors + 1))
-				done <<<"$type_errors"
-			fi
-		fi
-	done <"$file_path"
+	local process_output
+	process_output=$(_validate_process_file "$file_path" "$strict")
+	local errors=$?
+	local line_num
+	line_num=$(printf '%s' "$process_output" | sed -n 's/^LINES://p')
 
 	if [[ "$errors" -gt 0 ]]; then
 		print_error "Validation failed: $errors error(s) in $file_path"
@@ -290,16 +544,19 @@ cmd_validate() {
 	return 0
 }
 
-# Add an entry to a dataset
-cmd_add() {
-	local file_path=""
-	local input_text=""
-	local expected_text=""
-	local context_text=""
-	local tags_csv=""
-	local source_text="manual"
-	local entry_id=""
-	local metadata_json=""
+# Parse add command arguments.
+# Sets _ADD_FILE, _ADD_INPUT, _ADD_EXPECTED, _ADD_CONTEXT, _ADD_TAGS,
+#      _ADD_SOURCE, _ADD_ID, _ADD_METADATA in caller scope.
+# Returns 0 on success, 1 on error, 2 on --help.
+_add_parse_args() {
+	_ADD_FILE=""
+	_ADD_INPUT=""
+	_ADD_EXPECTED=""
+	_ADD_CONTEXT=""
+	_ADD_TAGS=""
+	_ADD_SOURCE="manual"
+	_ADD_ID=""
+	_ADD_METADATA=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -308,7 +565,7 @@ cmd_add() {
 				print_error "--input requires a value"
 				return 1
 			}
-			input_text="$2"
+			_ADD_INPUT="$2"
 			shift 2
 			;;
 		--expected)
@@ -316,7 +573,7 @@ cmd_add() {
 				print_error "--expected requires a value"
 				return 1
 			}
-			expected_text="$2"
+			_ADD_EXPECTED="$2"
 			shift 2
 			;;
 		--context)
@@ -324,7 +581,7 @@ cmd_add() {
 				print_error "--context requires a value"
 				return 1
 			}
-			context_text="$2"
+			_ADD_CONTEXT="$2"
 			shift 2
 			;;
 		--tags)
@@ -332,7 +589,7 @@ cmd_add() {
 				print_error "--tags requires a value"
 				return 1
 			}
-			tags_csv="$2"
+			_ADD_TAGS="$2"
 			shift 2
 			;;
 		--source)
@@ -340,7 +597,7 @@ cmd_add() {
 				print_error "--source requires a value"
 				return 1
 			}
-			source_text="$2"
+			_ADD_SOURCE="$2"
 			shift 2
 			;;
 		--id)
@@ -348,7 +605,7 @@ cmd_add() {
 				print_error "--id requires a value"
 				return 1
 			}
-			entry_id="$2"
+			_ADD_ID="$2"
 			shift 2
 			;;
 		--metadata)
@@ -356,31 +613,20 @@ cmd_add() {
 				print_error "--metadata requires a value"
 				return 1
 			}
-			metadata_json="$2"
+			_ADD_METADATA="$2"
 			shift 2
 			;;
 		--help | -h)
-			echo "Usage: dataset-helper.sh add <file> --input \"...\" [options]"
-			echo ""
-			echo "Appends an entry to a dataset."
-			echo ""
-			echo "Options:"
-			echo "  --input \"text\"      Input prompt (required)"
-			echo "  --expected \"text\"   Expected output (optional)"
-			echo "  --context \"text\"    Context for grounding (optional)"
-			echo "  --tags \"a,b,c\"     Comma-separated tags (optional)"
-			echo "  --source \"text\"    Provenance: manual, trace:ID, generated:model (default: manual)"
-			echo "  --id \"text\"        Custom ID (default: auto-generated)"
-			echo "  --metadata '{}'    JSON object with extra fields (optional)"
-			return 0
+			_add_help
+			return 2
 			;;
 		-*)
 			print_error "Unknown option: $1"
 			return 1
 			;;
 		*)
-			if [[ -z "$file_path" ]]; then
-				file_path="$1"
+			if [[ -z "$_ADD_FILE" ]]; then
+				_ADD_FILE="$1"
 			else
 				print_error "Unexpected argument: $1"
 				return 1
@@ -389,63 +635,31 @@ cmd_add() {
 			;;
 		esac
 	done
+	return 0
+}
 
-	if [[ -z "$file_path" ]]; then
-		print_error "File path is required"
-		echo "Usage: dataset-helper.sh add <file> --input \"...\""
-		return 1
-	fi
+# Add an entry to a dataset
+cmd_add() {
+	_add_parse_args "$@"
+	local parse_rc=$?
+	[[ "$parse_rc" -eq 2 ]] && return 0
+	[[ "$parse_rc" -ne 0 ]] && return 1
 
-	if [[ -z "$input_text" ]]; then
-		print_error "--input is required"
-		return 1
-	fi
+	local file_path="$_ADD_FILE"
+	local input_text="$_ADD_INPUT"
+	local expected_text="$_ADD_EXPECTED"
+	local context_text="$_ADD_CONTEXT"
+	local tags_csv="$_ADD_TAGS"
+	local source_text="$_ADD_SOURCE"
+	local entry_id="$_ADD_ID"
+	local metadata_json="$_ADD_METADATA"
 
-	_require_jq || return 1
+	entry_id=$(_add_validate_inputs "$file_path" "$input_text" "$entry_id") || return 1
 
-	if [[ ! -f "$file_path" ]]; then
-		print_error "Dataset file not found: $file_path"
-		echo "Create one first: dataset-helper.sh create <name>"
-		return 1
-	fi
-
-	# Auto-generate ID if not provided
-	if [[ -z "$entry_id" ]]; then
-		entry_id=$(_generate_id)
-	fi
-
-	# Build tags array
-	local tags_json="[]"
-	if [[ -n "$tags_csv" ]]; then
-		tags_json=$(echo "$tags_csv" | tr ',' '\n' | jq -R . | jq -s .)
-	fi
-
-	# Build the entry JSON
 	local entry
-	entry=$(jq -c -n \
-		--arg id "$entry_id" \
-		--arg input "$input_text" \
-		--argjson tags "$tags_json" \
-		--arg source "$source_text" \
-		'{id: $id, input: $input, tags: $tags, source: $source}')
-
-	# Add optional fields
-	if [[ -n "$expected_text" ]]; then
-		entry=$(echo "$entry" | jq -c --arg expected "$expected_text" '. + {expected: $expected}')
-	fi
-
-	if [[ -n "$context_text" ]]; then
-		entry=$(echo "$entry" | jq -c --arg context "$context_text" '. + {context: $context}')
-	fi
-
-	if [[ -n "$metadata_json" ]]; then
-		# Validate metadata is valid JSON object
-		if echo "$metadata_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
-			entry=$(echo "$entry" | jq -c --argjson meta "$metadata_json" '. + {metadata: $meta}')
-		else
-			print_warning "Invalid metadata JSON (must be object), skipping"
-		fi
-	fi
+	entry=$(_add_build_entry \
+		"$entry_id" "$input_text" "$tags_csv" "$source_text" \
+		"$expected_text" "$context_text" "$metadata_json")
 
 	echo "$entry" >>"$file_path"
 	print_success "Added entry '$entry_id' to $(basename "$file_path")"
@@ -622,11 +836,13 @@ cmd_stats() {
 	return 0
 }
 
-# Promote an observability trace to a dataset entry
-cmd_promote() {
-	local trace_id=""
-	local output_file=""
-	local tags_csv=""
+# Parse promote command arguments.
+# Sets _PROMO_TRACE_ID, _PROMO_OUTPUT, _PROMO_TAGS in caller scope.
+# Returns 0 on success, 1 on error, 2 on --help.
+_promote_parse_args() {
+	_PROMO_TRACE_ID=""
+	_PROMO_OUTPUT=""
+	_PROMO_TAGS=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -635,7 +851,7 @@ cmd_promote() {
 				print_error "--trace-id requires a value"
 				return 1
 			}
-			trace_id="$2"
+			_PROMO_TRACE_ID="$2"
 			shift 2
 			;;
 		--output | -o)
@@ -643,7 +859,7 @@ cmd_promote() {
 				print_error "-o/--output requires a value"
 				return 1
 			}
-			output_file="$2"
+			_PROMO_OUTPUT="$2"
 			shift 2
 			;;
 		--tags)
@@ -651,7 +867,7 @@ cmd_promote() {
 				print_error "--tags requires a value"
 				return 1
 			}
-			tags_csv="$2"
+			_PROMO_TAGS="$2"
 			shift 2
 			;;
 		--help | -h)
@@ -665,7 +881,7 @@ cmd_promote() {
 			echo "  --tags \"a,b\"      Additional tags for the entry"
 			echo ""
 			echo "The trace's model, project, and cost are stored in metadata."
-			return 0
+			return 2
 			;;
 		-*)
 			print_error "Unknown option: $1"
@@ -677,6 +893,39 @@ cmd_promote() {
 			;;
 		esac
 	done
+	return 0
+}
+
+# Resolve the output file for promote, creating it if needed.
+# Outputs the resolved path to stdout; returns 1 on error.
+_promote_resolve_output() {
+	local output_file="$1"
+
+	if [[ -z "$output_file" ]]; then
+		_ensure_dir "$GLOBAL_DATASETS_DIR"
+		output_file="${GLOBAL_DATASETS_DIR}/promoted.jsonl"
+		[[ -f "$output_file" ]] || touch "$output_file"
+	fi
+
+	if [[ ! -f "$output_file" ]]; then
+		print_error "Output dataset not found: $output_file"
+		return 1
+	fi
+
+	echo "$output_file"
+	return 0
+}
+
+# Promote an observability trace to a dataset entry
+cmd_promote() {
+	_promote_parse_args "$@"
+	local parse_rc=$?
+	[[ "$parse_rc" -eq 2 ]] && return 0
+	[[ "$parse_rc" -ne 0 ]] && return 1
+
+	local trace_id="$_PROMO_TRACE_ID"
+	local output_file="$_PROMO_OUTPUT"
+	local tags_csv="$_PROMO_TAGS"
 
 	if [[ -z "$trace_id" ]]; then
 		print_error "--trace-id is required"
@@ -692,68 +941,18 @@ cmd_promote() {
 		return 1
 	fi
 
-	# Find the trace in metrics (use --arg to safely pass trace_id)
 	local trace_data
-	trace_data=$(jq -c --arg trace_id "$trace_id" 'select(.request_id == $trace_id)' <"$OBS_METRICS" | head -1)
-
-	if [[ -z "$trace_data" ]]; then
-		# Try matching by session_id as fallback
-		trace_data=$(jq -c --arg trace_id "$trace_id" 'select(.session_id == $trace_id)' <"$OBS_METRICS" | head -1)
-	fi
-
-	if [[ -z "$trace_data" ]]; then
+	if ! trace_data=$(_promote_find_trace "$trace_id" "$OBS_METRICS"); then
 		print_error "Trace not found: $trace_id"
 		echo "Check available traces with: jq '.request_id' $OBS_METRICS | head"
 		return 1
 	fi
 
-	# Extract fields from trace
-	local model project cost_total recorded_at
-	model=$(echo "$trace_data" | jq -r '.model // "unknown"')
-	project=$(echo "$trace_data" | jq -r '.project // "unknown"')
-	cost_total=$(echo "$trace_data" | jq -r '.cost_total // 0')
-	recorded_at=$(echo "$trace_data" | jq -r '.recorded_at // ""')
+	output_file=$(_promote_resolve_output "$output_file") || return 1
 
-	# Default output file
-	if [[ -z "$output_file" ]]; then
-		_ensure_dir "$GLOBAL_DATASETS_DIR"
-		output_file="${GLOBAL_DATASETS_DIR}/promoted.jsonl"
-		[[ -f "$output_file" ]] || touch "$output_file"
-	fi
-
-	if [[ ! -f "$output_file" ]]; then
-		print_error "Output dataset not found: $output_file"
-		return 1
-	fi
-
-	# Build tags
-	local tags_json="[\"promoted\"]"
-	if [[ -n "$tags_csv" ]]; then
-		tags_json=$(echo "promoted,$tags_csv" | tr ',' '\n' | jq -R . | jq -s 'unique')
-	fi
-
-	# Build metadata from trace
-	local metadata
-	metadata=$(jq -c -n \
-		--arg model "$model" \
-		--arg project "$project" \
-		--arg cost "$cost_total" \
-		--arg recorded_at "$recorded_at" \
-		--arg trace_id "$trace_id" \
-		'{model: $model, project: $project, cost: ($cost | tonumber), recorded_at: $recorded_at, original_trace_id: $trace_id}')
-
-	# Create dataset entry — input is a placeholder since traces don't store prompts
-	local entry_id
-	entry_id=$(_generate_id)
-
-	local entry
-	entry=$(jq -c -n \
-		--arg id "$entry_id" \
-		--arg input "[Promoted from trace $trace_id] Model: $model, Project: $project" \
-		--argjson tags "$tags_json" \
-		--arg source "trace:$trace_id" \
-		--argjson metadata "$metadata" \
-		'{id: $id, input: $input, tags: $tags, source: $source, metadata: $metadata}')
+	local entry entry_id
+	entry=$(_promote_build_entry "$trace_data" "$trace_id" "$tags_csv")
+	entry_id=$(echo "$entry" | jq -r '.id')
 
 	echo "$entry" >>"$output_file"
 	print_success "Promoted trace '$trace_id' to dataset entry '$entry_id' in $(basename "$output_file")"

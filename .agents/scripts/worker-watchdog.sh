@@ -5,7 +5,7 @@
 # have no monitoring. Workers that crash, hang, or enter the OpenCode idle-state
 # bug sit indefinitely consuming resources and blocking issue re-dispatch.
 #
-# Four failure modes detected:
+# Five failure modes detected:
 #   1. CPU idle: Worker completed but sits in file-watcher (OpenCode idle bug).
 #      Signal: tree CPU < WORKER_IDLE_CPU_THRESHOLD for WORKER_IDLE_TIMEOUT.
 #   2. Progress stall: Worker is running but producing no output (stuck on API,
@@ -16,11 +16,16 @@
 #      commits == 0, messages >= WORKER_THRASH_MESSAGE_THRESHOLD.
 #   4. Runtime ceiling: Worker has been running too long regardless of activity.
 #      Signal: elapsed > WORKER_MAX_RUNTIME. Prevents infinite loops.
+#   5. Provider backoff stall (GH#5650): Worker's provider hit auth_error or
+#      rate-limit and is backed off in headless-runtime state DB. Worker process
+#      stays alive but makes no progress. Signal: provider_backoff table has an
+#      active entry for the worker's provider/model with retry_after in the future.
+#      Kill immediately — no transcript gate needed (provider won't respond anyway).
 #
 # On kill:
 #   - Posts a comment on the associated GitHub issue explaining the kill reason
 #   - Removes the worker's status:in-progress label
-#   - Adds status:available for recoverable exits (idle, stall, runtime)
+#   - Adds status:available for recoverable exits (idle, stall, runtime, backoff)
 #   - Adds status:blocked for zero-commit thrash to prevent blind relaunch loops
 #   - Logs the action to the watchdog log file
 #
@@ -38,10 +43,13 @@
 #   WORKER_PROGRESS_TIMEOUT      Seconds without log growth = stuck (default: 600)
 #   WORKER_THRASH_ELAPSED_THRESHOLD  Minimum runtime before thrash check (default: 3600)
 #   WORKER_THRASH_MESSAGE_THRESHOLD  Minimum messages for thrash check (default: 120)
+#   WORKER_THRASH_RATIO_THRESHOLD    Struggle ratio threshold for time-weighted check (default: 10)
+#   WORKER_THRASH_RATIO_ELAPSED      Minimum elapsed seconds for ratio-only thrash (default: 25200 = 7h)
 #   WORKER_MAX_RUNTIME           Hard ceiling in seconds (default: 10800 = 3h)
 #   WORKER_DRY_RUN               Set to "true" to log but not kill (default: false)
 #   WORKER_WATCHDOG_NOTIFY       Set to "false" to disable macOS notifications
 #   WORKER_PROCESS_PATTERN       CLI name to match (default: opencode)
+#   HEADLESS_RUNTIME_DB          Path to headless-runtime state.db (auto-detected)
 
 set -euo pipefail
 
@@ -67,6 +75,8 @@ WORKER_IDLE_CPU_THRESHOLD="${WORKER_IDLE_CPU_THRESHOLD:-5}"                # CPU
 WORKER_PROGRESS_TIMEOUT="${WORKER_PROGRESS_TIMEOUT:-600}"                  # 10 min no log output = stuck
 WORKER_THRASH_ELAPSED_THRESHOLD="${WORKER_THRASH_ELAPSED_THRESHOLD:-3600}" # 1h minimum runtime before zero-commit thrash checks (GH#4400: lowered from 2h)
 WORKER_THRASH_MESSAGE_THRESHOLD="${WORKER_THRASH_MESSAGE_THRESHOLD:-120}"  # ~2 messages/min over 1h before thrash checks (GH#4400: lowered from 180)
+WORKER_THRASH_RATIO_THRESHOLD="${WORKER_THRASH_RATIO_THRESHOLD:-10}"       # Struggle ratio threshold for time-weighted check (GH#5650)
+WORKER_THRASH_RATIO_ELAPSED="${WORKER_THRASH_RATIO_ELAPSED:-25200}"        # 7h: ratio-only thrash check for long-running zero-commit workers (GH#5650)
 WORKER_MAX_RUNTIME="${WORKER_MAX_RUNTIME:-10800}"                          # 3 hour hard ceiling
 WORKER_DRY_RUN="${WORKER_DRY_RUN:-false}"
 WORKER_WATCHDOG_NOTIFY="${WORKER_WATCHDOG_NOTIFY:-true}"
@@ -78,6 +88,8 @@ WORKER_IDLE_CPU_THRESHOLD=$(_validate_int WORKER_IDLE_CPU_THRESHOLD "$WORKER_IDL
 WORKER_PROGRESS_TIMEOUT=$(_validate_int WORKER_PROGRESS_TIMEOUT "$WORKER_PROGRESS_TIMEOUT" 600 120)
 WORKER_THRASH_ELAPSED_THRESHOLD=$(_validate_int WORKER_THRASH_ELAPSED_THRESHOLD "$WORKER_THRASH_ELAPSED_THRESHOLD" 3600 600)
 WORKER_THRASH_MESSAGE_THRESHOLD=$(_validate_int WORKER_THRASH_MESSAGE_THRESHOLD "$WORKER_THRASH_MESSAGE_THRESHOLD" 120 30)
+WORKER_THRASH_RATIO_THRESHOLD=$(_validate_int WORKER_THRASH_RATIO_THRESHOLD "$WORKER_THRASH_RATIO_THRESHOLD" 10 1)
+WORKER_THRASH_RATIO_ELAPSED=$(_validate_int WORKER_THRASH_RATIO_ELAPSED "$WORKER_THRASH_RATIO_ELAPSED" 25200 3600)
 WORKER_MAX_RUNTIME=$(_validate_int WORKER_MAX_RUNTIME "$WORKER_MAX_RUNTIME" 10800 600)
 
 # Paths
@@ -85,6 +97,9 @@ readonly LOG_DIR="${HOME}/.aidevops/logs"
 readonly LOG_FILE="${LOG_DIR}/worker-watchdog.log"
 readonly STATE_DIR="${HOME}/.aidevops/.agent-workspace/tmp"
 readonly IDLE_STATE_DIR="${STATE_DIR}/worker-idle-tracking"
+# headless-runtime state DB — same default as headless-runtime-helper.sh
+# Not readonly: must be overridable by HEADLESS_RUNTIME_DB env var and tests
+HEADLESS_RUNTIME_DB="${HEADLESS_RUNTIME_DB:-${HOME}/.aidevops/.agent-workspace/headless-runtime/state.db}"
 
 STALL_EVIDENCE_CLASS=""
 STALL_EVIDENCE_SUMMARY=""
@@ -94,6 +109,9 @@ THRASH_RATIO=""
 THRASH_COMMITS=""
 THRASH_MESSAGES=""
 THRASH_FLAG=""
+BACKOFF_PROVIDER=""
+BACKOFF_REASON=""
+BACKOFF_RETRY_AFTER=""
 
 readonly LAUNCHD_LABEL="sh.aidevops.worker-watchdog"
 readonly PLIST_PATH="${HOME}/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
@@ -277,6 +295,147 @@ extract_repo_slug() {
 }
 
 #######################################
+# Extract provider name from worker command line
+#
+# Workers are dispatched with a model like "anthropic/claude-sonnet-4-6".
+# The provider is the prefix before the first slash.
+#
+# Arguments:
+#   $1 - command line string
+# Output: provider name (e.g., "anthropic") or empty string
+#######################################
+extract_provider_from_cmd() {
+	local cmd="$1"
+	local model=""
+
+	# Try --model flag first
+	if [[ "$cmd" =~ --model[[:space:]]+([^[:space:]]+) ]]; then
+		model="${BASH_REMATCH[1]}"
+	fi
+
+	# Fall back to AIDEVOPS_HEADLESS_MODELS env var embedded in command
+	if [[ -z "$model" && "$cmd" =~ AIDEVOPS_HEADLESS_MODELS=([^[:space:]]+) ]]; then
+		model="${BASH_REMATCH[1]}"
+		# Take first model if comma-separated list
+		model="${model%%,*}"
+	fi
+
+	if [[ -z "$model" ]]; then
+		echo ""
+		return 0
+	fi
+
+	# Extract provider prefix (before first slash)
+	local provider="${model%%/*}"
+	echo "$provider"
+	return 0
+}
+
+#######################################
+# Query the headless-runtime DB for an active backoff row for a provider
+#
+# Arguments:
+#   $1 - provider name (e.g., "anthropic")
+# Output: "provider|reason|retry_after" or empty string
+#######################################
+_backoff_query_db() {
+	local provider="$1"
+
+	WATCHDOG_DB="$HEADLESS_RUNTIME_DB" WATCHDOG_PROVIDER="$provider" python3 - <<'PY'
+import os
+import sqlite3
+
+db_path = os.environ["WATCHDOG_DB"]
+provider = os.environ["WATCHDOG_PROVIDER"]
+
+try:
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA busy_timeout=3000")
+    cursor = conn.cursor()
+    # Match provider-level backoff (auth_error) or model-level backoff
+    # where the model starts with this provider prefix
+    cursor.execute(
+        """
+        SELECT provider, reason, retry_after
+        FROM provider_backoff
+        WHERE (provider = ? OR provider LIKE ?)
+          AND (
+            retry_after IS NULL
+            OR retry_after > strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+          )
+        ORDER BY
+          CASE WHEN provider = ? THEN 0 ELSE 1 END,
+          retry_after DESC
+        LIMIT 1
+        """,
+        (provider, provider + "/%", provider),
+    )
+    row = cursor.fetchone()
+    if row:
+        matched_key, reason, retry_after = row
+        print(f"{matched_key}|{reason or 'unknown'}|{retry_after or 'indefinite'}")
+    else:
+        print("")
+except sqlite3.Error:
+    print("")
+PY
+	return 0
+}
+
+#######################################
+# Check if a worker's provider is currently backed off in the headless-runtime DB
+#
+# Reads the provider_backoff table from the headless-runtime state.db.
+# A worker whose provider is backed off will make no progress — kill immediately.
+# This check bypasses the transcript gate because the provider won't respond.
+#
+# Arguments:
+#   $1 - PID
+#   $2 - command line
+#   $3 - elapsed seconds
+# Returns: 0 if provider is backed off (kill), 1 if not backed off
+# Side effects: sets BACKOFF_PROVIDER, BACKOFF_REASON, BACKOFF_RETRY_AFTER
+#######################################
+check_provider_backoff() {
+	local pid="$1"
+	local cmd="$2"
+	local elapsed_seconds="$3"
+
+	BACKOFF_PROVIDER=""
+	BACKOFF_REASON=""
+	BACKOFF_RETRY_AFTER=""
+
+	# Only check after a minimum grace period (avoid false positives on startup)
+	if [[ "$elapsed_seconds" -lt 300 ]]; then
+		return 1
+	fi
+
+	# Skip if headless-runtime DB doesn't exist
+	if [[ ! -f "$HEADLESS_RUNTIME_DB" ]]; then
+		return 1
+	fi
+
+	# Extract provider from command line
+	local provider
+	provider=$(extract_provider_from_cmd "$cmd")
+	if [[ -z "$provider" ]]; then
+		return 1
+	fi
+
+	# Query provider_backoff table for active backoff entries matching this provider
+	# A backoff is active if retry_after is in the future (or NULL = indefinite)
+	local backoff_row
+	backoff_row=$(_backoff_query_db "$provider") 2>/dev/null || backoff_row=""
+
+	if [[ -z "$backoff_row" ]]; then
+		return 1
+	fi
+
+	IFS='|' read -r BACKOFF_PROVIDER BACKOFF_REASON BACKOFF_RETRY_AFTER <<<"$backoff_row"
+	return 0
+}
+
+#######################################
 # Check if a worker is idle (CPU below threshold)
 #
 # Tracks consecutive idle checks via state files. A worker is only
@@ -320,6 +479,142 @@ check_idle() {
 }
 
 #######################################
+# Query session DB for recent message activity
+#
+# Arguments:
+#   $1 - command line (to resolve session ID)
+# Output: "true" if recent activity found, "false" otherwise
+#######################################
+_stall_has_recent_session_activity() {
+	local cmd="$1"
+	local db_path
+	db_path=$(_opencode_db_path)
+
+	if [[ ! -f "$db_path" ]]; then
+		echo "false"
+		return 0
+	fi
+
+	local session_id=""
+	session_id=$(_resolve_session_id_from_cmd "$cmd")
+
+	if [[ -z "$session_id" ]]; then
+		echo "false"
+		return 0
+	fi
+
+	local recent_count
+	recent_count=$(
+		SESSION_WATCHDOG_DB_PATH="$db_path" SESSION_WATCHDOG_ID="$session_id" SESSION_WATCHDOG_TIMEOUT="$WORKER_PROGRESS_TIMEOUT" python3 - <<'PY'
+import os
+import sqlite3
+
+db_path = os.environ["SESSION_WATCHDOG_DB_PATH"]
+session_id = os.environ["SESSION_WATCHDOG_ID"]
+timeout_seconds = int(os.environ["SESSION_WATCHDOG_TIMEOUT"])
+
+conn = sqlite3.connect(db_path)
+conn.execute("PRAGMA busy_timeout=5000")
+cursor = conn.cursor()
+cursor.execute(
+    """
+    SELECT COUNT(*)
+    FROM message
+    WHERE session_id = ?
+      AND (CASE WHEN time_created > 20000000000 THEN time_created / 1000 ELSE time_created END) > strftime('%s', 'now') - ?
+    """,
+    (session_id, timeout_seconds),
+)
+row = cursor.fetchone()
+print(int(row[0] or 0))
+PY
+	)
+
+	if [[ "$recent_count" -gt 0 ]]; then
+		echo "true"
+	else
+		echo "false"
+	fi
+	return 0
+}
+
+#######################################
+# Handle stall grace period for provider-waiting evidence
+#
+# Arguments:
+#   $1 - PID
+#   $2 - grace_file path
+#   $3 - now (epoch seconds)
+#   $4 - sanitized evidence string
+# Returns: 0 if grace period expired (proceed to kill), 1 if still in grace
+#######################################
+_stall_check_grace_period() {
+	local pid="$1"
+	local grace_file="$2"
+	local now="$3"
+	local sanitized_evidence="$4"
+
+	if [[ ! -f "$grace_file" ]]; then
+		date +%s >"$grace_file"
+		log_msg "STALL GRACE: PID=${pid} evidence=${sanitized_evidence}"
+		return 1
+	fi
+
+	local grace_since
+	grace_since=$(cat "$grace_file" 2>/dev/null || echo "0")
+	[[ "$grace_since" =~ ^[0-9]+$ ]] || grace_since=0
+	local grace_duration=$((now - grace_since))
+	if [[ "$grace_duration" -lt "$WORKER_PROGRESS_TIMEOUT" ]]; then
+		return 1
+	fi
+	return 0
+}
+
+#######################################
+# Evaluate stall evidence and decide whether to kill
+#
+# Called after stall duration threshold is exceeded.
+# Sets STALL_EVIDENCE_CLASS and STALL_EVIDENCE_SUMMARY.
+#
+# Arguments:
+#   $1 - PID
+#   $2 - command line
+#   $3 - stall_file path
+#   $4 - grace_file path
+#   $5 - now (epoch seconds)
+# Returns: 0 if stall confirmed (kill), 1 if stall cleared or deferred
+#######################################
+_stall_evaluate_evidence() {
+	local pid="$1"
+	local cmd="$2"
+	local stall_file="$3"
+	local grace_file="$4"
+	local now="$5"
+
+	local evidence_result
+	evidence_result=$(_get_session_tail_evidence "$cmd" "$WORKER_PROGRESS_TIMEOUT")
+	IFS='|' read -r STALL_EVIDENCE_CLASS STALL_EVIDENCE_SUMMARY <<<"$evidence_result"
+	local sanitized_evidence
+	sanitized_evidence=$(_sanitize_log_field "$STALL_EVIDENCE_SUMMARY")
+
+	if [[ "$STALL_EVIDENCE_CLASS" == "active" ]]; then
+		log_msg "STALL CLEARED: PID=${pid} evidence=${sanitized_evidence}"
+		rm -f "$stall_file" "$grace_file" 2>/dev/null || true
+		return 1
+	fi
+
+	if [[ "$STALL_EVIDENCE_CLASS" == "provider-waiting" ]]; then
+		if ! _stall_check_grace_period "$pid" "$grace_file" "$now" "$sanitized_evidence"; then
+			return 1
+		fi
+	else
+		rm -f "$grace_file" 2>/dev/null || true
+	fi
+
+	return 0
+}
+
+#######################################
 # Check if a worker's log output has stalled
 #
 # Uses the OpenCode session DB to check for recent messages.
@@ -346,48 +641,8 @@ check_progress_stall() {
 		return 1
 	fi
 
-	# Check OpenCode session DB for recent messages
-	local db_path
-	db_path=$(_opencode_db_path)
-	local has_recent_activity=false
-
-	if [[ -f "$db_path" ]]; then
-		local session_id=""
-		session_id=$(_resolve_session_id_from_cmd "$cmd")
-
-		if [[ -n "$session_id" ]]; then
-			local recent_count
-			recent_count=$(
-				SESSION_WATCHDOG_DB_PATH="$db_path" SESSION_WATCHDOG_ID="$session_id" SESSION_WATCHDOG_TIMEOUT="$WORKER_PROGRESS_TIMEOUT" python3 - <<'PY'
-import os
-import sqlite3
-
-db_path = os.environ["SESSION_WATCHDOG_DB_PATH"]
-session_id = os.environ["SESSION_WATCHDOG_ID"]
-timeout_seconds = int(os.environ["SESSION_WATCHDOG_TIMEOUT"])
-
-conn = sqlite3.connect(db_path)
-conn.execute("PRAGMA busy_timeout=5000")
-cursor = conn.cursor()
-cursor.execute(
-    """
-    SELECT COUNT(*)
-    FROM message
-    WHERE session_id = ?
-      AND (CASE WHEN time_created > 20000000000 THEN time_created / 1000 ELSE time_created END) > strftime('%s', 'now') - ?
-    """,
-    (session_id, timeout_seconds),
-)
-row = cursor.fetchone()
-print(int(row[0] or 0))
-PY
-			)
-
-			if [[ "$recent_count" -gt 0 ]]; then
-				has_recent_activity=true
-			fi
-		fi
-	fi
+	local has_recent_activity
+	has_recent_activity=$(_stall_has_recent_session_activity "$cmd")
 
 	if [[ "$has_recent_activity" == "true" ]]; then
 		# Activity detected — reset stall tracking
@@ -410,37 +665,8 @@ PY
 	local stall_duration=$((now - stall_since))
 
 	if [[ "$stall_duration" -ge "$WORKER_PROGRESS_TIMEOUT" ]]; then
-		local evidence_result
-		evidence_result=$(_get_session_tail_evidence "$cmd" "$WORKER_PROGRESS_TIMEOUT")
-		IFS='|' read -r STALL_EVIDENCE_CLASS STALL_EVIDENCE_SUMMARY <<<"$evidence_result"
-		local sanitized_evidence
-		sanitized_evidence=$(_sanitize_log_field "$STALL_EVIDENCE_SUMMARY")
-
-		if [[ "$STALL_EVIDENCE_CLASS" == "active" ]]; then
-			log_msg "STALL CLEARED: PID=${pid} evidence=${sanitized_evidence}"
-			rm -f "$stall_file" "$grace_file" 2>/dev/null || true
-			return 1
-		fi
-
-		if [[ "$STALL_EVIDENCE_CLASS" == "provider-waiting" ]]; then
-			if [[ ! -f "$grace_file" ]]; then
-				date +%s >"$grace_file"
-				log_msg "STALL GRACE: PID=${pid} evidence=${sanitized_evidence}"
-				return 1
-			fi
-
-			local grace_since
-			grace_since=$(cat "$grace_file" 2>/dev/null || echo "0")
-			[[ "$grace_since" =~ ^[0-9]+$ ]] || grace_since=0
-			local grace_duration=$((now - grace_since))
-			if [[ "$grace_duration" -lt "$WORKER_PROGRESS_TIMEOUT" ]]; then
-				return 1
-			fi
-		else
-			rm -f "$grace_file" 2>/dev/null || true
-		fi
-
-		return 0 # Stalled long enough — kill
+		_stall_evaluate_evidence "$pid" "$cmd" "$stall_file" "$grace_file" "$now"
+		return $?
 	fi
 	return 1
 }
@@ -530,15 +756,21 @@ check_zero_commit_thrashing() {
 		return 1
 	fi
 
-	if [[ "$THRASH_MESSAGES" -lt "$WORKER_THRASH_MESSAGE_THRESHOLD" ]]; then
-		return 1
+	# Primary thrash check: high message volume + thrashing flag
+	if [[ "$THRASH_MESSAGES" -ge "$WORKER_THRASH_MESSAGE_THRESHOLD" && "$THRASH_FLAG" == "thrashing" ]]; then
+		return 0
 	fi
 
-	if [[ "$THRASH_FLAG" != "thrashing" ]]; then
-		return 1
+	# Time-weighted thrash check (GH#5650): long-running zero-commit workers with
+	# any non-trivial struggle ratio. Catches workers with ratio 14 at 7+ hours
+	# that the primary check misses (ratio < 30 threshold, flag != "thrashing").
+	# Rationale: ratio 14 at 7h with 0 commits = ~98 messages, no output. Clearly stuck.
+	if [[ "$elapsed_seconds" -ge "$WORKER_THRASH_RATIO_ELAPSED" && "$THRASH_RATIO" -ge "$WORKER_THRASH_RATIO_THRESHOLD" ]]; then
+		THRASH_FLAG="time-weighted-thrash"
+		return 0
 	fi
 
-	return 0
+	return 1
 }
 
 #######################################
@@ -598,34 +830,19 @@ kill_worker() {
 }
 
 #######################################
-# Post-kill GitHub issue update
-#
-# Comments on the issue and swaps labels so the issue is re-queued.
+# Map kill reason to human-readable description and destination status
 #
 # Arguments:
-#   $1 - command line
-#   $2 - kill reason
-#   $3 - formatted duration
-#   $4 - evidence summary (optional)
+#   $1 - kill reason (idle|stall|thrash|runtime|backoff|*)
+#   $2 - formatted duration
+#   $3 - evidence summary
+# Output: "reason_desc|destination_status|destination_text" (pipe-separated)
 #######################################
-post_kill_github_update() {
-	local cmd="$1"
-	local reason="$2"
-	local duration="$3"
-	local evidence_summary="${4:-No transcript evidence available.}"
+_post_kill_map_reason() {
+	local reason="$1"
+	local duration="$2"
+	local evidence_summary="$3"
 
-	# Extract issue number and repo slug
-	local issue_number
-	issue_number=$(extract_issue_number "$cmd")
-	local repo_slug
-	repo_slug=$(extract_repo_slug "$cmd")
-
-	if [[ -z "$issue_number" || -z "$repo_slug" ]]; then
-		log_msg "Cannot update GitHub: issue=${issue_number:-unknown} repo=${repo_slug:-unknown}"
-		return 0
-	fi
-
-	# Map reason to human-readable description
 	local reason_desc=""
 	local destination_status="status:available"
 	local destination_text="This issue has been re-labeled \`status:available\` for re-dispatch. The next pulse or manual dispatch will pick it up."
@@ -639,10 +856,35 @@ post_kill_github_update() {
 		destination_text="This issue has been re-labeled \`status:blocked\` to prevent blind re-dispatch of the same failing strategy."
 		;;
 	runtime) reason_desc="Worker exceeded the ${duration} runtime ceiling — killed to prevent infinite loops." ;;
+	backoff) reason_desc="Worker's provider is backed off in the headless-runtime state DB (${evidence_summary}). Worker was alive but making no progress — killed for immediate re-queue." ;;
 	*) reason_desc="Worker killed by watchdog (reason: ${reason})." ;;
 	esac
 
-	# Post comment
+	echo "${reason_desc}|${destination_status}|${destination_text}"
+	return 0
+}
+
+#######################################
+# Post kill comment and update labels on a GitHub issue
+#
+# Arguments:
+#   $1 - issue number
+#   $2 - repo slug
+#   $3 - reason description
+#   $4 - formatted duration
+#   $5 - evidence summary
+#   $6 - destination status label
+#   $7 - destination text
+#######################################
+_post_kill_github_comment_and_labels() {
+	local issue_number="$1"
+	local repo_slug="$2"
+	local reason_desc="$3"
+	local duration="$4"
+	local evidence_summary="$5"
+	local destination_status="$6"
+	local destination_text="$7"
+
 	local comment_body="## Worker Watchdog Kill
 
 **Reason:** ${reason_desc}
@@ -680,6 +922,174 @@ _Automated by \`worker-watchdog.sh\` (t1419)_"
 }
 
 #######################################
+# Post-kill GitHub issue update
+#
+# Comments on the issue and swaps labels so the issue is re-queued.
+#
+# Arguments:
+#   $1 - command line
+#   $2 - kill reason
+#   $3 - formatted duration
+#   $4 - evidence summary (optional)
+#######################################
+post_kill_github_update() {
+	local cmd="$1"
+	local reason="$2"
+	local duration="$3"
+	local evidence_summary="${4:-No transcript evidence available.}"
+
+	# Extract issue number and repo slug
+	local issue_number
+	issue_number=$(extract_issue_number "$cmd")
+	local repo_slug
+	repo_slug=$(extract_repo_slug "$cmd")
+
+	if [[ -z "$issue_number" || -z "$repo_slug" ]]; then
+		log_msg "Cannot update GitHub: issue=${issue_number:-unknown} repo=${repo_slug:-unknown}"
+		return 0
+	fi
+
+	local mapped_reason
+	mapped_reason=$(_post_kill_map_reason "$reason" "$duration" "$evidence_summary")
+	local reason_desc destination_status destination_text
+	IFS='|' read -r reason_desc destination_status destination_text <<<"$mapped_reason"
+
+	_post_kill_github_comment_and_labels \
+		"$issue_number" "$repo_slug" "$reason_desc" \
+		"$duration" "$evidence_summary" \
+		"$destination_status" "$destination_text"
+
+	return 0
+}
+
+#######################################
+# Handle thrash detection signal for a single worker
+#
+# Called when check_zero_commit_thrashing returns 0.
+# Applies transcript gate and kills if confirmed.
+#
+# Arguments:
+#   $1 - PID
+#   $2 - command line
+#   $3 - elapsed seconds
+#   $4 - formatted duration
+# Returns: 0 if worker was killed, 1 if deferred
+#######################################
+_check_single_worker_thrash() {
+	local pid="$1"
+	local cmd="$2"
+	local elapsed_seconds="$3"
+	local duration="$4"
+
+	if ! transcript_allows_intervention "thrash" "$cmd" "$elapsed_seconds"; then
+		return 1
+	fi
+
+	local thrash_evidence="ratio=${THRASH_RATIO} messages=${THRASH_MESSAGES} commits=${THRASH_COMMITS} flag=${THRASH_FLAG:-none}"
+	local session_title
+	session_title=$(_extract_session_title "$cmd")
+	if [[ -n "$session_title" ]]; then
+		thrash_evidence="${thrash_evidence}; objective=${session_title}"
+	fi
+	if [[ -n "$INTERVENTION_EVIDENCE_SUMMARY" ]]; then
+		thrash_evidence="${thrash_evidence}; transcript=${INTERVENTION_EVIDENCE_SUMMARY}"
+	fi
+
+	log_msg "THRASH DETECTED: PID=${pid} elapsed=${duration} ${thrash_evidence}"
+	kill_worker "$pid" "thrash" "$cmd" "$elapsed_seconds" "$thrash_evidence"
+	return 0
+}
+
+#######################################
+# Apply all detection signals to a single worker
+#
+# Arguments:
+#   $1 - PID
+#   $2 - elapsed seconds
+#   $3 - command line
+# Returns: 0 if worker was killed, 1 if worker was spared
+#######################################
+_check_single_worker() {
+	local pid="$1"
+	local elapsed_seconds="$2"
+	local cmd="$3"
+
+	local tree_cpu
+	tree_cpu=$(_get_process_tree_cpu "$pid")
+
+	local duration
+	duration=$(_format_duration "$elapsed_seconds")
+
+	# Check 1: Provider backoff stall (GH#5650) — kill immediately, no transcript gate.
+	# A worker whose provider is backed off will never make progress. The transcript
+	# gate is irrelevant — the provider won't respond regardless of what the transcript says.
+	if check_provider_backoff "$pid" "$cmd" "$elapsed_seconds"; then
+		local backoff_evidence="provider=${BACKOFF_PROVIDER} reason=${BACKOFF_REASON} retry_after=${BACKOFF_RETRY_AFTER}"
+		log_msg "PROVIDER BACKOFF: PID=${pid} elapsed=${duration} ${backoff_evidence}"
+		kill_worker "$pid" "backoff" "$cmd" "$elapsed_seconds" "$backoff_evidence"
+		return 0
+	fi
+
+	# Check 2: Runtime ceiling candidate (transcript gate decides kill/defer)
+	if [[ "$elapsed_seconds" -ge "$WORKER_MAX_RUNTIME" ]]; then
+		if ! transcript_allows_intervention "runtime" "$cmd" "$elapsed_seconds"; then
+			return 1
+		fi
+		log_msg "RUNTIME CEILING: PID=${pid} elapsed=${duration} (max=$(_format_duration "$WORKER_MAX_RUNTIME"))"
+		kill_worker "$pid" "runtime" "$cmd" "$elapsed_seconds" "$INTERVENTION_EVIDENCE_SUMMARY"
+		return 0
+	fi
+
+	# Check 3: zero-commit high-message thrash detection
+	if check_zero_commit_thrashing "$pid" "$cmd" "$elapsed_seconds"; then
+		_check_single_worker_thrash "$pid" "$cmd" "$elapsed_seconds" "$duration"
+		return $?
+	fi
+
+	# Check 4: CPU idle detection
+	if check_idle "$pid" "$tree_cpu"; then
+		if ! transcript_allows_intervention "idle" "$cmd" "$elapsed_seconds"; then
+			return 1
+		fi
+		log_msg "IDLE DETECTED: PID=${pid} cpu=${tree_cpu}% elapsed=${duration}"
+		kill_worker "$pid" "idle" "$cmd" "$elapsed_seconds" "$INTERVENTION_EVIDENCE_SUMMARY"
+		return 0
+	fi
+
+	# Check 5: Progress stall detection
+	if check_progress_stall "$pid" "$cmd" "$elapsed_seconds"; then
+		if ! transcript_allows_intervention "stall" "$cmd" "$elapsed_seconds"; then
+			return 1
+		fi
+		local sanitized_evidence=""
+		if [[ -n "$STALL_EVIDENCE_SUMMARY" ]]; then
+			sanitized_evidence=$(_sanitize_log_field "$STALL_EVIDENCE_SUMMARY")
+		fi
+		log_msg "PROGRESS STALL: PID=${pid} elapsed=${duration}${sanitized_evidence:+ evidence=${sanitized_evidence}}"
+		kill_worker "$pid" "stall" "$cmd" "$elapsed_seconds" "$STALL_EVIDENCE_SUMMARY"
+		return 0
+	fi
+
+	return 1
+}
+
+#######################################
+# Remove tracking files for PIDs that no longer exist
+#######################################
+_cleanup_stale_tracking_files() {
+	local tracking_file
+	for tracking_file in "${IDLE_STATE_DIR}"/idle-* "${IDLE_STATE_DIR}"/stall-* "${IDLE_STATE_DIR}"/stall-grace-*; do
+		[[ -f "$tracking_file" ]] || continue
+		local tracked_pid
+		tracked_pid=$(basename "$tracking_file" | sed 's/^idle-//;s/^stall-//;s/^grace-//')
+		if [[ "$tracked_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$tracked_pid" 2>/dev/null; then
+			rm -f "$tracking_file" 2>/dev/null || true
+		fi
+	done
+	return 0
+}
+
+#######################################
 # Main check: scan all workers and apply detection signals
 #######################################
 cmd_check() {
@@ -700,184 +1110,137 @@ cmd_check() {
 	while IFS='|' read -r pid elapsed_seconds cmd; do
 		[[ -z "$pid" ]] && continue
 		worker_count=$((worker_count + 1))
-
-		local tree_cpu
-		tree_cpu=$(_get_process_tree_cpu "$pid")
-
-		local duration
-		duration=$(_format_duration "$elapsed_seconds")
-
-		# Check 1: Runtime ceiling candidate (transcript gate decides kill/defer)
-		if [[ "$elapsed_seconds" -ge "$WORKER_MAX_RUNTIME" ]]; then
-			if ! transcript_allows_intervention "runtime" "$cmd" "$elapsed_seconds"; then
-				continue
-			fi
-			log_msg "RUNTIME CEILING: PID=${pid} elapsed=${duration} (max=$(_format_duration "$WORKER_MAX_RUNTIME"))"
-			kill_worker "$pid" "runtime" "$cmd" "$elapsed_seconds" "$INTERVENTION_EVIDENCE_SUMMARY"
+		if _check_single_worker "$pid" "$elapsed_seconds" "$cmd"; then
 			killed_count=$((killed_count + 1))
-			continue
 		fi
-
-		# Check 2: zero-commit high-message thrash detection
-		if check_zero_commit_thrashing "$pid" "$cmd" "$elapsed_seconds"; then
-			if ! transcript_allows_intervention "thrash" "$cmd" "$elapsed_seconds"; then
-				continue
-			fi
-			local thrash_evidence="ratio=${THRASH_RATIO} messages=${THRASH_MESSAGES} commits=${THRASH_COMMITS} flag=${THRASH_FLAG:-none}"
-			local session_title
-			session_title=$(_extract_session_title "$cmd")
-			if [[ -n "$session_title" ]]; then
-				thrash_evidence="${thrash_evidence}; objective=${session_title}"
-			fi
-			if [[ -n "$INTERVENTION_EVIDENCE_SUMMARY" ]]; then
-				thrash_evidence="${thrash_evidence}; transcript=${INTERVENTION_EVIDENCE_SUMMARY}"
-			fi
-			log_msg "THRASH DETECTED: PID=${pid} elapsed=${duration} ${thrash_evidence}"
-			kill_worker "$pid" "thrash" "$cmd" "$elapsed_seconds" "$thrash_evidence"
-			killed_count=$((killed_count + 1))
-			continue
-		fi
-
-		# Check 3: CPU idle detection
-		if check_idle "$pid" "$tree_cpu"; then
-			if ! transcript_allows_intervention "idle" "$cmd" "$elapsed_seconds"; then
-				continue
-			fi
-			log_msg "IDLE DETECTED: PID=${pid} cpu=${tree_cpu}% elapsed=${duration}"
-			kill_worker "$pid" "idle" "$cmd" "$elapsed_seconds" "$INTERVENTION_EVIDENCE_SUMMARY"
-			killed_count=$((killed_count + 1))
-			continue
-		fi
-
-		# Check 4: Progress stall detection
-		if check_progress_stall "$pid" "$cmd" "$elapsed_seconds"; then
-			if ! transcript_allows_intervention "stall" "$cmd" "$elapsed_seconds"; then
-				continue
-			fi
-			local sanitized_evidence=""
-			if [[ -n "$STALL_EVIDENCE_SUMMARY" ]]; then
-				sanitized_evidence=$(_sanitize_log_field "$STALL_EVIDENCE_SUMMARY")
-			fi
-			log_msg "PROGRESS STALL: PID=${pid} elapsed=${duration}${sanitized_evidence:+ evidence=${sanitized_evidence}}"
-			kill_worker "$pid" "stall" "$cmd" "$elapsed_seconds" "$STALL_EVIDENCE_SUMMARY"
-			killed_count=$((killed_count + 1))
-			continue
-		fi
-
 	done <<<"$workers"
 
 	if [[ "$killed_count" -gt 0 ]]; then
 		log_msg "Check complete: ${worker_count} workers scanned, ${killed_count} killed"
 	fi
 
-	# Clean up tracking files for PIDs that no longer exist
-	local tracking_file
-	for tracking_file in "${IDLE_STATE_DIR}"/idle-* "${IDLE_STATE_DIR}"/stall-* "${IDLE_STATE_DIR}"/stall-grace-*; do
-		[[ -f "$tracking_file" ]] || continue
-		local tracked_pid
-		tracked_pid=$(basename "$tracking_file" | sed 's/^idle-//;s/^stall-//;s/^grace-//')
-		if [[ "$tracked_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$tracked_pid" 2>/dev/null; then
-			rm -f "$tracking_file" 2>/dev/null || true
-		fi
-	done
+	_cleanup_stale_tracking_files
 
 	return 0
 }
 
 #######################################
-# Status: show current worker state
+# Print the configuration section of --status
 #######################################
-cmd_status() {
-	ensure_dirs
-
-	echo "=== Worker Watchdog Status ==="
-	echo ""
+_status_print_config() {
 	echo "--- Configuration ---"
 	echo ""
 	echo "  Idle timeout:        $(_format_duration "$WORKER_IDLE_TIMEOUT") (CPU < ${WORKER_IDLE_CPU_THRESHOLD}%)"
 	echo "  Progress timeout:    $(_format_duration "$WORKER_PROGRESS_TIMEOUT")"
 	echo "  Runtime ceiling:     $(_format_duration "$WORKER_MAX_RUNTIME")"
 	echo "  Thrash guardrail:    elapsed >= $(_format_duration "$WORKER_THRASH_ELAPSED_THRESHOLD"), messages >= ${WORKER_THRASH_MESSAGE_THRESHOLD}, commits = 0"
+	echo "  Thrash (time-wt):    elapsed >= $(_format_duration "$WORKER_THRASH_RATIO_ELAPSED"), ratio >= ${WORKER_THRASH_RATIO_THRESHOLD}, commits = 0 (GH#5650)"
+	echo "  Provider backoff:    DB=${HEADLESS_RUNTIME_DB}"
 	echo "  Dry run:             ${WORKER_DRY_RUN}"
 	echo "  Notifications:       ${WORKER_WATCHDOG_NOTIFY}"
+	return 0
+}
 
-	echo ""
-	echo "--- Active Workers ---"
-	echo ""
+#######################################
+# Print idle/stall/grace tracking state for a worker in --status output
+#
+# Arguments:
+#   $1 - PID
+#######################################
+_status_print_worker_tracking() {
+	local pid="$1"
+	local now
+	now=$(date +%s)
 
-	local workers
-	workers=$(find_workers)
-
-	if [[ -z "$workers" ]]; then
-		echo "  No headless workers running"
-	else
-		local count=0
-		while IFS='|' read -r pid elapsed_seconds cmd; do
-			[[ -z "$pid" ]] && continue
-			count=$((count + 1))
-
-			local tree_cpu
-			tree_cpu=$(_get_process_tree_cpu "$pid")
-			local duration
-			duration=$(_format_duration "$elapsed_seconds")
-			local issue_number
-			issue_number=$(extract_issue_number "$cmd")
-			local repo_slug
-			repo_slug=$(extract_repo_slug "$cmd")
-
-			echo "  Worker #${count}:"
-			echo "    PID:      ${pid}"
-			echo "    Runtime:  ${duration}"
-			echo "    Tree CPU: ${tree_cpu}%"
-			[[ -n "$issue_number" ]] && echo "    Issue:    ${repo_slug:-unknown}#${issue_number}"
-
-			# Show idle tracking state
-			if [[ -f "${IDLE_STATE_DIR}/idle-${pid}" ]]; then
-				local idle_since
-				idle_since=$(cat "${IDLE_STATE_DIR}/idle-${pid}" 2>/dev/null || echo "0")
-				local now
-				now=$(date +%s)
-				local idle_for=$((now - idle_since))
-				echo "    Idle for: $(_format_duration "$idle_for") / $(_format_duration "$WORKER_IDLE_TIMEOUT")"
-			fi
-
-			# Show stall tracking state
-			if [[ -f "${IDLE_STATE_DIR}/stall-${pid}" ]]; then
-				local stall_since
-				stall_since=$(cat "${IDLE_STATE_DIR}/stall-${pid}" 2>/dev/null || echo "0")
-				local now
-				now=$(date +%s)
-				local stall_for=$((now - stall_since))
-				echo "    Stalled:  $(_format_duration "$stall_for") / $(_format_duration "$WORKER_PROGRESS_TIMEOUT")"
-			fi
-
-			if [[ -f "${IDLE_STATE_DIR}/stall-grace-${pid}" ]]; then
-				local grace_since
-				grace_since=$(cat "${IDLE_STATE_DIR}/stall-grace-${pid}" 2>/dev/null || echo "0")
-				local now
-				now=$(date +%s)
-				local grace_for=$((now - grace_since))
-				echo "    Grace:    $(_format_duration "$grace_for") / $(_format_duration "$WORKER_PROGRESS_TIMEOUT")"
-			fi
-
-			# Struggle ratio
-			local sr_result
-			sr_result=$(_compute_struggle_ratio "$pid" "$elapsed_seconds" "$cmd")
-			local sr_ratio sr_commits sr_messages sr_flag
-			IFS='|' read -r sr_ratio sr_commits sr_messages sr_flag <<<"$sr_result"
-			if [[ "$sr_ratio" != "n/a" ]]; then
-				echo "    Struggle: ratio=${sr_ratio} commits=${sr_commits} messages=${sr_messages} ${sr_flag:+[${sr_flag}]}"
-			fi
-
-			echo ""
-		done <<<"$workers"
-		echo "  Total: ${count} worker(s)"
+	if [[ -f "${IDLE_STATE_DIR}/idle-${pid}" ]]; then
+		local idle_since
+		idle_since=$(cat "${IDLE_STATE_DIR}/idle-${pid}" 2>/dev/null || echo "0")
+		local idle_for=$((now - idle_since))
+		echo "    Idle for: $(_format_duration "$idle_for") / $(_format_duration "$WORKER_IDLE_TIMEOUT")"
 	fi
 
-	local backend
-	backend="$(_get_scheduler_backend)"
+	if [[ -f "${IDLE_STATE_DIR}/stall-${pid}" ]]; then
+		local stall_since
+		stall_since=$(cat "${IDLE_STATE_DIR}/stall-${pid}" 2>/dev/null || echo "0")
+		local stall_for=$((now - stall_since))
+		echo "    Stalled:  $(_format_duration "$stall_for") / $(_format_duration "$WORKER_PROGRESS_TIMEOUT")"
+	fi
+
+	if [[ -f "${IDLE_STATE_DIR}/stall-grace-${pid}" ]]; then
+		local grace_since
+		grace_since=$(cat "${IDLE_STATE_DIR}/stall-grace-${pid}" 2>/dev/null || echo "0")
+		local grace_for=$((now - grace_since))
+		echo "    Grace:    $(_format_duration "$grace_for") / $(_format_duration "$WORKER_PROGRESS_TIMEOUT")"
+	fi
+
+	return 0
+}
+
+#######################################
+# Print details for a single worker in --status output
+#
+# Arguments:
+#   $1 - worker index (display number)
+#   $2 - PID
+#   $3 - elapsed seconds
+#   $4 - command line
+#######################################
+_status_print_worker() {
+	local count="$1"
+	local pid="$2"
+	local elapsed_seconds="$3"
+	local cmd="$4"
+
+	local tree_cpu
+	tree_cpu=$(_get_process_tree_cpu "$pid")
+	local duration
+	duration=$(_format_duration "$elapsed_seconds")
+	local issue_number
+	issue_number=$(extract_issue_number "$cmd")
+	local repo_slug
+	repo_slug=$(extract_repo_slug "$cmd")
+
+	echo "  Worker #${count}:"
+	echo "    PID:      ${pid}"
+	echo "    Runtime:  ${duration}"
+	echo "    Tree CPU: ${tree_cpu}%"
+	[[ -n "$issue_number" ]] && echo "    Issue:    ${repo_slug:-unknown}#${issue_number}"
+
+	_status_print_worker_tracking "$pid"
+
+	# Struggle ratio
+	local sr_result
+	sr_result=$(_compute_struggle_ratio "$pid" "$elapsed_seconds" "$cmd")
+	local sr_ratio sr_commits sr_messages sr_flag
+	IFS='|' read -r sr_ratio sr_commits sr_messages sr_flag <<<"$sr_result"
+	if [[ "$sr_ratio" != "n/a" ]]; then
+		echo "    Struggle: ratio=${sr_ratio} commits=${sr_commits} messages=${sr_messages} ${sr_flag:+[${sr_flag}]}"
+	fi
+
+	# Provider backoff state
+	local status_provider
+	status_provider=$(extract_provider_from_cmd "$cmd")
+	if [[ -n "$status_provider" ]]; then
+		if check_provider_backoff "$pid" "$cmd" 300; then
+			echo "    Backoff:  ACTIVE provider=${BACKOFF_PROVIDER} reason=${BACKOFF_REASON} retry_after=${BACKOFF_RETRY_AFTER}"
+		else
+			echo "    Backoff:  none (provider=${status_provider})"
+		fi
+	fi
 
 	echo ""
+	return 0
+}
+
+#######################################
+# Print the scheduler section of --status
+#
+# Arguments:
+#   $1 - backend ("launchd", "cron", or "unsupported")
+#######################################
+_status_print_scheduler() {
+	local backend="$1"
+
 	echo "--- Scheduler (${backend}) ---"
 	echo ""
 	if [[ "$backend" == "launchd" ]]; then
@@ -910,6 +1273,42 @@ cmd_status() {
 	else
 		echo "  Status: unsupported OS ($(uname -s))"
 	fi
+	return 0
+}
+
+#######################################
+# Status: show current worker state
+#######################################
+cmd_status() {
+	ensure_dirs
+
+	echo "=== Worker Watchdog Status ==="
+	echo ""
+	_status_print_config
+	echo ""
+	echo "--- Active Workers ---"
+	echo ""
+
+	local workers
+	workers=$(find_workers)
+
+	if [[ -z "$workers" ]]; then
+		echo "  No headless workers running"
+	else
+		local count=0
+		while IFS='|' read -r pid elapsed_seconds cmd; do
+			[[ -z "$pid" ]] && continue
+			count=$((count + 1))
+			_status_print_worker "$count" "$pid" "$elapsed_seconds" "$cmd"
+		done <<<"$workers"
+		echo "  Total: ${count} worker(s)"
+	fi
+
+	local backend
+	backend="$(_get_scheduler_backend)"
+
+	echo ""
+	_status_print_scheduler "$backend"
 
 	echo ""
 	return 0
@@ -1085,7 +1484,9 @@ Commands:
   --help, -h        Show this help
 
 Detection signals:
+  Provider backoff: Worker's provider is backed off in headless-runtime DB — kill immediately (GH#5650)
   Zero-commit thrash: elapsed >= $(_format_duration "$WORKER_THRASH_ELAPSED_THRESHOLD"), commits = 0, messages >= ${WORKER_THRASH_MESSAGE_THRESHOLD}
+  Thrash (time-wt): elapsed >= $(_format_duration "$WORKER_THRASH_RATIO_ELAPSED"), commits = 0, ratio >= ${WORKER_THRASH_RATIO_THRESHOLD} (GH#5650)
   CPU idle:         Tree CPU < ${WORKER_IDLE_CPU_THRESHOLD}% for $(_format_duration "$WORKER_IDLE_TIMEOUT")
   Progress stall:   No session messages for $(_format_duration "$WORKER_PROGRESS_TIMEOUT"), then inspect transcript tail evidence
   Runtime ceiling:  Hard kill after $(_format_duration "$WORKER_MAX_RUNTIME")
@@ -1094,19 +1495,22 @@ On kill:
   - Posts comment on associated GitHub issue
   - Removes status:in-progress label
   - Adds status:blocked for zero-commit thrash kills
-  - Adds status:available for all other kill reasons
+  - Adds status:available for all other kill reasons (including backoff)
   - Logs to ${LOG_FILE}
 
 Environment variables:
-  WORKER_IDLE_TIMEOUT          Idle detection window (default: 300s)
-  WORKER_IDLE_CPU_THRESHOLD    CPU% idle threshold (default: 5)
-  WORKER_PROGRESS_TIMEOUT      Stall detection window (default: 600s)
+  WORKER_IDLE_TIMEOUT              Idle detection window (default: 300s)
+  WORKER_IDLE_CPU_THRESHOLD        CPU% idle threshold (default: 5)
+  WORKER_PROGRESS_TIMEOUT          Stall detection window (default: 600s)
   WORKER_THRASH_ELAPSED_THRESHOLD  Minimum runtime for thrash guardrail (default: 3600s)
   WORKER_THRASH_MESSAGE_THRESHOLD  Minimum messages for thrash guardrail (default: 120)
-  WORKER_MAX_RUNTIME           Hard runtime ceiling (default: 10800s = 3h)
-  WORKER_DRY_RUN               Log but don't kill (default: false)
-  WORKER_WATCHDOG_NOTIFY       macOS notifications (default: true)
-  WORKER_PROCESS_PATTERN       CLI name to match (default: opencode)
+  WORKER_THRASH_RATIO_THRESHOLD    Struggle ratio threshold for time-weighted check (default: 10)
+  WORKER_THRASH_RATIO_ELAPSED      Minimum elapsed for ratio-only thrash (default: 25200s = 7h)
+  WORKER_MAX_RUNTIME               Hard runtime ceiling (default: 10800s = 3h)
+  WORKER_DRY_RUN                   Log but don't kill (default: false)
+  WORKER_WATCHDOG_NOTIFY           macOS notifications (default: true)
+  WORKER_PROCESS_PATTERN           CLI name to match (default: opencode)
+  HEADLESS_RUNTIME_DB              Path to headless-runtime state.db (auto-detected)
 HELP
 	return 0
 }

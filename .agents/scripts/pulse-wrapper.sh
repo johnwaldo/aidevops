@@ -224,7 +224,18 @@ REPOS_JSON="${REPOS_JSON:-${HOME}/.config/aidevops/repos.json}"
 STATE_FILE="${HOME}/.aidevops/logs/pulse-state.txt"
 QUEUE_METRICS_FILE="${HOME}/.aidevops/logs/pulse-queue-metrics"
 SCOPE_FILE="${HOME}/.aidevops/logs/pulse-scope-repos"
+COMPLEXITY_SCAN_LAST_RUN="${HOME}/.aidevops/logs/complexity-scan-last-run"
+COMPLEXITY_SCAN_INTERVAL="${COMPLEXITY_SCAN_INTERVAL:-86400}"                   # 1 day in seconds (was 7 days)
+COMPLEXITY_FUNC_LINE_THRESHOLD="${COMPLEXITY_FUNC_LINE_THRESHOLD:-100}"         # Functions longer than this are violations
+COMPLEXITY_FILE_VIOLATION_THRESHOLD="${COMPLEXITY_FILE_VIOLATION_THRESHOLD:-1}" # Files with >= this many violations get an issue (was 5)
+COMPLEXITY_MD_LINE_THRESHOLD="${COMPLEXITY_MD_LINE_THRESHOLD:-500}"             # Agent docs longer than this get an issue
 WORKER_WATCHDOG_HELPER="${SCRIPT_DIR}/worker-watchdog.sh"
+
+# Validate complexity scan configuration (defined above, validated here)
+COMPLEXITY_SCAN_INTERVAL=$(_validate_int COMPLEXITY_SCAN_INTERVAL "$COMPLEXITY_SCAN_INTERVAL" 86400 3600)
+COMPLEXITY_FUNC_LINE_THRESHOLD=$(_validate_int COMPLEXITY_FUNC_LINE_THRESHOLD "$COMPLEXITY_FUNC_LINE_THRESHOLD" 100 50)
+COMPLEXITY_FILE_VIOLATION_THRESHOLD=$(_validate_int COMPLEXITY_FILE_VIOLATION_THRESHOLD "$COMPLEXITY_FILE_VIOLATION_THRESHOLD" 1 1)
+COMPLEXITY_MD_LINE_THRESHOLD=$(_validate_int COMPLEXITY_MD_LINE_THRESHOLD "$COMPLEXITY_MD_LINE_THRESHOLD" 500 200)
 
 if [[ ! -x "$HEADLESS_RUNTIME_HELPER" ]]; then
 	printf '[pulse-wrapper] ERROR: headless runtime helper is missing or not executable: %s (SCRIPT_DIR=%s)\n' "$HEADLESS_RUNTIME_HELPER" "$SCRIPT_DIR" >&2
@@ -333,80 +344,79 @@ release_instance_lock() {
 #     IDLE:<ts>      — last run completed normally; safe to proceed
 #     empty / other  — treat as safe to proceed (first run or corrupt)
 #######################################
-check_dedup() {
-	if [[ ! -f "$PIDFILE" ]]; then
+#######################################
+# Handle SETUP sentinel in PID file (GH#5627, extracted from check_dedup)
+#
+# SETUP sentinel (t1482): another wrapper is running pre-flight stages
+# (cleanup, prefetch). The instance lock already prevents true concurrency,
+# so if we got past acquire_instance_lock, the SETUP wrapper is dead or
+# we ARE that wrapper.
+#
+# Arguments:
+#   $1 - pid_content (the raw SETUP:NNN string from the PID file)
+# Exit codes:
+#   0 - safe to proceed (sentinel handled)
+#   1 - should not happen (fallthrough)
+#######################################
+_handle_setup_sentinel() {
+	local pid_content="$1"
+	local setup_pid="${pid_content#SETUP:}"
+
+	# Numeric validation — corrupt sentinel gets reset (GH#4575)
+	if ! [[ "$setup_pid" =~ ^[0-9]+$ ]]; then
+		echo "[pulse-wrapper] check_dedup: invalid SETUP sentinel '${pid_content}' — resetting to IDLE" >>"$LOGFILE"
+		echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
+		return 0
+	fi
+	if [[ "$setup_pid" == "$$" ]]; then
+		# We wrote this ourselves — proceed
 		return 0
 	fi
 
-	local pid_content
-	pid_content=$(cat "$PIDFILE" 2>/dev/null || echo "")
+	# Check if the process is still alive via its cmdline (GH#4575)
+	local setup_cmd=""
+	setup_cmd=$(ps -p "$setup_pid" -o command= 2>/dev/null || echo "")
 
-	# Empty file or IDLE sentinel — safe to proceed (GH#4324)
-	if [[ -z "$pid_content" ]] || [[ "$pid_content" == IDLE:* ]]; then
-		return 0
-	fi
-
-	# SETUP sentinel (t1482): another wrapper is running pre-flight stages
-	# (cleanup, prefetch). The instance lock already prevents true concurrency,
-	# so if we got past acquire_instance_lock, the SETUP wrapper is dead or
-	# we ARE that wrapper. Either way, safe to proceed.
-	if [[ "$pid_content" == SETUP:* ]]; then
-		local setup_pid="${pid_content#SETUP:}"
-
-		# Numeric validation — corrupt sentinel gets reset (GH#4575)
-		if ! [[ "$setup_pid" =~ ^[0-9]+$ ]]; then
-			echo "[pulse-wrapper] check_dedup: invalid SETUP sentinel '${pid_content}' — resetting to IDLE" >>"$LOGFILE"
-			echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
-			return 0
-		fi
-		if [[ "$setup_pid" == "$$" ]]; then
-			# We wrote this ourselves — proceed
-			return 0
-		fi
-
-		# Check if the process is still alive via its cmdline (GH#4575)
-		local setup_cmd=""
-		setup_cmd=$(ps -p "$setup_pid" -o command= 2>/dev/null || echo "")
-
-		if [[ -z "$setup_cmd" ]]; then
-			echo "[pulse-wrapper] check_dedup: SETUP wrapper $setup_pid is dead — proceeding" >>"$LOGFILE"
-			echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
-			return 0
-		fi
-
-		# PID reuse guard: verify the process is actually a pulse-wrapper
-		# before killing. PID reuse can assign the old PID to an unrelated
-		# process between cycles. (GH#4575)
-		if [[ "$setup_cmd" != *"pulse-wrapper.sh"* ]]; then
-			echo "[pulse-wrapper] check_dedup: SETUP PID $setup_pid belongs to non-wrapper process ('${setup_cmd%%' '*}'); refusing kill, resetting sentinel" >>"$LOGFILE"
-			echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
-			return 0
-		fi
-		# SETUP wrapper is alive but we hold the instance lock — it's a zombie
-		# from a previous cycle. Kill it and proceed.
-		echo "[pulse-wrapper] check_dedup: killing zombie SETUP wrapper $setup_pid" >>"$LOGFILE"
-		_kill_tree "$setup_pid" || true
-		sleep 1
-		if kill -0 "$setup_pid" 2>/dev/null; then
-			_force_kill_tree "$setup_pid" || true
-		fi
+	if [[ -z "$setup_cmd" ]]; then
+		echo "[pulse-wrapper] check_dedup: SETUP wrapper $setup_pid is dead — proceeding" >>"$LOGFILE"
 		echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
 		return 0
 	fi
 
-	# Non-numeric content (corrupt/unknown) — safe to proceed
-	local old_pid="$pid_content"
-	if ! [[ "$old_pid" =~ ^[0-9]+$ ]]; then
-		echo "[pulse-wrapper] check_dedup: unrecognised PID file content '${old_pid}' — treating as idle" >>"$LOGFILE"
+	# PID reuse guard: verify the process is actually a pulse-wrapper
+	# before killing. PID reuse can assign the old PID to an unrelated
+	# process between cycles. (GH#4575)
+	if [[ "$setup_cmd" != *"pulse-wrapper.sh"* ]]; then
+		echo "[pulse-wrapper] check_dedup: SETUP PID $setup_pid belongs to non-wrapper process ('${setup_cmd%%' '*}'); refusing kill, resetting sentinel" >>"$LOGFILE"
+		echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
 		return 0
 	fi
+	# SETUP wrapper is alive but we hold the instance lock — it's a zombie
+	# from a previous cycle. Kill it and proceed.
+	echo "[pulse-wrapper] check_dedup: killing zombie SETUP wrapper $setup_pid" >>"$LOGFILE"
+	_kill_tree "$setup_pid" || true
+	sleep 1
+	if kill -0 "$setup_pid" 2>/dev/null; then
+		_force_kill_tree "$setup_pid" || true
+	fi
+	echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
+	return 0
+}
 
-	# Self-detection (t1482): if the PID file contains our own PID, we wrote
-	# it in a previous code path (e.g., early PID write at main() entry).
-	# Never block on ourselves.
-	if [[ "$old_pid" == "$$" ]]; then
-		return 0
-	fi
+#######################################
+# Handle a live numeric PID in the PID file (GH#5627, extracted from check_dedup)
+#
+# Checks if the process is stale (exceeds threshold) and kills it,
+# or reports genuine dedup (another pulse is legitimately running).
+#
+# Arguments:
+#   $1 - old_pid (numeric PID from the PID file)
+# Exit codes:
+#   0 - safe to proceed (process was dead or stale and killed)
+#   1 - genuine dedup (another pulse is running within limits)
+#######################################
+_handle_running_pulse_pid() {
+	local old_pid="$1"
 
 	# Check if the process is still running
 	if ! ps -p "$old_pid" >/dev/null 2>&1; then
@@ -454,148 +464,166 @@ check_dedup() {
 	return 1
 }
 
+check_dedup() {
+	if [[ ! -f "$PIDFILE" ]]; then
+		return 0
+	fi
+
+	local pid_content
+	pid_content=$(cat "$PIDFILE" 2>/dev/null || echo "")
+
+	# Empty file or IDLE sentinel — safe to proceed (GH#4324)
+	if [[ -z "$pid_content" ]] || [[ "$pid_content" == IDLE:* ]]; then
+		return 0
+	fi
+
+	# SETUP sentinel — delegate to helper
+	if [[ "$pid_content" == SETUP:* ]]; then
+		_handle_setup_sentinel "$pid_content"
+		return $?
+	fi
+
+	# Non-numeric content (corrupt/unknown) — safe to proceed
+	local old_pid="$pid_content"
+	if ! [[ "$old_pid" =~ ^[0-9]+$ ]]; then
+		echo "[pulse-wrapper] check_dedup: unrecognised PID file content '${old_pid}' — treating as idle" >>"$LOGFILE"
+		return 0
+	fi
+
+	# Self-detection (t1482): if the PID file contains our own PID, we wrote
+	# it in a previous code path (e.g., early PID write at main() entry).
+	# Never block on ourselves.
+	if [[ "$old_pid" == "$$" ]]; then
+		return 0
+	fi
+
+	# Delegate live PID handling (stale check, dedup)
+	_handle_running_pulse_pid "$old_pid"
+	return $?
+}
+
 # Process lifecycle functions (_kill_tree, _force_kill_tree, _get_process_age,
 # _get_pid_cpu, _get_process_tree_cpu) provided by worker-lifecycle-common.sh
 
 #######################################
-# Pre-fetch state for ALL pulse-enabled repos
+# Fetch PR, issue, and daily-cap data for a single repo (GH#5627)
 #
-# Runs gh pr list + gh issue list for each repo in parallel, formats
-# a compact summary, and writes it to STATE_FILE. This is injected
-# into the pulse prompt so the agent sees all repos from the start —
-# preventing the "only processes first repo" problem.
+# Runs inside a subshell (called from prefetch_state parallel loop).
+# Writes a compact markdown summary to the specified output file.
 #
-# This is a deterministic data-fetch utility. The intelligence about
-# what to DO with this data stays in pulse.md.
+# Arguments:
+#   $1 - repo slug (owner/repo)
+#   $2 - repo path
+#   $3 - output file path
 #######################################
-prefetch_state() {
-	local repos_json="$REPOS_JSON"
+_prefetch_single_repo() {
+	local slug="$1"
+	local path="$2"
+	local outfile="$3"
 
-	if [[ ! -f "$repos_json" ]]; then
-		echo "[pulse-wrapper] repos.json not found at $repos_json — skipping prefetch" >>"$LOGFILE"
-		echo "ERROR: repos.json not found" >"$STATE_FILE"
-		return 1
-	fi
+	{
+		echo "## ${slug} (${path})"
+		echo ""
 
-	echo "[pulse-wrapper] Pre-fetching state for all pulse-enabled repos..." >>"$LOGFILE"
+		# PRs (createdAt included for daily PR cap — GH#3821)
+		local pr_json
+		pr_json=$(gh pr list --repo "$slug" --state open \
+			--json number,title,reviewDecision,statusCheckRollup,updatedAt,headRefName,createdAt \
+			--limit "$PULSE_PREFETCH_PR_LIMIT" 2>/dev/null) || pr_json="[]"
 
-	# Extract pulse-enabled, non-local-only repos as slug|path pairs
-	local repo_entries
-	repo_entries=$(jq -r '.initialized_repos[] | select(.pulse == true and (.local_only // false) == false and .slug != "") | "\(.slug)|\(.path)"' "$repos_json")
+		local pr_count
+		pr_count=$(echo "$pr_json" | jq 'length')
 
-	if [[ -z "$repo_entries" ]]; then
-		echo "[pulse-wrapper] No pulse-enabled repos found" >>"$LOGFILE"
-		echo "No pulse-enabled repos found in repos.json" >"$STATE_FILE"
-		return 1
-	fi
+		if [[ "$pr_count" -gt 0 ]]; then
+			echo "### Open PRs ($pr_count)"
+			echo "$pr_json" | jq -r '.[] | "- PR #\(.number): \(.title) [checks: \(if .statusCheckRollup == null or (.statusCheckRollup | length) == 0 then "none" elif (.statusCheckRollup | all((.conclusion // .state) == "SUCCESS")) then "PASS" elif (.statusCheckRollup | any((.conclusion // .state) == "FAILURE")) then "FAIL" else "PENDING" end)] [review: \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end)] [branch: \(.headRefName)] [updated: \(.updatedAt)]"'
+		else
+			echo "### Open PRs (0)"
+			echo "- None"
+		fi
 
-	# Temp dir for parallel fetches
-	local tmpdir
-	tmpdir=$(mktemp -d)
+		echo ""
 
-	# Launch parallel gh fetches for each repo
-	local pids=()
-	local idx=0
-	while IFS='|' read -r slug path; do
-		(
-			local outfile="${tmpdir}/${idx}.txt"
-			{
-				echo "## ${slug} (${path})"
-				echo ""
+		# Daily PR cap (GH#3821, GH#4412) — count ALL PRs created today
+		# (open, merged, and closed) to prevent CodeRabbit quota exhaustion.
+		# Must use --state all because PRs merged/closed earlier today are
+		# excluded from the open-only pr_json, causing an undercount that
+		# lets the pulse dispatch workers past the real cap.
+		local today_utc
+		today_utc=$(date -u +%Y-%m-%d)
+		local daily_cap_json
+		daily_cap_json=$(gh pr list --repo "$slug" --state all \
+			--json createdAt --limit 200 2>/dev/null) || daily_cap_json="[]"
+		local daily_pr_count
+		daily_pr_count=$(echo "$daily_cap_json" | jq --arg today "$today_utc" \
+			'[.[] | select(.createdAt | startswith($today))] | length') || daily_pr_count=0
+		[[ "$daily_pr_count" =~ ^[0-9]+$ ]] || daily_pr_count=0
+		local daily_pr_remaining=$((DAILY_PR_CAP - daily_pr_count))
+		if [[ "$daily_pr_remaining" -lt 0 ]]; then
+			daily_pr_remaining=0
+		fi
 
-				# PRs (createdAt included for daily PR cap — GH#3821)
-				local pr_json
-				pr_json=$(gh pr list --repo "$slug" --state open \
-					--json number,title,reviewDecision,statusCheckRollup,updatedAt,headRefName,createdAt \
-					--limit "$PULSE_PREFETCH_PR_LIMIT" 2>/dev/null) || pr_json="[]"
+		echo "### Daily PR Cap"
+		if [[ "$daily_pr_count" -ge "$DAILY_PR_CAP" ]]; then
+			echo "- **DAILY PR CAP REACHED** — ${daily_pr_count}/${DAILY_PR_CAP} PRs created today (UTC)"
+			echo "- **DO NOT dispatch new workers for this repo.** Wait for the next UTC day."
+			echo "[pulse-wrapper] Daily PR cap reached for ${slug}: ${daily_pr_count}/${DAILY_PR_CAP}" >>"$LOGFILE"
+		else
+			echo "- PRs created today: ${daily_pr_count}/${DAILY_PR_CAP} (${daily_pr_remaining} remaining)"
+		fi
 
-				local pr_count
-				pr_count=$(echo "$pr_json" | jq 'length')
+		echo ""
 
-				if [[ "$pr_count" -gt 0 ]]; then
-					echo "### Open PRs ($pr_count)"
-					echo "$pr_json" | jq -r '.[] | "- PR #\(.number): \(.title) [checks: \(if .statusCheckRollup == null or (.statusCheckRollup | length) == 0 then "none" elif (.statusCheckRollup | all((.conclusion // .state) == "SUCCESS")) then "PASS" elif (.statusCheckRollup | any((.conclusion // .state) == "FAILURE")) then "FAIL" else "PENDING" end)] [review: \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end)] [branch: \(.headRefName)] [updated: \(.updatedAt)]"'
-				else
-					echo "### Open PRs (0)"
-					echo "- None"
-				fi
+		# Issues (include assignees for dispatch dedup)
+		# Filter out supervisor/contributor/persistent/quality-review issues —
+		# these are managed by pulse-wrapper.sh and must not be touched by the
+		# pulse agent. Exposing them in pre-fetched state causes the LLM to
+		# close them as "stale", creating churn (wrapper recreates on next cycle).
+		local issue_json
+		issue_json=$(gh issue list --repo "$slug" --state open \
+			--json number,title,labels,updatedAt,assignees \
+			--limit "$PULSE_PREFETCH_ISSUE_LIMIT" 2>/dev/null) || issue_json="[]"
 
-				echo ""
+		# Remove issues with supervisor, contributor, persistent, or quality-review labels
+		local filtered_json
+		filtered_json=$(echo "$issue_json" | jq '[.[] | select(.labels | map(.name) | (index("supervisor") or index("contributor") or index("persistent") or index("quality-review")) | not)]')
 
-				# Daily PR cap (GH#3821, GH#4412) — count ALL PRs created today
-				# (open, merged, and closed) to prevent CodeRabbit quota exhaustion.
-				# Must use --state all because PRs merged/closed earlier today are
-				# excluded from the open-only pr_json, causing an undercount that
-				# lets the pulse dispatch workers past the real cap.
-				local today_utc
-				today_utc=$(date -u +%Y-%m-%d)
-				local daily_cap_json
-				daily_cap_json=$(gh pr list --repo "$slug" --state all \
-					--json createdAt --limit 200 2>/dev/null) || daily_cap_json="[]"
-				local daily_pr_count
-				daily_pr_count=$(echo "$daily_cap_json" | jq --arg today "$today_utc" \
-					'[.[] | select(.createdAt | startswith($today))] | length') || daily_pr_count=0
-				[[ "$daily_pr_count" =~ ^[0-9]+$ ]] || daily_pr_count=0
-				local daily_pr_remaining=$((DAILY_PR_CAP - daily_pr_count))
-				if [[ "$daily_pr_remaining" -lt 0 ]]; then
-					daily_pr_remaining=0
-				fi
+		local issue_count
+		issue_count=$(echo "$filtered_json" | jq 'length')
 
-				echo "### Daily PR Cap"
-				if [[ "$daily_pr_count" -ge "$DAILY_PR_CAP" ]]; then
-					echo "- **DAILY PR CAP REACHED** — ${daily_pr_count}/${DAILY_PR_CAP} PRs created today (UTC)"
-					echo "- **DO NOT dispatch new workers for this repo.** Wait for the next UTC day."
-					echo "[pulse-wrapper] Daily PR cap reached for ${slug}: ${daily_pr_count}/${DAILY_PR_CAP}" >>"$LOGFILE"
-				else
-					echo "- PRs created today: ${daily_pr_count}/${DAILY_PR_CAP} (${daily_pr_remaining} remaining)"
-				fi
+		if [[ "$issue_count" -gt 0 ]]; then
+			echo "### Open Issues ($issue_count)"
+			echo "$filtered_json" | jq -r '.[] | "- Issue #\(.number): \(.title) [labels: \(if (.labels | length) == 0 then "none" else (.labels | map(.name) | join(", ")) end)] [assignees: \(if (.assignees | length) == 0 then "none" else (.assignees | map(.login) | join(", ")) end)] [updated: \(.updatedAt)]"'
+		else
+			echo "### Open Issues (0)"
+			echo "- None"
+		fi
 
-				echo ""
+		echo ""
+	} >"$outfile"
+	return 0
+}
 
-				# Issues (include assignees for dispatch dedup)
-				# Filter out supervisor/contributor/persistent/quality-review issues —
-				# these are managed by pulse-wrapper.sh and must not be touched by the
-				# pulse agent. Exposing them in pre-fetched state causes the LLM to
-				# close them as "stale", creating churn (wrapper recreates on next cycle).
-				local issue_json
-				issue_json=$(gh issue list --repo "$slug" --state open \
-					--json number,title,labels,updatedAt,assignees \
-					--limit "$PULSE_PREFETCH_ISSUE_LIMIT" 2>/dev/null) || issue_json="[]"
+#######################################
+# Wait for parallel PIDs with a hard timeout (GH#5627)
+#
+# Poll-based approach (kill -0) instead of blocking wait — wait $pid
+# blocks until the process exits, so a timeout check between waits is
+# ineffective when a single wait hangs for minutes.
+#
+# Arguments:
+#   $1 - timeout in seconds
+#   $2..N - PIDs to wait for (passed as remaining args)
+# Returns: 0 always (best-effort — kills stragglers on timeout)
+#######################################
+_wait_parallel_pids() {
+	local timeout_secs="$1"
+	shift
+	local pids=("$@")
 
-				# Remove issues with supervisor, contributor, persistent, or quality-review labels
-				local filtered_json
-				filtered_json=$(echo "$issue_json" | jq '[.[] | select(.labels | map(.name) | (index("supervisor") or index("contributor") or index("persistent") or index("quality-review")) | not)]')
-
-				local issue_count
-				issue_count=$(echo "$filtered_json" | jq 'length')
-
-				if [[ "$issue_count" -gt 0 ]]; then
-					echo "### Open Issues ($issue_count)"
-					echo "$filtered_json" | jq -r '.[] | "- Issue #\(.number): \(.title) [labels: \(if (.labels | length) == 0 then "none" else (.labels | map(.name) | join(", ")) end)] [assignees: \(if (.assignees | length) == 0 then "none" else (.assignees | map(.login) | join(", ")) end)] [updated: \(.updatedAt)]"'
-				else
-					echo "### Open Issues (0)"
-					echo "- None"
-				fi
-
-				echo ""
-			} >"$outfile"
-		) &
-		pids+=($!)
-		idx=$((idx + 1))
-	done <<<"$repo_entries"
-
-	# Wait for all parallel fetches with a hard timeout (t1482).
-	# Each repo does 3 gh API calls (pr list, pr list --state all, issue list).
-	# Normal completion: <30s. Timeout at 60s catches hung gh connections.
-	# Must be well under launchd's 120s StartInterval — the wrapper spends
-	# ~20s on cleanup/normalize before reaching prefetch, so 60s leaves ~40s
-	# for sub-helpers and pulse launch.
-	# Uses poll-based approach (kill -0) instead of blocking wait — wait $pid
-	# blocks until the process exits, so a timeout check between waits is
-	# ineffective when a single wait hangs for minutes.
 	local wait_elapsed=0
 	local all_done=false
-	while [[ "$all_done" != "true" ]] && [[ "$wait_elapsed" -lt 60 ]]; do
+	while [[ "$all_done" != "true" ]] && [[ "$wait_elapsed" -lt "$timeout_secs" ]]; do
 		all_done=true
 		for pid in "${pids[@]}"; do
 			if kill -0 "$pid" 2>/dev/null; then
@@ -627,8 +655,21 @@ prefetch_state() {
 	for pid in "${pids[@]}"; do
 		wait "$pid" 2>/dev/null || true
 	done
+	return 0
+}
 
-	# Assemble state file in repo order
+#######################################
+# Assemble state file from parallel fetch results (GH#5627)
+#
+# Concatenates numbered output files from tmpdir into STATE_FILE
+# with a header timestamp.
+#
+# Arguments:
+#   $1 - tmpdir containing numbered .txt files
+#######################################
+_assemble_state_file() {
+	local tmpdir="$1"
+
 	{
 		echo "# Pre-fetched Repo State ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
 		echo ""
@@ -641,16 +682,21 @@ prefetch_state() {
 			i=$((i + 1))
 		done
 	} >"$STATE_FILE"
+	return 0
+}
 
-	# Clean up
-	rm -rf "$tmpdir"
-
-	# t1482: Sub-helpers that call external scripts (gh API, pr-salvage,
-	# gh-failure-miner) get individual timeouts via run_cmd_with_timeout.
-	# If a helper times out, the pulse proceeds without that section —
-	# degraded but functional. Shell functions that only read local state
-	# (priority allocations, queue governor, contribution watch) run
-	# directly since they complete instantly.
+#######################################
+# Append sub-helper data sections to STATE_FILE (GH#5627)
+#
+# Runs each sub-helper with individual timeouts. If a helper times out,
+# the pulse proceeds without that section — degraded but functional.
+# Shell functions that only read local state run directly (instant).
+#
+# Arguments:
+#   $1 - repo_entries (slug|path pairs, one per line)
+#######################################
+_append_prefetch_sub_helpers() {
+	local repo_entries="$1"
 
 	# Append mission state (reads local files — fast)
 	prefetch_missions "$repo_entries" >>"$STATE_FILE"
@@ -698,6 +744,195 @@ prefetch_state() {
 	}
 	cat "$ghfail_tmp" >>"$STATE_FILE"
 	rm -f "$ghfail_tmp"
+
+	return 0
+}
+
+#######################################
+# Pre-fetch state for ALL pulse-enabled repos
+#
+# Runs gh pr list + gh issue list for each repo in parallel, formats
+# a compact summary, and writes it to STATE_FILE. This is injected
+# into the pulse prompt so the agent sees all repos from the start —
+# preventing the "only processes first repo" problem.
+#
+# This is a deterministic data-fetch utility. The intelligence about
+# what to DO with this data stays in pulse.md.
+#######################################
+########################################
+# Check per-repo pulse schedule constraints (GH#6510)
+#
+# Enforces two optional repos.json fields:
+#   pulse_hours: {"start": N, "end": N}  — 24h local time window
+#   pulse_expires: "YYYY-MM-DD"          — ISO date after which pulse stops
+#
+# When pulse_expires is past today, this function atomically sets
+# pulse: false in repos.json (temp file + mv) and returns 1 (skip).
+# When pulse_hours is set and the current hour is outside the window,
+# returns 1 (skip). Overnight windows (start > end, e.g., 17→5) are
+# supported. Repos without either field always return 0 (include).
+#
+# Bash 3.2 compatible: no associative arrays, no bash 4+ features.
+# date +%H returns zero-padded strings — strip with 10# prefix for
+# arithmetic to avoid octal interpretation (e.g., 08 → 10#08 = 8).
+#
+# Arguments:
+#   $1 - slug (owner/repo, for log messages)
+#   $2 - pulse_hours_start (integer 0-23, or "" if not set)
+#   $3 - pulse_hours_end   (integer 0-23, or "" if not set)
+#   $4 - pulse_expires     (YYYY-MM-DD string, or "" if not set)
+#   $5 - repos_json        (path to repos.json, for expiry auto-disable)
+#
+# Exit codes:
+#   0 - repo is in schedule window (include in this pulse)
+#   1 - repo is outside window or expired (skip this pulse)
+########################################
+check_repo_pulse_schedule() {
+	local slug="$1"
+	local ph_start="$2"
+	local ph_end="$3"
+	local expires="$4"
+	local repos_json="$5"
+
+	# --- pulse_expires check ---
+	if [[ -n "$expires" ]]; then
+		local today_date
+		today_date=$(date +%Y-%m-%d)
+		# String comparison works for ISO dates (lexicographic == chronological)
+		if [[ "$today_date" > "$expires" ]]; then
+			echo "[pulse-wrapper] pulse_expires reached for ${slug} (expires=${expires}, today=${today_date}) — auto-disabling pulse" >>"$LOGFILE"
+			# Atomic write: temp file + mv (POSIX-guaranteed atomic on local fs)
+			# Last-writer-wins is acceptable since expiry is idempotent.
+			if [[ -f "$repos_json" ]] && command -v jq &>/dev/null; then
+				local tmp_json
+				tmp_json=$(mktemp)
+				if jq --arg slug "$slug" '
+					.initialized_repos |= map(
+						if .slug == $slug then .pulse = false else . end
+					)
+				' "$repos_json" >"$tmp_json" 2>/dev/null; then
+					mv "$tmp_json" "$repos_json"
+					echo "[pulse-wrapper] Set pulse:false for ${slug} in repos.json (expiry auto-disable)" >>"$LOGFILE"
+				else
+					rm -f "$tmp_json"
+					echo "[pulse-wrapper] WARNING: jq failed to update repos.json for ${slug} expiry — skipping this cycle only" >>"$LOGFILE"
+				fi
+			fi
+			return 1
+		fi
+	fi
+
+	# --- pulse_hours check ---
+	if [[ -n "$ph_start" && -n "$ph_end" ]]; then
+		# Strip leading zeros before arithmetic to avoid octal interpretation
+		# (bash treats 08/09 as invalid octal without the 10# prefix)
+		local current_hour
+		current_hour=$(date +%H)
+		local cur ph_s ph_e
+		cur=$((10#${current_hour}))
+		ph_s=$((10#${ph_start}))
+		ph_e=$((10#${ph_end}))
+
+		local in_window=false
+		if [[ "$ph_s" -le "$ph_e" ]]; then
+			# Normal window (e.g., 9→17): in window when cur >= start AND cur < end
+			if [[ "$cur" -ge "$ph_s" && "$cur" -lt "$ph_e" ]]; then
+				in_window=true
+			fi
+		else
+			# Overnight window (e.g., 17→5): in window when cur >= start OR cur < end
+			if [[ "$cur" -ge "$ph_s" || "$cur" -lt "$ph_e" ]]; then
+				in_window=true
+			fi
+		fi
+
+		if [[ "$in_window" != "true" ]]; then
+			echo "[pulse-wrapper] pulse_hours window ${ph_s}→${ph_e} not active for ${slug} (current hour: ${cur}) — skipping" >>"$LOGFILE"
+			return 1
+		fi
+	fi
+
+	return 0
+}
+
+prefetch_state() {
+	local repos_json="$REPOS_JSON"
+
+	if [[ ! -f "$repos_json" ]]; then
+		echo "[pulse-wrapper] repos.json not found at $repos_json — skipping prefetch" >>"$LOGFILE"
+		echo "ERROR: repos.json not found" >"$STATE_FILE"
+		return 1
+	fi
+
+	echo "[pulse-wrapper] Pre-fetching state for all pulse-enabled repos..." >>"$LOGFILE"
+
+	# Extract pulse-enabled, non-local-only repos as slug|path|ph_start|ph_end|expires
+	# pulse_hours fields default to "" when absent; pulse_expires defaults to "".
+	# Bash 3.2: no associative arrays — use pipe-delimited fields.
+	local repo_entries_raw
+	repo_entries_raw=$(jq -r '.initialized_repos[] |
+		select(.pulse == true and (.local_only // false) == false and .slug != "") |
+		[
+			.slug,
+			.path,
+			(if .pulse_hours then (.pulse_hours.start | tostring) else "" end),
+			(if .pulse_hours then (.pulse_hours.end   | tostring) else "" end),
+			(.pulse_expires // "")
+		] | join("|")
+	' "$repos_json")
+
+	# Filter repos through schedule check; build slug|path pairs for downstream use
+	local repo_entries=""
+	while IFS='|' read -r slug path ph_start ph_end expires; do
+		[[ -n "$slug" ]] || continue
+		if check_repo_pulse_schedule "$slug" "$ph_start" "$ph_end" "$expires" "$repos_json"; then
+			if [[ -z "$repo_entries" ]]; then
+				repo_entries="${slug}|${path}"
+			else
+				repo_entries="${repo_entries}"$'\n'"${slug}|${path}"
+			fi
+		fi
+	done <<<"$repo_entries_raw"
+
+	if [[ -z "$repo_entries" ]]; then
+		echo "[pulse-wrapper] No pulse-enabled repos in schedule window" >>"$LOGFILE"
+		echo "No pulse-enabled repos in schedule window in repos.json" >"$STATE_FILE"
+		return 1
+	fi
+
+	# Temp dir for parallel fetches
+	local tmpdir
+	tmpdir=$(mktemp -d)
+
+	# Launch parallel gh fetches for each repo
+	local pids=()
+	local idx=0
+	while IFS='|' read -r slug path; do
+		(
+			_prefetch_single_repo "$slug" "$path" "${tmpdir}/${idx}.txt"
+		) &
+		pids+=($!)
+		idx=$((idx + 1))
+	done <<<"$repo_entries"
+
+	# Wait for all parallel fetches with a hard timeout (t1482).
+	# Each repo does 3 gh API calls (pr list, pr list --state all, issue list).
+	# Normal completion: <30s. Timeout at 60s catches hung gh connections.
+	_wait_parallel_pids 60 "${pids[@]}"
+
+	# Assemble state file in repo order
+	_assemble_state_file "$tmpdir"
+
+	# Clean up
+	rm -rf "$tmpdir"
+
+	# t1482: Sub-helpers that call external scripts (gh API, pr-salvage,
+	# gh-failure-miner) get individual timeouts via run_cmd_with_timeout.
+	# If a helper times out, the pulse proceeds without that section —
+	# degraded but functional. Shell functions that only read local state
+	# (priority allocations, queue governor, contribution watch) run
+	# directly since they complete instantly.
+	_append_prefetch_sub_helpers "$repo_entries"
 
 	# Export PULSE_SCOPE_REPOS — comma-separated list of repo slugs that
 	# workers are allowed to create PRs/branches on (t1405, GH#2928).
@@ -1238,14 +1473,28 @@ list_active_worker_processes() {
 	#      (sandbox-disabled path and test fixtures)
 	# Exclude: lines starting with "node " (node child) or whose command
 	# starts with a path ending in "/.opencode " (binary grandchild).
-	ps axo pid,etime,command | awk '
+	#
+	# GH#6413: Process state filtering — exclude zombie (Z) and stopped (T)
+	# processes. These are dead/stuck processes that hold no useful work but
+	# appear as "active" in worker counts, inflating struggle ratios and
+	# preventing the pulse from dispatching replacements. The stat column is
+	# used for filtering only; output format remains pid,etime,command for
+	# backward compatibility with all consumers.
+	ps axo pid,stat,etime,command | awk '
 		/\/full-loop/ &&
 		$0 !~ /(^|[[:space:]])\/pulse([[:space:]]|$)/ &&
 		$0 !~ /Supervisor Pulse/ &&
 		$0 ~ /(^|[[:space:]\/])\.?opencode([[:space:]]|$)/ &&
 		$0 !~ /[[:space:]]node[[:space:]].*\/opencode/ &&
 		$0 !~ /\/bin\/\.opencode[[:space:]]/ {
-			print
+			# $2 is the stat column (e.g., S, SN, Ss, Z, Zs, T, TN)
+			stat = $2
+			# Exclude zombies (Z*) and stopped processes (T*)
+			if (stat ~ /^[ZT]/) next
+			# Print pid, etime, command (skip stat to preserve output format)
+			printf "%s %s", $1, $3
+			for (i = 4; i <= NF; i++) printf " %s", $i
+			printf "\n"
 		}
 	'
 	return 0
@@ -1419,6 +1668,130 @@ _append_priority_allocations() {
 #
 # Output: hygiene summary to stdout (appended to STATE_FILE by caller)
 #######################################
+#######################################
+# Check a single repo for hygiene issues (GH#5627, extracted from prefetch_hygiene)
+#
+# Checks for orphan worktrees, stale stashes, and uncommitted changes
+# on the default branch. Returns issue descriptions via stdout.
+#
+# Arguments:
+#   $1 - repo_path
+#   $2 - repos_json path (for slug lookup)
+# Output: issue lines to stdout (empty if no issues)
+#######################################
+_check_repo_hygiene() {
+	local repo_path="$1"
+	local repos_json="$2"
+	local repo_issues=""
+
+	# 1. Orphan worktrees: 0 commits ahead of default branch, no PR
+	local default_branch
+	default_branch=$(git -C "$repo_path" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || default_branch="main"
+	[[ -z "$default_branch" ]] && default_branch="main"
+
+	local wt_branch wt_path
+	while IFS= read -r line; do
+		if [[ "$line" =~ ^worktree\ (.+)$ ]]; then
+			wt_path="${BASH_REMATCH[1]}"
+		elif [[ "$line" =~ ^branch\ refs/heads/(.+)$ ]]; then
+			wt_branch="${BASH_REMATCH[1]}"
+		elif [[ -z "$line" && -n "$wt_branch" ]]; then
+			# Skip the default branch
+			if [[ "$wt_branch" != "$default_branch" ]]; then
+				local commits_ahead
+				commits_ahead=$(git -C "$repo_path" rev-list --count "${default_branch}..${wt_branch}" 2>/dev/null) || commits_ahead="?"
+
+				if [[ "$commits_ahead" == "0" ]]; then
+					# Check if any PR exists (open or merged)
+					local has_pr="false"
+					if command -v gh &>/dev/null; then
+						local pr_check
+						pr_check=$(gh pr list --repo "$(jq -r --arg p "$repo_path" '.initialized_repos[] | select(.path == $p) | .slug' "$repos_json" 2>/dev/null)" \
+							--head "$wt_branch" --state all --json number --jq 'length' 2>/dev/null) || pr_check="0"
+						[[ "${pr_check:-0}" -gt 0 ]] && has_pr="true"
+					fi
+
+					if [[ "$has_pr" == "false" ]]; then
+						# Check for dirty state
+						local dirty=""
+						local change_count
+						change_count=$(git -C "${wt_path:-$repo_path}" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || change_count=0
+						[[ "${change_count:-0}" -gt 0 ]] && dirty=" (${change_count} uncommitted files)"
+
+						repo_issues="${repo_issues}  - Orphan worktree: \`${wt_branch}\` — 0 commits, no PR${dirty} (${wt_path})\n"
+					fi
+				fi
+			fi
+			wt_path=""
+			wt_branch=""
+		fi
+	done < <(
+		git -C "$repo_path" worktree list --porcelain 2>/dev/null
+		echo ""
+	)
+
+	# 2. Stash summary (needs-review count)
+	local stash_count
+	stash_count=$(git -C "$repo_path" stash list 2>/dev/null | wc -l | tr -d ' ')
+	if [[ "${stash_count:-0}" -gt 0 ]]; then
+		repo_issues="${repo_issues}  - ${stash_count} stash(es) remaining (safe-to-drop already cleaned; these need review)\n"
+	fi
+
+	# 3. Uncommitted changes on main worktree
+	local main_wt_path="$repo_path"
+	local current_branch
+	current_branch=$(git -C "$main_wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null) || current_branch=""
+	if [[ "$current_branch" == "$default_branch" ]]; then
+		local main_dirty
+		main_dirty=$(git -C "$main_wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || main_dirty=0
+		if [[ "${main_dirty:-0}" -gt 0 ]]; then
+			repo_issues="${repo_issues}  - ${main_dirty} uncommitted file(s) on ${default_branch} branch\n"
+		fi
+	fi
+
+	echo -n "$repo_issues"
+	return 0
+}
+
+#######################################
+# Scan for salvageable closed-unmerged PRs (GH#5627, extracted from prefetch_hygiene)
+#
+# Arguments:
+#   $1 - repos_json path
+# Output: salvage summary to stdout
+#######################################
+_scan_pr_salvage() {
+	local repos_json="$1"
+	local salvage_helper="${SCRIPT_DIR}/pr-salvage-helper.sh"
+
+	if [[ ! -x "$salvage_helper" ]]; then
+		return 0
+	fi
+
+	echo ""
+	echo "# PR Salvage (closed-unmerged with recoverable code)"
+	echo ""
+
+	local salvage_found=false
+	local slug path
+	while IFS='|' read -r slug path; do
+		[[ -z "$slug" ]] && continue
+		local salvage_output
+		salvage_output=$("$salvage_helper" prefetch "$slug" "$path" 2>/dev/null) || true
+		if [[ -n "$salvage_output" ]]; then
+			salvage_found=true
+			echo "$salvage_output"
+		fi
+	done < <(jq -r '.initialized_repos[] | select(.pulse == true and (.local_only // false) == false and .slug != "") | "\(.slug)|\(.path)"' "$repos_json" 2>/dev/null)
+
+	if [[ "$salvage_found" == "false" ]]; then
+		echo "- No salvageable closed-unmerged PRs detected"
+		echo ""
+	fi
+
+	return 0
+}
+
 prefetch_hygiene() {
 	local repos_json="${HOME}/.config/aidevops/repos.json"
 
@@ -1447,72 +1820,9 @@ prefetch_hygiene() {
 
 		local repo_name
 		repo_name=$(basename "$repo_path")
-		local repo_issues=""
 
-		# 1. Orphan worktrees: 0 commits ahead of default branch, no PR
-		local default_branch
-		default_branch=$(git -C "$repo_path" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || default_branch="main"
-		[[ -z "$default_branch" ]] && default_branch="main"
-
-		local wt_branch wt_path
-		while IFS= read -r line; do
-			if [[ "$line" =~ ^worktree\ (.+)$ ]]; then
-				wt_path="${BASH_REMATCH[1]}"
-			elif [[ "$line" =~ ^branch\ refs/heads/(.+)$ ]]; then
-				wt_branch="${BASH_REMATCH[1]}"
-			elif [[ -z "$line" && -n "$wt_branch" ]]; then
-				# Skip the default branch
-				if [[ "$wt_branch" != "$default_branch" ]]; then
-					local commits_ahead
-					commits_ahead=$(git -C "$repo_path" rev-list --count "${default_branch}..${wt_branch}" 2>/dev/null) || commits_ahead="?"
-
-					if [[ "$commits_ahead" == "0" ]]; then
-						# Check if any PR exists (open or merged)
-						local has_pr="false"
-						if command -v gh &>/dev/null; then
-							local pr_check
-							pr_check=$(gh pr list --repo "$(jq -r --arg p "$repo_path" '.initialized_repos[] | select(.path == $p) | .slug' "$repos_json" 2>/dev/null)" \
-								--head "$wt_branch" --state all --json number --jq 'length' 2>/dev/null) || pr_check="0"
-							[[ "${pr_check:-0}" -gt 0 ]] && has_pr="true"
-						fi
-
-						if [[ "$has_pr" == "false" ]]; then
-							# Check for dirty state
-							local dirty=""
-							local change_count
-							change_count=$(git -C "${wt_path:-$repo_path}" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || change_count=0
-							[[ "${change_count:-0}" -gt 0 ]] && dirty=" (${change_count} uncommitted files)"
-
-							repo_issues="${repo_issues}  - Orphan worktree: \`${wt_branch}\` — 0 commits, no PR${dirty} (${wt_path})\n"
-						fi
-					fi
-				fi
-				wt_path=""
-				wt_branch=""
-			fi
-		done < <(
-			git -C "$repo_path" worktree list --porcelain 2>/dev/null
-			echo ""
-		)
-
-		# 2. Stash summary (needs-review count)
-		local stash_count
-		stash_count=$(git -C "$repo_path" stash list 2>/dev/null | wc -l | tr -d ' ')
-		if [[ "${stash_count:-0}" -gt 0 ]]; then
-			repo_issues="${repo_issues}  - ${stash_count} stash(es) remaining (safe-to-drop already cleaned; these need review)\n"
-		fi
-
-		# 3. Uncommitted changes on main worktree
-		local main_wt_path="$repo_path"
-		local current_branch
-		current_branch=$(git -C "$main_wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null) || current_branch=""
-		if [[ "$current_branch" == "$default_branch" ]]; then
-			local main_dirty
-			main_dirty=$(git -C "$main_wt_path" status --porcelain 2>/dev/null | wc -l | tr -d ' ') || main_dirty=0
-			if [[ "${main_dirty:-0}" -gt 0 ]]; then
-				repo_issues="${repo_issues}  - ${main_dirty} uncommitted file(s) on ${default_branch} branch\n"
-			fi
-		fi
+		local repo_issues
+		repo_issues=$(_check_repo_hygiene "$repo_path" "$repos_json")
 
 		# Output repo section if any issues found
 		if [[ -n "$repo_issues" ]]; then
@@ -1527,30 +1837,7 @@ prefetch_hygiene() {
 		echo ""
 	fi
 
-	# PR salvage scan: detect closed-unmerged PRs with recoverable code
-	local salvage_helper="${SCRIPT_DIR}/pr-salvage-helper.sh"
-	if [[ -x "$salvage_helper" ]]; then
-		echo ""
-		echo "# PR Salvage (closed-unmerged with recoverable code)"
-		echo ""
-
-		local salvage_found=false
-		local slug path
-		while IFS='|' read -r slug path; do
-			[[ -z "$slug" ]] && continue
-			local salvage_output
-			salvage_output=$("$salvage_helper" prefetch "$slug" "$path" 2>/dev/null) || true
-			if [[ -n "$salvage_output" ]]; then
-				salvage_found=true
-				echo "$salvage_output"
-			fi
-		done < <(jq -r '.initialized_repos[] | select(.pulse == true and (.local_only // false) == false and .slug != "") | "\(.slug)|\(.path)"' "$repos_json" 2>/dev/null)
-
-		if [[ "$salvage_found" == "false" ]]; then
-			echo "- No salvageable closed-unmerged PRs detected"
-			echo ""
-		fi
-	fi
+	_scan_pr_salvage "$repos_json"
 
 	return 0
 }
@@ -1817,6 +2104,184 @@ run_stage_with_timeout() {
 # on `wait`, so the next invocation never starts. The watchdog is now
 # internal to the same process that spawned opencode.
 #######################################
+#######################################
+# Check watchdog termination conditions for a single poll iteration (GH#5627)
+#
+# Evaluates stop flag, wall-clock, progress, and idle conditions.
+# Returns the kill reason via stdout (empty if no kill needed).
+#
+# Arguments (positional — avoids associative arrays for bash 3.2):
+#   $1 - opencode_pid
+#   $2 - start_epoch
+#   $3 - effective_cold_start_timeout
+#   $4 - last_log_size (current value)
+#   $5 - progress_stall_seconds (current value)
+#   $6 - has_seen_progress ("true" or "false")
+#   $7 - idle_seconds (current value)
+#
+# Outputs (3 lines to stdout, read by caller):
+#   Line 1: kill_reason (empty string if none)
+#   Line 2: updated last_log_size
+#   Line 3: updated progress_stall_seconds
+#   Line 4: updated has_seen_progress
+#   Line 5: updated idle_seconds
+#######################################
+_check_watchdog_conditions() {
+	local opencode_pid="$1"
+	local start_epoch="$2"
+	local effective_cold_start_timeout="$3"
+	local last_log_size="$4"
+	local progress_stall_seconds="$5"
+	local has_seen_progress="$6"
+	local idle_seconds="$7"
+
+	local now
+	now=$(date +%s)
+	local elapsed=$((now - start_epoch))
+
+	local kill_reason=""
+
+	# Check 0: Stop flag — user ran `aidevops pulse stop` during this cycle (t2943)
+	if [[ -f "$STOP_FLAG" ]]; then
+		kill_reason="Stop flag detected during active pulse — user requested stop"
+	# Check 1: Wall-clock stale threshold (hard ceiling)
+	elif [[ "$elapsed" -gt "$PULSE_STALE_THRESHOLD" ]]; then
+		kill_reason="Pulse exceeded stale threshold (${elapsed}s > ${PULSE_STALE_THRESHOLD}s)"
+	# Skip checks 2 and 3 during the first 3 minutes to allow startup/init.
+	elif [[ "$elapsed" -ge 180 ]]; then
+		# Check 2: Progress detection — is the log file growing? (GH#2958)
+		if [[ -z "$kill_reason" ]]; then
+			local current_log_size=0
+			if [[ -f "$LOGFILE" ]]; then
+				current_log_size=$(wc -c <"$LOGFILE" 2>/dev/null || echo "0")
+				current_log_size="${current_log_size// /}"
+			fi
+			[[ "$current_log_size" =~ ^[0-9]+$ ]] || current_log_size=0
+
+			if [[ "$current_log_size" -gt "$last_log_size" ]]; then
+				# Log grew — process is making progress
+				has_seen_progress=true
+				if [[ "$progress_stall_seconds" -gt 0 ]]; then
+					echo "[pulse-wrapper] Progress resumed after ${progress_stall_seconds}s stall (log grew by $((current_log_size - last_log_size)) bytes)" >>"$LOGFILE"
+				fi
+				last_log_size="$current_log_size"
+				progress_stall_seconds=0
+			else
+				# Log hasn't grown — increment stall counter
+				progress_stall_seconds=$((progress_stall_seconds + 60))
+				local progress_timeout="$PULSE_PROGRESS_TIMEOUT"
+				if [[ "$has_seen_progress" == false ]]; then
+					progress_timeout="$effective_cold_start_timeout"
+				fi
+				if [[ "$progress_stall_seconds" -ge "$progress_timeout" ]]; then
+					if [[ "$has_seen_progress" == false ]]; then
+						kill_reason="Pulse cold-start stalled for ${progress_stall_seconds}s — no first output (log size: ${current_log_size} bytes, threshold: ${effective_cold_start_timeout}s)"
+					else
+						kill_reason="Pulse stalled for ${progress_stall_seconds}s — no log output (log size: ${current_log_size} bytes, threshold: ${PULSE_PROGRESS_TIMEOUT}s) (GH#2958)"
+					fi
+				fi
+			fi
+		fi
+
+		# Check 3: Idle detection — CPU usage of the process tree (t1398.3)
+		if [[ -z "$kill_reason" ]]; then
+			if [[ "$has_seen_progress" == true ]]; then
+				local tree_cpu
+				tree_cpu=$(_get_process_tree_cpu "$opencode_pid")
+				if [[ "$tree_cpu" -lt "$PULSE_IDLE_CPU_THRESHOLD" ]]; then
+					idle_seconds=$((idle_seconds + 60))
+					if [[ "$idle_seconds" -ge "$PULSE_IDLE_TIMEOUT" ]]; then
+						kill_reason="Pulse idle for ${idle_seconds}s (CPU ${tree_cpu}% < ${PULSE_IDLE_CPU_THRESHOLD}%, threshold ${PULSE_IDLE_TIMEOUT}s) (t1398.3)"
+					fi
+				else
+					# Process is active — reset idle counter
+					if [[ "$idle_seconds" -gt 0 ]]; then
+						echo "[pulse-wrapper] Pulse active again (CPU ${tree_cpu}%) after ${idle_seconds}s idle — resetting idle counter" >>"$LOGFILE"
+					fi
+					idle_seconds=0
+				fi
+			else
+				idle_seconds=0
+			fi
+		fi
+	fi
+
+	# Output updated state (one value per line for caller to read)
+	echo "$kill_reason"
+	echo "$last_log_size"
+	echo "$progress_stall_seconds"
+	echo "$has_seen_progress"
+	echo "$idle_seconds"
+	return 0
+}
+
+#######################################
+# Run the pulse watchdog loop (GH#5627, extracted from run_pulse)
+#
+# Polls every 60s for termination conditions and resource violations.
+# Kills the pulse process when any condition triggers.
+#
+# Arguments:
+#   $1 - opencode_pid
+#   $2 - start_epoch
+#   $3 - effective_cold_start_timeout
+#######################################
+_run_pulse_watchdog() {
+	local opencode_pid="$1"
+	local start_epoch="$2"
+	local effective_cold_start_timeout="$3"
+
+	# Idle detection state (t1398.3)
+	local idle_seconds=0
+
+	# Progress detection state (GH#2958)
+	local last_log_size=0
+	local progress_stall_seconds=0
+	local has_seen_progress=false
+	if [[ -f "$LOGFILE" ]]; then
+		last_log_size=$(wc -c <"$LOGFILE" 2>/dev/null || echo "0")
+		last_log_size="${last_log_size// /}"
+	fi
+
+	while ps -p "$opencode_pid" >/dev/null; do
+		# Read watchdog state from the check function.
+		# _check_watchdog_conditions outputs 5 lines; we read them back.
+		# This avoids subshell variable scoping issues while keeping the
+		# check logic in a testable function.
+		local watchdog_output
+		watchdog_output=$(_check_watchdog_conditions "$opencode_pid" "$start_epoch" \
+			"$effective_cold_start_timeout" "$last_log_size" "$progress_stall_seconds" \
+			"$has_seen_progress" "$idle_seconds")
+
+		local kill_reason
+		kill_reason=$(echo "$watchdog_output" | sed -n '1p')
+		last_log_size=$(echo "$watchdog_output" | sed -n '2p')
+		progress_stall_seconds=$(echo "$watchdog_output" | sed -n '3p')
+		has_seen_progress=$(echo "$watchdog_output" | sed -n '4p')
+		idle_seconds=$(echo "$watchdog_output" | sed -n '5p')
+
+		# Single kill block — avoids duplicating the kill+force-kill sequence.
+		if [[ -n "$kill_reason" ]]; then
+			echo "[pulse-wrapper] ${kill_reason} — killing" >>"$LOGFILE"
+			_kill_tree "$opencode_pid" || true
+			sleep 2
+			if kill -0 "$opencode_pid" 2>/dev/null; then
+				_force_kill_tree "$opencode_pid" || true
+			fi
+			break
+		fi
+
+		# Process guard: kill children exceeding RSS/runtime limits (t1398)
+		guard_child_processes "$opencode_pid"
+		# Sleep 60s then re-check. Portable across bash 3.2+ (macOS default).
+		sleep 60
+	done
+
+	# Reap the process (may already be dead)
+	wait "$opencode_pid" 2>/dev/null || true
+	return 0
+}
+
 run_pulse() {
 	local underfilled_mode="${1:-0}"
 	local underfill_pct="${2:-0}"
@@ -1849,14 +2314,6 @@ gathered by pulse-wrapper.sh BEFORE this session started."
 	fi
 
 	# Run the provider-aware headless wrapper in background.
-	# It alternates direct Anthropic/OpenAI models and avoids opencode/*
-	# gateway models for headless runs.
-	# Session reuse is intentionally DISABLED for pulse role (GH#5136,
-	# headless-runtime-helper.sh line 804-809): each cycle clears the
-	# persisted session ID to avoid stale conversational context contaminating
-	# dispatch decisions. This means each cycle creates a fresh session.
-	# PULSE_DIR uses a neutral workspace path (not a managed repo) so these
-	# sessions don't pollute any project's session list.
 	local -a pulse_cmd=("$HEADLESS_RUNTIME_HELPER" run --role pulse --session-key supervisor-pulse --dir "$PULSE_DIR" --title "Supervisor Pulse" --agent Automate --prompt "$prompt")
 	if [[ -n "$PULSE_MODEL" ]]; then
 		pulse_cmd+=(--model "$PULSE_MODEL")
@@ -1868,140 +2325,10 @@ gathered by pulse-wrapper.sh BEFORE this session started."
 
 	echo "[pulse-wrapper] opencode PID: $opencode_pid" >>"$LOGFILE"
 
-	# Idle detection state (t1398.3)
-	# Tracks how long the process tree has been continuously idle (CPU < threshold).
-	# Reset to 0 whenever CPU activity is detected. The poll interval (60s) is the
-	# granularity — idle_seconds increments by 60 each idle poll.
-	local idle_seconds=0
-
-	# Progress detection state (GH#2958)
-	# Tracks log file size to detect stalled processes. If the log hasn't grown
-	# for PULSE_PROGRESS_TIMEOUT seconds, the process is stuck (running but not
-	# producing output). This catches "busy but unproductive" states that idle
-	# detection misses (e.g., network I/O wait, API rate limiting loops).
-	local last_log_size=0
-	local progress_stall_seconds=0
-	local has_seen_progress=false
-	if [[ -f "$LOGFILE" ]]; then
-		last_log_size=$(wc -c <"$LOGFILE" 2>/dev/null || echo "0")
-		# Strip whitespace from wc output (macOS wc pads with spaces)
-		last_log_size="${last_log_size// /}"
-	fi
-
-	# Watchdog loop: check every 60s for stale threshold, idle timeout,
-	# progress stall, or runaway children (t1397, t1398, t1398.3, GH#2958).
-	# This replaces the bare `wait` that blocked the wrapper indefinitely
-	# when opencode hung.
-	#
-	# Kill logic is deduplicated: all checks set kill_reason, and a single
-	# block at the end performs the kill + force-kill sequence. kill commands
-	# are guarded with || true to prevent set -e from aborting cleanup if
-	# the target process has already exited.
-	while ps -p "$opencode_pid" >/dev/null; do
-		local now
-		now=$(date +%s)
-		local elapsed=$((now - start_epoch))
-
-		local kill_reason=""
-		# Check 0: Stop flag — user ran `aidevops pulse stop` during this cycle (t2943)
-		if [[ -f "$STOP_FLAG" ]]; then
-			kill_reason="Stop flag detected during active pulse — user requested stop"
-		# Check 1: Wall-clock stale threshold (hard ceiling)
-		elif [[ "$elapsed" -gt "$PULSE_STALE_THRESHOLD" ]]; then
-			kill_reason="Pulse exceeded stale threshold (${elapsed}s > ${PULSE_STALE_THRESHOLD}s)"
-		# Skip checks 2 and 3 during the first 3 minutes to allow startup/init.
-		elif [[ "$elapsed" -ge 180 ]]; then
-			# Check 2: Progress detection — is the log file growing? (GH#2958)
-			# A process that's running (CPU > 0) but producing no output for
-			# PULSE_PROGRESS_TIMEOUT is stuck in a loop (API retries, rate
-			# limiting, infinite wait). This is the "busy but unproductive" case.
-			if [[ -z "$kill_reason" ]]; then
-				local current_log_size=0
-				if [[ -f "$LOGFILE" ]]; then
-					current_log_size=$(wc -c <"$LOGFILE" 2>/dev/null || echo "0")
-					current_log_size="${current_log_size// /}"
-				fi
-				[[ "$current_log_size" =~ ^[0-9]+$ ]] || current_log_size=0
-
-				if [[ "$current_log_size" -gt "$last_log_size" ]]; then
-					# Log grew — process is making progress
-					has_seen_progress=true
-					if [[ "$progress_stall_seconds" -gt 0 ]]; then
-						echo "[pulse-wrapper] Progress resumed after ${progress_stall_seconds}s stall (log grew by $((current_log_size - last_log_size)) bytes)" >>"$LOGFILE"
-					fi
-					last_log_size="$current_log_size"
-					progress_stall_seconds=0
-				else
-					# Log hasn't grown — increment stall counter
-					progress_stall_seconds=$((progress_stall_seconds + 60))
-					local progress_timeout="$PULSE_PROGRESS_TIMEOUT"
-					if [[ "$has_seen_progress" == false ]]; then
-						progress_timeout="$effective_cold_start_timeout"
-					fi
-					if [[ "$progress_stall_seconds" -ge "$progress_timeout" ]]; then
-						if [[ "$has_seen_progress" == false ]]; then
-							kill_reason="Pulse cold-start stalled for ${progress_stall_seconds}s — no first output (log size: ${current_log_size} bytes, threshold: ${effective_cold_start_timeout}s)"
-						else
-							kill_reason="Pulse stalled for ${progress_stall_seconds}s — no log output (log size: ${current_log_size} bytes, threshold: ${PULSE_PROGRESS_TIMEOUT}s) (GH#2958)"
-						fi
-					fi
-				fi
-			fi
-
-			# Check 3: Idle detection — CPU usage of the process tree (t1398.3)
-			# Only enforce after at least one output/progress event. Before first
-			# output, some model/tooling paths stay near 0% CPU while still making
-			# progress toward initial dispatch decisions.
-			if [[ -z "$kill_reason" ]]; then
-				if [[ "$has_seen_progress" == true ]]; then
-					local tree_cpu
-					tree_cpu=$(_get_process_tree_cpu "$opencode_pid")
-					if [[ "$tree_cpu" -lt "$PULSE_IDLE_CPU_THRESHOLD" ]]; then
-						idle_seconds=$((idle_seconds + 60))
-						if [[ "$idle_seconds" -ge "$PULSE_IDLE_TIMEOUT" ]]; then
-							kill_reason="Pulse idle for ${idle_seconds}s (CPU ${tree_cpu}% < ${PULSE_IDLE_CPU_THRESHOLD}%, threshold ${PULSE_IDLE_TIMEOUT}s) (t1398.3)"
-						fi
-					else
-						# Process is active — reset idle counter
-						if [[ "$idle_seconds" -gt 0 ]]; then
-							echo "[pulse-wrapper] Pulse active again (CPU ${tree_cpu}%) after ${idle_seconds}s idle — resetting idle counter" >>"$LOGFILE"
-						fi
-						idle_seconds=0
-					fi
-				else
-					idle_seconds=0
-				fi
-			fi
-		fi
-
-		# Single kill block — avoids duplicating the kill+force-kill sequence.
-		# Guard with || true so set -e doesn't abort if the process already exited.
-		if [[ -n "$kill_reason" ]]; then
-			echo "[pulse-wrapper] ${kill_reason} — killing" >>"$LOGFILE"
-			_kill_tree "$opencode_pid" || true
-			sleep 2
-			if kill -0 "$opencode_pid" 2>/dev/null; then
-				_force_kill_tree "$opencode_pid" || true
-			fi
-			break
-		fi
-
-		# Process guard: kill children exceeding RSS/runtime limits (t1398)
-		# Pass opencode_pid so the primary pulse process is exempt from
-		# CHILD_RUNTIME_LIMIT (it's governed by PULSE_STALE_THRESHOLD above).
-		guard_child_processes "$opencode_pid"
-		# Sleep 60s then re-check. Portable across bash 3.2+ (macOS default).
-		# The process may exit during sleep — ps -p at top of loop catches that.
-		sleep 60
-	done
-
-	# Reap the process (may already be dead)
-	wait "$opencode_pid" 2>/dev/null || true
+	# Run the watchdog loop (checks stale/idle/progress, guards children)
+	_run_pulse_watchdog "$opencode_pid" "$start_epoch" "$effective_cold_start_timeout"
 
 	# Write IDLE sentinel — never delete the PID file (GH#4324).
-	# Deleting creates a race window where launchd can start multiple
-	# concurrent pulses before the next run writes its PID. The sentinel
-	# keeps the file present so check_dedup() always has a state to read.
 	echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
 
 	local end_epoch
@@ -2300,6 +2627,450 @@ normalize_active_issue_assignments() {
 }
 
 #######################################
+# Daily complexity scan helpers (GH#5628)
+#######################################
+
+# Check if the complexity scan interval has elapsed.
+# Arguments: $1 - now_epoch (current epoch seconds)
+# Returns: 0 if scan is due, 1 if not yet due
+_complexity_scan_check_interval() {
+	local now_epoch="$1"
+	if [[ ! -f "$COMPLEXITY_SCAN_LAST_RUN" ]]; then
+		return 0
+	fi
+	local last_run
+	last_run=$(cat "$COMPLEXITY_SCAN_LAST_RUN" 2>/dev/null || echo "0")
+	[[ "$last_run" =~ ^[0-9]+$ ]] || last_run=0
+	local elapsed=$((now_epoch - last_run))
+	if [[ "$elapsed" -lt "$COMPLEXITY_SCAN_INTERVAL" ]]; then
+		local remaining=$(((COMPLEXITY_SCAN_INTERVAL - elapsed) / 3600))
+		echo "[pulse-wrapper] Complexity scan not due yet (${remaining}h remaining)" >>"$LOGFILE"
+		return 1
+	fi
+	return 0
+}
+
+# Resolve the aidevops repo path and validate lint-file-discovery.sh exists.
+# Arguments: $1 - repos_json path, $2 - aidevops_slug, $3 - now_epoch
+# Outputs: aidevops_path via stdout (empty on failure)
+# Returns: 0 on success, 1 on failure (also writes last-run timestamp on failure)
+_complexity_scan_find_repo() {
+	local repos_json="$1"
+	local aidevops_slug="$2"
+	local now_epoch="$3"
+	local aidevops_path=""
+	if [[ -f "$repos_json" ]] && command -v jq &>/dev/null; then
+		aidevops_path=$(jq -r --arg slug "$aidevops_slug" \
+			'.initialized_repos[] | select(.slug == $slug) | .path' \
+			"$repos_json" 2>/dev/null | head -n 1)
+	fi
+	if [[ -z "$aidevops_path" || "$aidevops_path" == "null" || ! -d "$aidevops_path" ]]; then
+		echo "[pulse-wrapper] Complexity scan: aidevops repo path not found — skipping" >>"$LOGFILE"
+		echo "$now_epoch" >"$COMPLEXITY_SCAN_LAST_RUN"
+		return 1
+	fi
+	local lint_discovery="${aidevops_path}/.agents/scripts/lint-file-discovery.sh"
+	if [[ ! -f "$lint_discovery" ]]; then
+		echo "[pulse-wrapper] Complexity scan: lint-file-discovery.sh not found — skipping" >>"$LOGFILE"
+		echo "$now_epoch" >"$COMPLEXITY_SCAN_LAST_RUN"
+		return 1
+	fi
+	echo "$aidevops_path"
+	return 0
+}
+
+# Collect per-file violation counts from shell files in the repo.
+# Arguments: $1 - aidevops_path, $2 - now_epoch
+# Outputs: scan_results (pipe-delimited lines: file_path|count) via stdout
+# Side effect: logs total violation count; writes last-run on no files found
+_complexity_scan_collect_violations() {
+	local aidevops_path="$1"
+	local now_epoch="$2"
+	local shell_files
+	shell_files=$(git -C "$aidevops_path" ls-files '*.sh' | grep -Ev '_archive/|archived/|supervisor-archived/' || true)
+	if [[ -z "$shell_files" ]]; then
+		echo "[pulse-wrapper] Complexity scan: no shell files found — skipping" >>"$LOGFILE"
+		echo "$now_epoch" >"$COMPLEXITY_SCAN_LAST_RUN"
+		return 1
+	fi
+	local scan_results=""
+	local total_violations=0
+	local files_with_violations=0
+	while IFS= read -r file; do
+		[[ -n "$file" ]] || continue
+		local full_path="${aidevops_path}/${file}"
+		[[ -f "$full_path" ]] || continue
+		local result
+		result=$(awk '
+			/^[a-zA-Z_][a-zA-Z0-9_]*\(\)[[:space:]]*\{/ { fname=$1; sub(/\(\)/, "", fname); start=NR; next }
+			fname && /^\}$/ { lines=NR-start; if(lines>'"$COMPLEXITY_FUNC_LINE_THRESHOLD"') printf "%s() %d lines\n", fname, lines; fname="" }
+		' "$full_path")
+		if [[ -n "$result" ]]; then
+			local count
+			count=$(echo "$result" | wc -l | tr -d ' ')
+			total_violations=$((total_violations + count))
+			files_with_violations=$((files_with_violations + 1))
+			if [[ "$count" -ge "$COMPLEXITY_FILE_VIOLATION_THRESHOLD" ]]; then
+				# Use repo-relative path as dedup key (not basename — avoids collisions
+				# between files with the same name in different directories, GH#5630)
+				scan_results="${scan_results}${file}|${count}"$'\n'
+			fi
+		fi
+	done <<<"$shell_files"
+	echo "[pulse-wrapper] Complexity scan: ${total_violations} violations across ${files_with_violations} files" >>"$LOGFILE"
+	printf '%s' "$scan_results"
+	return 0
+}
+
+# Collect oversized agent docs (.md files in .agents/).
+# Protected files (build.txt, AGENTS.md, pulse.md) are excluded — these are
+# core infrastructure that must be simplified manually with a maintainer present.
+# Results are sorted longest-first so biggest wins come early.
+# Arguments: $1 - aidevops_path
+# Outputs: scan_results (pipe-delimited lines: file_path|line_count) via stdout
+_complexity_scan_collect_md_violations() {
+	local aidevops_path="$1"
+
+	# Protected files — excluded from automated simplification (matches code-simplifier.md)
+	local protected_pattern='prompts/build\.txt|^\.agents/AGENTS\.md|^AGENTS\.md|scripts/commands/pulse\.md'
+
+	local md_files
+	md_files=$(git -C "$aidevops_path" ls-files '*.md' | grep -E '^\.agents/' | grep -Ev '_archive/|archived/' | grep -Ev "$protected_pattern" || true)
+	if [[ -z "$md_files" ]]; then
+		echo "[pulse-wrapper] Complexity scan (.md): no agent doc files found" >>"$LOGFILE"
+		return 1
+	fi
+
+	local scan_results=""
+	local oversized_count=0
+	while IFS= read -r file; do
+		[[ -n "$file" ]] || continue
+		local full_path="${aidevops_path}/${file}"
+		[[ -f "$full_path" ]] || continue
+		local lc
+		lc=$(wc -l <"$full_path" 2>/dev/null | tr -d ' ')
+		if [[ "$lc" -ge "$COMPLEXITY_MD_LINE_THRESHOLD" ]]; then
+			scan_results="${scan_results}${file}|${lc}"$'\n'
+			oversized_count=$((oversized_count + 1))
+		fi
+	done <<<"$md_files"
+
+	# Sort longest-first (descending by line count after the pipe)
+	scan_results=$(printf '%s' "$scan_results" | sort -t'|' -k2 -rn)
+
+	echo "[pulse-wrapper] Complexity scan (.md): ${oversized_count} files exceed ${COMPLEXITY_MD_LINE_THRESHOLD} lines" >>"$LOGFILE"
+	printf '%s' "$scan_results"
+	return 0
+}
+
+# Extract a concise, meaningful topic label from a markdown file's H1 heading.
+# For chapter-style headings such as "# Chapter 13: Heatmap Analysis", returns
+# "Heatmap Analysis" so issue titles stay semantic instead of numeric-only.
+# Arguments: $1 - aidevops_path, $2 - file_path (repo-relative)
+# Outputs: topic label via stdout
+_complexity_scan_extract_md_topic_label() {
+	local aidevops_path="$1"
+	local file_path="$2"
+	local full_path="${aidevops_path}/${file_path}"
+
+	if [[ ! -f "$full_path" ]]; then
+		return 1
+	fi
+
+	local heading
+	heading=$(awk '/^# / { print; exit }' "$full_path" 2>/dev/null)
+	if [[ -z "$heading" ]]; then
+		return 1
+	fi
+
+	local topic
+	topic=$(printf '%s' "$heading" | sed -E 's/^#[[:space:]]*//; s/^[Cc][Hh][Aa][Pp][Tt][Ee][Rr][[:space:]]*[0-9]+[[:space:]]*[:.-]?[[:space:]]*//; s/^[[:space:]]+//; s/[[:space:]]+$//')
+	if [[ -z "$topic" ]]; then
+		return 1
+	fi
+
+	# Keep issue titles concise and stable
+	topic=$(printf '%s' "$topic" | cut -c1-80)
+	printf '%s' "$topic"
+	return 0
+}
+
+# Create GitHub issues for oversized agent docs.
+# Uses tier:thinking label (opus) because doc simplification requires deep
+# reasoning to distinguish noise from institutional knowledge.
+# Arguments: $1 - scan_results (pipe-delimited: file_path|line_count), $2 - repos_json, $3 - aidevops_slug
+_complexity_scan_create_md_issues() {
+	local scan_results="$1"
+	local repos_json="$2"
+	local aidevops_slug="$3"
+	local issues_created=0
+	local issues_skipped=0
+
+	local existing_issues
+	existing_issues=$(gh issue list --repo "$aidevops_slug" \
+		--label "simplification-debt" --state open \
+		--json number,title,body --limit 200 2>/dev/null) || existing_issues="[]"
+
+	local maintainer
+	maintainer=$(jq -r --arg slug "$aidevops_slug" \
+		'.initialized_repos[] | select(.slug == $slug) | .maintainer // empty' \
+		"$repos_json" 2>/dev/null)
+	if [[ -z "$maintainer" ]]; then
+		maintainer=$(echo "$aidevops_slug" | cut -d/ -f1)
+	fi
+
+	local aidevops_path
+	aidevops_path=$(jq -r --arg slug "$aidevops_slug" \
+		'.initialized_repos[] | select(.slug == $slug) | .path' \
+		"$repos_json" 2>/dev/null | head -n 1)
+
+	while IFS='|' read -r file_path line_count; do
+		[[ -n "$file_path" ]] || continue
+
+		local issue_key="$file_path"
+		local has_existing="false"
+		if echo "$existing_issues" | jq -e --arg key "$issue_key" \
+			'.[] | select((.title // "" | contains($key)) or (.body // "" | contains("**File:** `" + $key + "`")))' \
+			>/dev/null 2>&1; then
+			has_existing="true"
+		fi
+
+		if [[ "$has_existing" == "true" ]]; then
+			echo "[pulse-wrapper] Complexity scan (.md): skipping ${file_path} — existing open issue" >>"$LOGFILE"
+			issues_skipped=$((issues_skipped + 1))
+			continue
+		fi
+
+		local topic_label=""
+		if [[ -n "$aidevops_path" ]]; then
+			topic_label=$(_complexity_scan_extract_md_topic_label "$aidevops_path" "$file_path" 2>/dev/null || true)
+		fi
+
+		local issue_title="simplification: tighten agent doc ${issue_key} (${line_count} lines)"
+		if [[ -n "$topic_label" ]]; then
+			issue_title="simplification: tighten agent doc ${topic_label} (${issue_key}, ${line_count} lines)"
+		fi
+
+		local issue_body
+		issue_body="## Agent doc simplification (automated scan)
+
+**File:** \`${file_path}\`
+**Detected topic:** ${topic_label:-Unknown}
+**Current size:** ${line_count} lines (threshold: ${COMPLEXITY_MD_LINE_THRESHOLD})
+
+### Classify before acting
+
+**First, determine the file type** — the correct action depends on whether this is an instruction doc or a reference corpus:
+
+- **Instruction doc** (agent rules, workflows, decision trees, operational procedures): Tighten prose, reorder by importance, split if multiple concerns. Follow guidance below.
+- **Reference corpus** (SKILL.md, domain knowledge base, textbook-style content with self-contained sections): Do NOT compress content. Instead, split into chapter files with a slim index. See \`tools/code-review/code-simplifier.md\` \"Reference corpora\" classification (GH#6432).
+
+### For instruction docs — proposed action
+
+Tighten and restructure this agent doc. Follow \`tools/build-agent/build-agent.md\` guidance. Key principles:
+
+1. **Preserve all institutional knowledge** — every verbose rule exists because something broke without it. Do not remove task IDs, incident references, error statistics, or decision rationale. Compress prose, not knowledge.
+2. **Order by importance** — most critical instructions first (primacy effect: LLMs weight earlier context more heavily). Security rules, core workflow, then edge cases.
+3. **Split if needed** — if the file covers multiple distinct concerns, extract sub-docs with a parent index. Use progressive disclosure (pointers, not inline content).
+4. **Use search patterns, not line numbers** — any \`file:line_number\` references to other files go stale on every edit. Use \`rg \"pattern\"\` or section heading references instead.
+
+### For reference corpora — proposed action
+
+1. **Extract each major section** into its own file (e.g., \`01-introduction.md\`, \`02-fundamentals.md\`)
+2. **Replace the original with a slim index** (~100-200 lines) — table of contents with one-line descriptions and file pointers
+3. **Zero content loss** — every line moves to a chapter file, nothing is deleted or compressed
+4. **Reconcile existing chapter files** — if partial splits already exist, deduplicate and keep the most complete version
+
+### Verification
+
+- Content preservation: all code blocks, URLs, task ID references (\`tNNN\`, \`GH#NNN\`), and command examples must be present before and after
+- No broken internal links or references
+- Agent behaviour unchanged (test with a representative query if possible)
+- For reference corpora: \`wc -l\` total of chapter files >= original line count minus index overhead
+
+### Confidence: medium
+
+Automated scan identified this file by size. The best simplification strategy requires human judgment — some large files are appropriately large. Reference corpora (SKILL.md, domain knowledge bases) need restructuring into chapters, not content reduction.
+
+---
+**To approve or decline**, comment on this issue:
+- \`approved\` — removes the review gate and queues for automated dispatch
+- \`declined: <reason>\` — closes this issue (include your reason after the colon)"
+
+		if gh issue create --repo "$aidevops_slug" \
+			--title "$issue_title" \
+			--label "simplification-debt" --label "needs-maintainer-review" --label "tier:thinking" \
+			--assignee "$maintainer" \
+			--body "$issue_body" >/dev/null 2>&1; then
+			issues_created=$((issues_created + 1))
+			echo "[pulse-wrapper] Complexity scan (.md): created issue for ${file_path} (${line_count} lines)" >>"$LOGFILE"
+		else
+			echo "[pulse-wrapper] Complexity scan (.md): failed to create issue for ${file_path}" >>"$LOGFILE"
+		fi
+	done <<<"$scan_results"
+	echo "[pulse-wrapper] Complexity scan (.md) complete: ${issues_created} issues created, ${issues_skipped} skipped (existing)" >>"$LOGFILE"
+	return 0
+}
+
+# Create GitHub issues for qualifying files (dedup against existing open issues).
+# Fetches existing issues once before the loop to reduce API traffic.
+# Arguments: $1 - scan_results (pipe-delimited: file_path|count), $2 - repos_json, $3 - aidevops_slug
+# Returns: 0 always
+_complexity_scan_create_issues() {
+	local scan_results="$1"
+	local repos_json="$2"
+	local aidevops_slug="$3"
+	local issues_created=0
+	local issues_skipped=0
+
+	# Fetch existing open simplification-debt issues once (reduces API traffic)
+	local existing_issues
+	existing_issues=$(gh issue list --repo "$aidevops_slug" \
+		--label "simplification-debt" --state open \
+		--json number,title,body --limit 200 2>/dev/null) || existing_issues="[]"
+
+	local maintainer
+	maintainer=$(jq -r --arg slug "$aidevops_slug" \
+		'.initialized_repos[] | select(.slug == $slug) | .maintainer // empty' \
+		"$repos_json" 2>/dev/null)
+	if [[ -z "$maintainer" ]]; then
+		maintainer=$(echo "$aidevops_slug" | cut -d/ -f1)
+	fi
+
+	while IFS='|' read -r file_path violation_count; do
+		[[ -n "$file_path" ]] || continue
+
+		# Dedup on repo-relative path (not basename) to avoid collisions between
+		# files with the same name in different directories (GH#5630)
+		local issue_key="$file_path"
+		local has_existing="false"
+		if echo "$existing_issues" | jq -e --arg key "$issue_key" \
+			'.[] | select((.title // "" | contains($key)) or (.body // "" | contains("**File:** `" + $key + "`")))' \
+			>/dev/null 2>&1; then
+			has_existing="true"
+		fi
+
+		if [[ "$has_existing" == "true" ]]; then
+			echo "[pulse-wrapper] Complexity scan: skipping ${file_path} — existing open issue" >>"$LOGFILE"
+			issues_skipped=$((issues_skipped + 1))
+			continue
+		fi
+
+		# Compute details inside the issue-creation loop (not stored in scan_results
+		# to avoid multiline values breaking the IFS='|' parser, GH#5630)
+		local aidevops_path
+		aidevops_path=$(jq -r --arg slug "$aidevops_slug" \
+			'.initialized_repos[] | select(.slug == $slug) | .path' \
+			"$repos_json" 2>/dev/null | head -n 1)
+		local details=""
+		if [[ -n "$aidevops_path" && -f "${aidevops_path}/${file_path}" ]]; then
+			details=$(awk '
+				/^[a-zA-Z_][a-zA-Z0-9_]*\(\)[[:space:]]*\{/ { fname=$1; sub(/\(\)/, "", fname); start=NR; next }
+				fname && /^\}$/ { lines=NR-start; if(lines>'"$COMPLEXITY_FUNC_LINE_THRESHOLD"') printf "%s() %d lines\n", fname, lines; fname="" }
+			' "${aidevops_path}/${file_path}" | head -10)
+		fi
+
+		local issue_body
+		issue_body="## Complexity scan finding (automated, GH#5628)
+
+**File:** \`${file_path}\`
+**Violations:** ${violation_count} functions exceed ${COMPLEXITY_FUNC_LINE_THRESHOLD} lines
+
+### Functions exceeding threshold
+
+\`\`\`
+${details}
+\`\`\`
+
+### Proposed action
+
+Break down the listed functions into smaller, focused helper functions. Each function should ideally be under ${COMPLEXITY_FUNC_LINE_THRESHOLD} lines.
+
+### Verification
+
+- \`bash -n <file>\` (syntax check)
+- \`shellcheck <file>\` (lint)
+- Run existing tests if present
+- Confirm no functionality is lost
+
+### Confidence: medium
+
+This is an automated scan. The function lengths are factual, but the best decomposition strategy requires human judgment.
+
+---
+**To approve or decline**, comment on this issue:
+- \`approved\` — removes the review gate and queues for automated dispatch
+- \`declined: <reason>\` — closes this issue (include your reason after the colon)"
+		if gh issue create --repo "$aidevops_slug" \
+			--title "simplification: reduce function complexity in ${issue_key} (${violation_count} functions >${COMPLEXITY_FUNC_LINE_THRESHOLD} lines)" \
+			--label "simplification-debt" --label "needs-maintainer-review" \
+			--assignee "$maintainer" \
+			--body "$issue_body" >/dev/null 2>&1; then
+			issues_created=$((issues_created + 1))
+			echo "[pulse-wrapper] Complexity scan: created issue for ${file_path} (${violation_count} violations)" >>"$LOGFILE"
+		else
+			echo "[pulse-wrapper] Complexity scan: failed to create issue for ${file_path}" >>"$LOGFILE"
+		fi
+	done <<<"$scan_results"
+	echo "[pulse-wrapper] Complexity scan complete: ${issues_created} issues created, ${issues_skipped} skipped (existing)" >>"$LOGFILE"
+	return 0
+}
+
+#######################################
+# Daily complexity scan (GH#5628)
+#
+# Scans both shell scripts (.sh) and agent docs (.md) for complexity:
+# - .sh files: functions exceeding COMPLEXITY_FUNC_LINE_THRESHOLD lines
+# - .md files: agent docs exceeding COMPLEXITY_MD_LINE_THRESHOLD lines
+#
+# Protected files (build.txt, AGENTS.md, pulse.md) are excluded from
+# .md scanning — these are core infrastructure requiring manual review.
+#
+# Results are processed longest-first so the biggest wins come early
+# and the process is refined by the time shorter files are reached.
+#
+# .md issues get tier:thinking (opus) because doc simplification requires
+# deep reasoning to distinguish noise from institutional knowledge.
+#
+# Runs at most once per COMPLEXITY_SCAN_INTERVAL (default 1 day).
+#
+# Returns: 0 always (best-effort, never breaks the pulse)
+#######################################
+run_weekly_complexity_scan() {
+	local repos_json="$REPOS_JSON"
+	local aidevops_slug="marcusquinn/aidevops"
+
+	local now_epoch
+	now_epoch=$(date +%s)
+
+	_complexity_scan_check_interval "$now_epoch" || return 0
+
+	echo "[pulse-wrapper] Running daily complexity scan (GH#5628)..." >>"$LOGFILE"
+
+	local aidevops_path
+	aidevops_path=$(_complexity_scan_find_repo "$repos_json" "$aidevops_slug" "$now_epoch") || return 0
+
+	# Phase 1: Shell script function complexity (longest-first)
+	local sh_results
+	sh_results=$(_complexity_scan_collect_violations "$aidevops_path" "$now_epoch") || true
+	if [[ -n "$sh_results" ]]; then
+		# Sort longest-first by violation count (field 2)
+		sh_results=$(printf '%s' "$sh_results" | sort -t'|' -k2 -rn)
+		_complexity_scan_create_issues "$sh_results" "$repos_json" "$aidevops_slug"
+	fi
+
+	# Phase 2: Agent doc size (.md files, longest-first)
+	local md_results
+	md_results=$(_complexity_scan_collect_md_violations "$aidevops_path") || true
+	if [[ -n "$md_results" ]]; then
+		_complexity_scan_create_md_issues "$md_results" "$repos_json" "$aidevops_slug"
+	fi
+
+	echo "$now_epoch" >"$COMPLEXITY_SCAN_LAST_RUN"
+	return 0
+}
+
+#######################################
 # Pre-fetch failed notification summary (t3960)
 #
 # Uses gh-failure-miner-helper.sh to mine ci_activity notifications,
@@ -2386,25 +3157,47 @@ has_worker_for_repo_issue() {
 
 	local repo_path
 	repo_path=$(get_repo_path_by_slug "$repo_slug")
-	if [[ -z "$repo_path" ]]; then
-		return 1
+
+	local worker_lines
+	worker_lines=$(list_active_worker_processes) || worker_lines=""
+
+	# Primary match: repo path + issue number in command line.
+	# Requires get_repo_path_by_slug to return a non-empty path.
+	if [[ -n "$repo_path" ]]; then
+		local matches
+		matches=$(printf '%s\n' "$worker_lines" | awk -v issue="$issue_number" -v path="$repo_path" '
+			BEGIN {
+				esc = path
+				gsub(/[][(){}.^$*+?|\\]/, "\\\\&", esc)
+			}
+			$0 ~ ("--dir[[:space:]]+" esc "([[:space:]]|$)") &&
+			($0 ~ ("issue-" issue "([^0-9]|$)") || $0 ~ ("Issue #" issue "([^0-9]|$)")) { count++ }
+			END { print count + 0 }
+		') || matches=0
+		[[ "$matches" =~ ^[0-9]+$ ]] || matches=0
+		if [[ "$matches" -gt 0 ]]; then
+			return 0
+		fi
 	fi
 
-	local matches
-	matches=$(list_active_worker_processes | awk -v issue="$issue_number" -v path="$repo_path" '
-		BEGIN {
-			esc = path
-			gsub(/[][(){}.^$*+?|\\]/, "\\\\&", esc)
-		}
-		$0 ~ ("--dir[[:space:]]+" esc "([[:space:]]|$)") &&
-		($0 ~ ("issue-" issue "([^0-9]|$)") || $0 ~ ("Issue #" issue "([^0-9]|$)")) { count++ }
+	# Fallback: match by session-key alone (GH#6453).
+	# When get_repo_path_by_slug returns empty (slug not in repos.json,
+	# path mismatch, or repos.json unavailable), the primary match above
+	# always returns 0 matches — a false-negative that causes the backfill
+	# cycle to re-dispatch already-running workers.
+	# The session-key "issue-<number>" is always present in the command line
+	# of workers dispatched via headless-runtime-helper.sh run --session-key.
+	# This fallback catches those workers regardless of path resolution.
+	local sk_matches
+	sk_matches=$(printf '%s\n' "$worker_lines" | awk -v issue="$issue_number" '
+		$0 ~ ("--session-key[[:space:]]+issue-" issue "([^0-9]|$)") { count++ }
 		END { print count + 0 }
-	') || matches=0
-	[[ "$matches" =~ ^[0-9]+$ ]] || matches=0
-
-	if [[ "$matches" -gt 0 ]]; then
+	') || sk_matches=0
+	[[ "$sk_matches" =~ ^[0-9]+$ ]] || sk_matches=0
+	if [[ "$sk_matches" -gt 0 ]]; then
 		return 0
 	fi
+
 	return 1
 }
 
@@ -2493,45 +3286,21 @@ check_dispatch_dedup() {
 #   1 - no blocker found (safe to dispatch)
 #   2 - API error (fail open — allow dispatch to proceed)
 #######################################
-check_terminal_blockers() {
-	local issue_number="$1"
-	local repo_slug="$2"
-	local max_comments="${3:-5}"
-
-	if [[ -z "$issue_number" || -z "$repo_slug" ]]; then
-		echo "[pulse-wrapper] check_terminal_blockers: missing arguments" >>"$LOGFILE"
-		return 2
-	fi
-
-	if [[ ! "$issue_number" =~ ^[0-9]+$ ]]; then
-		return 2
-	fi
-
-	# Fetch the last N comments
-	local comments_json
-	comments_json=$(gh api "repos/${repo_slug}/issues/${issue_number}/comments" \
-		--jq "[ .[-${max_comments}:][] | {body: .body, created_at: .created_at} ]" 2>/dev/null)
-	local api_exit=$?
-
-	if [[ $api_exit -ne 0 ]]; then
-		echo "[pulse-wrapper] check_terminal_blockers: API error (exit=$api_exit) for #${issue_number} in ${repo_slug} — failing open" >>"$LOGFILE"
-		return 2
-	fi
-
-	if [[ -z "$comments_json" || "$comments_json" == "[]" || "$comments_json" == "null" ]]; then
-		# No comments — no blocker possible
-		return 1
-	fi
-
-	# Concatenate comment bodies for pattern matching
-	local all_bodies
-	all_bodies=$(echo "$comments_json" | jq -r '.[].body // ""' 2>/dev/null)
-
-	if [[ -z "$all_bodies" ]]; then
-		return 1
-	fi
-
-	# Check for known terminal blocker patterns (case-insensitive)
+#######################################
+# Match terminal blocker patterns in comment bodies (GH#5627)
+#
+# Checks concatenated comment bodies against known blocker patterns.
+# Returns blocker_reason and user_action via stdout (2 lines).
+#
+# Arguments:
+#   $1 - all_bodies (concatenated comment text)
+# Output: 2 lines to stdout (blocker_reason, user_action) — empty if no match
+# Exit codes:
+#   0 - blocker pattern matched
+#   1 - no match
+#######################################
+_match_terminal_blocker_pattern() {
+	local all_bodies="$1"
 	local blocker_reason=""
 	local user_action=""
 
@@ -2554,11 +3323,34 @@ check_terminal_blockers() {
 	fi
 
 	if [[ -z "$blocker_reason" ]]; then
-		# No terminal blocker patterns found
 		return 1
 	fi
 
-	# Terminal blocker detected — check if already labelled and commented
+	echo "$blocker_reason"
+	echo "$user_action"
+	return 0
+}
+
+#######################################
+# Apply terminal blocker labels and comment to an issue (GH#5627)
+#
+# Idempotent — checks for existing label and comment before acting.
+#
+# Arguments:
+#   $1 - issue_number
+#   $2 - repo_slug
+#   $3 - blocker_reason
+#   $4 - user_action
+#   $5 - all_bodies (for existing comment check)
+#######################################
+_apply_terminal_blocker() {
+	local issue_number="$1"
+	local repo_slug="$2"
+	local blocker_reason="$3"
+	local user_action="$4"
+	local all_bodies="$5"
+
+	# Check if already labelled
 	local existing_labels
 	existing_labels=$(gh issue view "$issue_number" --repo "$repo_slug" \
 		--json labels --jq '[.labels[].name] | join(",")' 2>/dev/null) || existing_labels=""
@@ -2596,6 +3388,57 @@ check_terminal_blockers() {
 *This issue will not be dispatched to workers until the blocker is resolved. Once you have completed the required action, remove the \`status:blocked\` label to re-enable dispatch.*" || true
 	fi
 
+	return 0
+}
+
+check_terminal_blockers() {
+	local issue_number="$1"
+	local repo_slug="$2"
+	local max_comments="${3:-5}"
+
+	if [[ -z "$issue_number" || -z "$repo_slug" ]]; then
+		echo "[pulse-wrapper] check_terminal_blockers: missing arguments" >>"$LOGFILE"
+		return 2
+	fi
+
+	if [[ ! "$issue_number" =~ ^[0-9]+$ ]]; then
+		return 2
+	fi
+
+	# Fetch the last N comments
+	local comments_json
+	comments_json=$(gh api "repos/${repo_slug}/issues/${issue_number}/comments" \
+		--jq "[ .[-${max_comments}:][] | {body: .body, created_at: .created_at} ]" 2>/dev/null)
+	local api_exit=$?
+
+	if [[ $api_exit -ne 0 ]]; then
+		echo "[pulse-wrapper] check_terminal_blockers: API error (exit=$api_exit) for #${issue_number} in ${repo_slug} — failing open" >>"$LOGFILE"
+		return 2
+	fi
+
+	if [[ -z "$comments_json" || "$comments_json" == "[]" || "$comments_json" == "null" ]]; then
+		return 1
+	fi
+
+	# Concatenate comment bodies for pattern matching
+	local all_bodies
+	all_bodies=$(echo "$comments_json" | jq -r '.[].body // ""' 2>/dev/null)
+
+	if [[ -z "$all_bodies" ]]; then
+		return 1
+	fi
+
+	# Match against known terminal blocker patterns
+	local pattern_output
+	pattern_output=$(_match_terminal_blocker_pattern "$all_bodies") || return 1
+
+	local blocker_reason user_action
+	blocker_reason=$(echo "$pattern_output" | sed -n '1p')
+	user_action=$(echo "$pattern_output" | sed -n '2p')
+
+	# Apply labels and comment
+	_apply_terminal_blocker "$issue_number" "$repo_slug" "$blocker_reason" "$user_action" "$all_bodies"
+
 	echo "[pulse-wrapper] check_terminal_blockers: blocker detected for #${issue_number} in ${repo_slug} — ${blocker_reason}" >>"$LOGFILE"
 	return 0
 }
@@ -2607,16 +3450,16 @@ check_terminal_blockers() {
 # adaptive PR-vs-issue dispatch focus. This avoids static per-repo
 # thresholds and shifts effort toward PR burn-down when PR backlog grows.
 #######################################
-append_adaptive_queue_governor() {
-	if [[ ! -f "$STATE_FILE" ]]; then
-		return 0
-	fi
-
-	local total_prs total_issues ready_prs failing_prs
-	total_prs=0
-	total_issues=0
-	ready_prs=0
-	failing_prs=0
+#######################################
+# Fetch queue metrics from all pulse-enabled repos (GH#5627)
+#
+# Outputs 4 lines: total_prs, total_issues, ready_prs, failing_prs
+#######################################
+_fetch_queue_metrics() {
+	local total_prs=0
+	local total_issues=0
+	local ready_prs=0
+	local failing_prs=0
 
 	while IFS='|' read -r slug _path; do
 		[[ -n "$slug" ]] || continue
@@ -2642,6 +3485,31 @@ append_adaptive_queue_governor() {
 		ready_prs=$((ready_prs + repo_ready))
 		failing_prs=$((failing_prs + repo_failing))
 	done < <(jq -r '.initialized_repos[] | select(.pulse == true and (.local_only // false) == false and .slug != "") | "\(.slug)|\(.path)"' "$REPOS_JSON" 2>/dev/null)
+
+	echo "$total_prs"
+	echo "$total_issues"
+	echo "$ready_prs"
+	echo "$failing_prs"
+	return 0
+}
+
+#######################################
+# Compute queue governor guidance from metrics (GH#5627)
+#
+# Pure computation — no I/O except reading/writing the metrics file.
+#
+# Arguments:
+#   $1 - total_prs
+#   $2 - total_issues
+#   $3 - ready_prs
+#   $4 - failing_prs
+# Output: governor guidance appended to STATE_FILE
+#######################################
+_compute_queue_governor_guidance() {
+	local total_prs="$1"
+	local total_issues="$2"
+	local ready_prs="$3"
+	local failing_prs="$4"
 
 	[[ "$total_prs" =~ ^[0-9]+$ ]] || total_prs=0
 	[[ "$total_issues" =~ ^[0-9]+$ ]] || total_issues=0
@@ -2722,6 +3590,26 @@ EOF
 	} >>"$STATE_FILE"
 
 	echo "[pulse-wrapper] Adaptive queue governor: mode=${queue_mode} prs=${total_prs} issues=${total_issues} pr_focus=${pr_focus_pct}%" >>"$LOGFILE"
+	return 0
+}
+
+append_adaptive_queue_governor() {
+	if [[ ! -f "$STATE_FILE" ]]; then
+		return 0
+	fi
+
+	# Fetch current queue metrics from all pulse-enabled repos
+	local metrics_output
+	metrics_output=$(_fetch_queue_metrics)
+
+	local total_prs total_issues ready_prs failing_prs
+	total_prs=$(echo "$metrics_output" | sed -n '1p')
+	total_issues=$(echo "$metrics_output" | sed -n '2p')
+	ready_prs=$(echo "$metrics_output" | sed -n '3p')
+	failing_prs=$(echo "$metrics_output" | sed -n '4p')
+
+	# Compute guidance and append to state file
+	_compute_queue_governor_guidance "$total_prs" "$total_issues" "$ready_prs" "$failing_prs"
 	return 0
 }
 
@@ -2963,10 +3851,11 @@ run_underfill_worker_recycler() {
 #######################################
 # Main
 #
-# Execution order (t1429, GH#4513):
+# Execution order (t1429, GH#4513, GH#5628):
 #   0. Instance lock (mkdir-based atomic — prevents concurrent pulses on macOS+Linux)
 #   1. Gate checks (consent, dedup)
 #   2. Cleanup (orphans, worktrees, stashes)
+#   2.5. Daily complexity scan — .sh functions + .md agent docs (creates simplification-debt issues)
 #   3. Prefetch state (parallel gh API calls)
 #   4. Run pulse (LLM session — dispatch workers, merge PRs)
 #
@@ -2977,35 +3866,13 @@ run_underfill_worker_recycler() {
 # contributor-activity-helper.sh bails out with partial results, but
 # even the API calls themselves add latency that delays dispatch.
 #######################################
-main() {
-	# GH#4513: Acquire exclusive instance lock FIRST — before any other
-	# check. Uses mkdir atomicity as the primary primitive (POSIX-guaranteed,
-	# works on macOS APFS/HFS+ without util-linux). flock is used as a
-	# supplementary layer on Linux when available.
-	#
-	# Register EXIT trap BEFORE acquiring the lock so the lock is always
-	# released on exit — including set -e aborts, SIGTERM, and return paths.
-	# SIGKILL cannot be trapped; stale-lock detection handles that case.
-	trap 'release_instance_lock' EXIT
-
-	# Open FD 9 for flock supplementary layer (no-op if flock unavailable)
-	exec 9>"$LOCKFILE"
-	if ! acquire_instance_lock; then
-		return 0
-	fi
-
-	if ! check_session_gate; then
-		return 0
-	fi
-
-	if ! check_dedup; then
-		return 0
-	fi
-
+#######################################
+# Run pre-flight stages: cleanup, calculations, normalization (GH#5627)
+#
+# Returns: 0 if prefetch succeeded, 1 if prefetch failed (abort cycle)
+#######################################
+_run_preflight_stages() {
 	# t1425, t1482: Write SETUP sentinel during pre-flight stages.
-	# Uses SETUP:$$ format so check_dedup() can distinguish "wrapper doing
-	# setup" from "opencode running pulse". run_pulse() overwrites with the
-	# plain opencode PID for watchdog tracking.
 	echo "SETUP:$$" >"$PIDFILE"
 
 	run_stage_with_timeout "cleanup_orphans" "$PRE_RUN_STAGE_TIMEOUT" cleanup_orphans || true
@@ -3015,9 +3882,13 @@ main() {
 	calculate_priority_allocations
 	check_session_count >/dev/null
 
+	# Daily complexity scan (GH#5628): creates simplification-debt issues
+	# for .sh files with complex functions and .md agent docs exceeding size
+	# threshold. Longest files first. Runs at most once per day.
+	# Non-fatal — pulse proceeds even if the scan fails.
+	run_stage_with_timeout "complexity_scan" "$PRE_RUN_STAGE_TIMEOUT" run_weekly_complexity_scan || true
+
 	# Contribution watch: lightweight scan of external issues/PRs (t1419).
-	# Deterministic — only checks timestamps/authorship, never processes
-	# comment bodies. Output appended to STATE_FILE for the pulse agent.
 	prefetch_contribution_watch
 
 	# Ensure active labels reflect ownership to prevent multi-worker overlap.
@@ -3025,9 +3896,8 @@ main() {
 
 	if ! run_stage_with_timeout "prefetch_state" "$PRE_RUN_STAGE_TIMEOUT" prefetch_state; then
 		echo "[pulse-wrapper] prefetch_state did not complete successfully — aborting this cycle to avoid stale dispatch decisions" >>"$LOGFILE"
-		# Write IDLE sentinel — never delete the PID file (GH#4324)
 		echo "IDLE:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$PIDFILE"
-		return 0
+		return 1
 	fi
 
 	if [[ -f "$SCOPE_FILE" ]]; then
@@ -3039,66 +3909,93 @@ main() {
 		fi
 	fi
 
-	# Re-check stop flag immediately before run_pulse() — a stop may have
-	# been issued during the prefetch/cleanup phase above (t2943)
-	if [[ -f "$STOP_FLAG" ]]; then
-		echo "[pulse-wrapper] Stop flag appeared during setup — aborting before run_pulse()" >>"$LOGFILE"
-		return 0
+	return 0
+}
+
+#######################################
+# Compute initial underfill state and run recycler (GH#5627)
+#
+# Outputs 2 lines: underfilled_mode, underfill_pct
+#######################################
+_compute_initial_underfill() {
+	local max_workers active_workers underfilled_mode underfill_pct
+
+	max_workers=$(get_max_workers_target)
+	active_workers=$(count_active_workers)
+	[[ "$max_workers" =~ ^[0-9]+$ ]] || max_workers=1
+	[[ "$active_workers" =~ ^[0-9]+$ ]] || active_workers=0
+	underfilled_mode=0
+	underfill_pct=0
+	if [[ "$active_workers" -lt "$max_workers" ]]; then
+		underfilled_mode=1
+		underfill_pct=$(((max_workers - active_workers) * 100 / max_workers))
 	fi
 
-	local initial_max_workers initial_active_workers initial_underfilled_mode
-	initial_max_workers=$(get_max_workers_target)
-	initial_active_workers=$(count_active_workers)
-	[[ "$initial_max_workers" =~ ^[0-9]+$ ]] || initial_max_workers=1
-	[[ "$initial_active_workers" =~ ^[0-9]+$ ]] || initial_active_workers=0
-	initial_underfilled_mode=0
-	local initial_underfill_pct=0
-	if [[ "$initial_active_workers" -lt "$initial_max_workers" ]]; then
-		initial_underfilled_mode=1
-		initial_underfill_pct=$(((initial_max_workers - initial_active_workers) * 100 / initial_max_workers))
-	fi
-	local initial_runnable_count initial_queued_without_worker
-	initial_runnable_count=$(count_runnable_candidates)
-	initial_queued_without_worker=$(count_queued_without_worker)
-	[[ "$initial_runnable_count" =~ ^[0-9]+$ ]] || initial_runnable_count=0
-	[[ "$initial_queued_without_worker" =~ ^[0-9]+$ ]] || initial_queued_without_worker=0
-	run_underfill_worker_recycler "$initial_max_workers" "$initial_active_workers" "$initial_runnable_count" "$initial_queued_without_worker"
-	initial_active_workers=$(count_active_workers)
-	[[ "$initial_active_workers" =~ ^[0-9]+$ ]] || initial_active_workers=0
-	if [[ "$initial_active_workers" -lt "$initial_max_workers" ]]; then
-		initial_underfilled_mode=1
-		initial_underfill_pct=$(((initial_max_workers - initial_active_workers) * 100 / initial_max_workers))
+	local runnable_count queued_without_worker
+	runnable_count=$(count_runnable_candidates)
+	queued_without_worker=$(count_queued_without_worker)
+	[[ "$runnable_count" =~ ^[0-9]+$ ]] || runnable_count=0
+	[[ "$queued_without_worker" =~ ^[0-9]+$ ]] || queued_without_worker=0
+	run_underfill_worker_recycler "$max_workers" "$active_workers" "$runnable_count" "$queued_without_worker"
+
+	# Re-check after recycler
+	active_workers=$(count_active_workers)
+	[[ "$active_workers" =~ ^[0-9]+$ ]] || active_workers=0
+	if [[ "$active_workers" -lt "$max_workers" ]]; then
+		underfilled_mode=1
+		underfill_pct=$(((max_workers - active_workers) * 100 / max_workers))
 	else
-		initial_underfilled_mode=0
-		initial_underfill_pct=0
+		underfilled_mode=0
+		underfill_pct=0
 	fi
 
-	local pulse_start_epoch
-	pulse_start_epoch=$(date +%s)
-	run_pulse "$initial_underfilled_mode" "$initial_underfill_pct"
+	echo "$underfilled_mode"
+	echo "$underfill_pct"
+	return 0
+}
 
-	# Early-exit recycle: if the LLM exited quickly without entering the
-	# monitoring loop (< 5 min runtime) and the pool is still underfilled
-	# with runnable work, restart the pulse immediately. This catches models
-	# that treat the dispatch as single-turn and stop instead of looping.
-	# Capped at PULSE_BACKFILL_MAX_ATTEMPTS to prevent infinite restarts.
-	local pulse_end_epoch
-	pulse_end_epoch=$(date +%s)
-	local pulse_duration=$((pulse_end_epoch - pulse_start_epoch))
+#######################################
+# Early-exit recycle loop (GH#5627, extracted from main)
+#
+# If the LLM exited quickly (<5 min) and the pool is still underfilled
+# with runnable work, restart the pulse. Capped at PULSE_BACKFILL_MAX_ATTEMPTS.
+#
+# GH#6453: A grace-period wait is inserted before re-counting workers.
+# Workers dispatched by the LLM pulse take several seconds to appear in
+# list_active_worker_processes (sandbox-exec + opencode startup latency).
+# Without this wait, count_active_workers() returns the pre-dispatch count,
+# making the pool appear underfilled and triggering a second LLM pass that
+# re-dispatches the same issues — doubling compute cost and causing branch
+# conflicts. The wait duration is PULSE_LAUNCH_GRACE_SECONDS (default 20s).
+#
+# Arguments:
+#   $1 - initial pulse_duration in seconds
+#######################################
+_run_early_exit_recycle_loop() {
+	local pulse_duration="$1"
 	local recycle_attempt=0
 
 	while [[ "$recycle_attempt" -lt "$PULSE_BACKFILL_MAX_ATTEMPTS" ]]; do
-		# Only recycle if the pulse ran for less than 5 minutes — a pulse
-		# that ran longer likely entered the monitoring loop and exited
-		# normally (all slots filled, no runnable work, or stale threshold).
+		# Only recycle if the pulse ran for less than 5 minutes
 		if [[ "$pulse_duration" -ge 300 ]]; then
 			break
 		fi
 
-		# Check if stop flag was set during the pulse
 		if [[ -f "$STOP_FLAG" ]]; then
 			echo "[pulse-wrapper] Stop flag set — skipping early-exit recycle" >>"$LOGFILE"
 			break
+		fi
+
+		# GH#6453: Wait for newly-dispatched workers to appear in the process list
+		# before re-counting. Workers dispatched by the LLM pulse take
+		# PULSE_LAUNCH_GRACE_SECONDS to start (sandbox-exec + opencode startup).
+		# Counting immediately after the LLM exits produces a false-negative
+		# (workers running but not yet visible) that triggers duplicate dispatch.
+		local grace_wait="$PULSE_LAUNCH_GRACE_SECONDS"
+		[[ "$grace_wait" =~ ^[0-9]+$ ]] || grace_wait=20
+		if [[ "$grace_wait" -gt 0 ]]; then
+			echo "[pulse-wrapper] Early-exit recycle: waiting ${grace_wait}s for dispatched workers to appear (GH#6453)" >>"$LOGFILE"
+			sleep "$grace_wait"
 		fi
 
 		# Re-check worker state
@@ -3112,7 +4009,6 @@ main() {
 		[[ "$post_runnable" =~ ^[0-9]+$ ]] || post_runnable=0
 		[[ "$post_queued" =~ ^[0-9]+$ ]] || post_queued=0
 
-		# Exit if pool is full or no runnable work
 		if [[ "$post_active" -ge "$post_max" ]]; then
 			break
 		fi
@@ -3124,10 +4020,8 @@ main() {
 		recycle_attempt=$((recycle_attempt + 1))
 		echo "[pulse-wrapper] Early-exit recycle attempt ${recycle_attempt}/${PULSE_BACKFILL_MAX_ATTEMPTS}: pulse ran ${pulse_duration}s (<300s), pool underfilled (active ${post_active}/${post_max}, deficit ${post_deficit_pct}%, runnable=${post_runnable}, queued=${post_queued})" >>"$LOGFILE"
 
-		# Re-run the underfill recycler to clear stale workers before restarting
 		run_underfill_worker_recycler "$post_max" "$post_active" "$post_runnable" "$post_queued"
 
-		# Re-prefetch state for the new pulse attempt
 		if ! run_stage_with_timeout "prefetch_state" "$PRE_RUN_STAGE_TIMEOUT" prefetch_state; then
 			echo "[pulse-wrapper] Early-exit recycle: prefetch_state failed — aborting recycle" >>"$LOGFILE"
 			break
@@ -3155,6 +4049,63 @@ main() {
 	if [[ "$recycle_attempt" -gt 0 ]]; then
 		echo "[pulse-wrapper] Early-exit recycle completed after ${recycle_attempt} attempt(s)" >>"$LOGFILE"
 	fi
+
+	return 0
+}
+
+main() {
+	# GH#4513: Acquire exclusive instance lock FIRST — before any other
+	# check. Uses mkdir atomicity as the primary primitive (POSIX-guaranteed,
+	# works on macOS APFS/HFS+ without util-linux). flock is used as a
+	# supplementary layer on Linux when available.
+	#
+	# Register EXIT trap BEFORE acquiring the lock so the lock is always
+	# released on exit — including set -e aborts, SIGTERM, and return paths.
+	# SIGKILL cannot be trapped; stale-lock detection handles that case.
+	trap 'release_instance_lock' EXIT
+
+	# Open FD 9 for flock supplementary layer (no-op if flock unavailable)
+	exec 9>"$LOCKFILE"
+	if ! acquire_instance_lock; then
+		return 0
+	fi
+
+	if ! check_session_gate; then
+		return 0
+	fi
+
+	if ! check_dedup; then
+		return 0
+	fi
+
+	# Run pre-flight stages (cleanup, prefetch, normalization)
+	if ! _run_preflight_stages; then
+		return 0
+	fi
+
+	# Re-check stop flag immediately before run_pulse() — a stop may have
+	# been issued during the prefetch/cleanup phase above (t2943)
+	if [[ -f "$STOP_FLAG" ]]; then
+		echo "[pulse-wrapper] Stop flag appeared during setup — aborting before run_pulse()" >>"$LOGFILE"
+		return 0
+	fi
+
+	# Compute initial underfill state and run recycler
+	local underfill_output
+	underfill_output=$(_compute_initial_underfill)
+	local initial_underfilled_mode initial_underfill_pct
+	initial_underfilled_mode=$(echo "$underfill_output" | sed -n '1p')
+	initial_underfill_pct=$(echo "$underfill_output" | sed -n '2p')
+
+	local pulse_start_epoch
+	pulse_start_epoch=$(date +%s)
+	run_pulse "$initial_underfilled_mode" "$initial_underfill_pct"
+
+	# Early-exit recycle loop
+	local pulse_end_epoch
+	pulse_end_epoch=$(date +%s)
+	local pulse_duration=$((pulse_end_epoch - pulse_start_epoch))
+	_run_early_exit_recycle_loop "$pulse_duration"
 
 	return 0
 }

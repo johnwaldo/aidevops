@@ -18,193 +18,86 @@ tools:
 # WordPress Development & Debugging Subagent
 
 <!-- AI-CONTEXT-START -->
+
 ## Quick Reference
 
-- **Plugin/Theme Dev**: `~/Git/wordpress/{slug}` for analysis, `{slug}-fix` for patches
-- **MCP Adapter Repo**: `~/Git/wordpress/mcp-adapter`
-- **Local Sites**: `~/Local Sites/`
-- **Sites Config**: `~/.config/aidevops/wordpress-sites.json`
-- **Working Dir**: `~/.aidevops/.agent-workspace/work/wordpress/`
-- **Preferred Plugins**: See `wp-preferred.md` for curated recommendations
+| Path | Purpose |
+|------|---------|
+| `~/Git/wordpress/{slug}` | Plugin/theme analysis; `{slug}-fix` for patches |
+| `~/Git/wordpress/mcp-adapter` | MCP Adapter repo |
+| `~/Local Sites/` | LocalWP sites |
+| `~/.config/aidevops/wordpress-sites.json` | Sites config |
+| `~/.aidevops/.agent-workspace/work/wordpress/` | Working dir |
+| `wp-preferred.md` | Curated plugin recommendations |
 
-**Plugin/Theme Workflow**:
-- Clone to `~/Git/wordpress/{slug}/` for analysis
-- Fork + PR for open-source contributions
-- Create `{slug}-fix/` or `{slug}-addon/` for pro plugin patches (survives updates)
+**Prerequisites**: `php -v` (>= 7.4), `composer -V`, `wp --version`, `node -v` (>= 18)
 
-**Dependency Checks** (run first):
+**Subagents**: `@localwp` (DB), `@wp-admin` (content), `@browser-automation` (E2E), `@code-standards` (quality). **Always use Context7** for latest WP/WP-CLI/PHP docs.
 
-```bash
-php -v          # >= 7.4
-composer -V     # Package manager
-wp --version    # WP-CLI
-node -v         # >= 18 (for HTTP transport, wp-env, Playground)
-```text
-
-**WordPress MCP Adapter**:
-- STDIO: `wp mcp-adapter serve --server=mcp-adapter-default-server --user=admin`
-- HTTP: `npx @automattic/mcp-wordpress-remote`
-- Requires: WordPress Abilities API plugin
-
-**Testing Environments**:
-
-| Environment | Best For | Command |
-|-------------|----------|---------|
-| WordPress Playground | Quick testing | `npx @wp-playground/cli server` |
-| LocalWP | Full development | Open Local.app |
-| wp-env | CI/CD, PHPUnit | `wp-env start` |
-
-**Related Subagents**:
-- `@localwp` - Database inspection during debugging
-- `@wp-admin` - Content/maintenance tasks (hand off)
-- `@browser-automation` - E2E testing with Playwright
-- `@code-standards` - PHP/JS code quality checks
-
-**Related Workflows** (in .agents/workflows/):
-- `bug-fixing.md` - Systematic debugging approach
-- `code-review.md` - Code review checklist
-- `git-workflow.md` - Branching for features/fixes
-- `release-process.md` - Plugin/theme releases
-- `error-checking-feedback-loops.md` - CI/CD error resolution
-
-**Always use Context7** for latest WordPress/WP-CLI/PHP documentation.
 <!-- AI-CONTEXT-END -->
 
-## Overview
-
-This subagent handles WordPress development and debugging tasks:
-
-- Theme and plugin development
-- Code debugging and error diagnosis
-- Testing environments (Playground, LocalWP, wp-env)
-- WordPress MCP Adapter integration
-- WP-CLI development commands
-
-## Dependency Verification
-
-### Required Dependencies
-
-Before starting WordPress development, verify these are installed:
+## Installation (macOS)
 
 ```bash
-# PHP 7.4+ (8.2 recommended)
-php -v
-
-# Composer (package manager)
-composer -V
-
-# WP-CLI
-wp --version
-
-# Node.js 18+ (for Playground, wp-env, HTTP transport)
-node -v
-```text
-
-### Installation (macOS)
-
-```bash
-# PHP
-brew install php@8.2
-
-# Composer
-brew install composer
-
-# WP-CLI
-brew install wp-cli
-
-# Node.js
-brew install node
-```text
+brew install php@8.2 composer wp-cli node
+```
 
 ## Composer-Based WordPress (Bedrock)
 
-For projects that manage WordPress as a Composer project (e.g., [Bedrock](https://roots.io/bedrock/)), use [WP Composer](https://wp-composer.com/) as the Composer repository for plugins and themes. It is the preferred alternative to WPackagist (which was acquired by WP Engine in March 2024).
-
-**Setup:**
+For Bedrock-style projects, use [WP Composer](https://wp-composer.com/) as the Composer repository (preferred over WPackagist, acquired by WP Engine March 2024). Package naming: `wp-plugin/{slug}`, `wp-theme/{slug}`. Not applicable to traditional WP-CLI/admin-managed installations.
 
 ```bash
 composer config repositories.wp-composer composer https://repo.wp-composer.com
 ```
 
-**Package naming:** `wp-plugin/{slug}` for plugins, `wp-theme/{slug}` for themes.
-
-**When to use:** Bedrock-style projects where `wp-content` is managed via `composer.json` and the entire site is version-controlled. Not applicable to traditional WordPress installations where plugins are managed via WP-CLI or the admin dashboard (e.g., Closte-hosted sites).
-
-**Migration from WPackagist:** See [migration guide](https://wp-composer.com/wp-composer-vs-wpackagist) or use the [migration script](https://github.com/roots/wp-composer/blob/main/scripts/migrate-from-wpackagist.sh).
+Migration: [guide](https://wp-composer.com/wp-composer-vs-wpackagist) | [script](https://github.com/roots/wp-composer/blob/main/scripts/migrate-from-wpackagist.sh)
 
 ## WordPress MCP Adapter
 
-The official WordPress MCP Adapter enables AI interaction with WordPress sites.
+Official AI interaction with WordPress sites. Requires WordPress Abilities API plugin. Repo: `~/git/wordpress/mcp-adapter` (update: `cd ~/git/wordpress/mcp-adapter && git pull`).
 
-### Repository Location
-
-```bash
-# Clone location (already cloned)
-~/git/wordpress/mcp-adapter
-
-# Update to latest
-cd ~/git/wordpress/mcp-adapter && git pull
-```text
-
-### STDIO Transport (Local Development)
-
-For local WordPress sites with WP-CLI access:
+**STDIO** (local):
 
 ```bash
-# Install on WordPress site
 cd /path/to/wordpress
 composer require wordpress/mcp-adapter
-
-# Activate plugin
 wp plugin activate mcp-adapter
-
-# Start MCP server
 wp mcp-adapter serve --server=mcp-adapter-default-server --user=admin
-```text
+```
 
-### HTTP Transport (Remote Sites)
-
-For remote WordPress sites without SSH:
+**HTTP** (remote):
 
 ```bash
-# Requires Node.js
 npx @automattic/mcp-wordpress-remote
 
-# Environment variables needed
 export WP_API_URL="https://your-site.com/wp-json/mcp/mcp-adapter-default-server"
 export WP_API_USERNAME="your-username"
 export WP_API_PASSWORD="your-application-password"
-```text
+```
 
-### Application Passwords
-
-For HTTP transport, create an Application Password:
-
-1. WordPress Admin → Users → Your Profile
-2. Scroll to "Application Passwords"
-3. Enter name: `mcp-adapter-dev`
-4. Click "Add New Application Password"
-5. Store securely:
-
-   ```bash
-   setup-local-api-keys.sh set wp-app-password-sitename "xxxx xxxx xxxx xxxx"
-   ```
+**Application Passwords** (for HTTP): WordPress Admin > Users > Profile > "Application Passwords" > name `mcp-adapter-dev` > store via `setup-local-api-keys.sh set wp-app-password-sitename "xxxx xxxx xxxx xxxx"`
 
 ## Testing Environments
 
-### WordPress Playground (Quick Testing)
+| Feature | Playground | LocalWP | wp-env |
+|---------|------------|---------|--------|
+| Setup Time | Instant | 5-10 min | 2-5 min |
+| Persistence | None | Full | Partial |
+| PHP Versions | Limited | Many | Configurable |
+| Database | In-memory | MySQL | MySQL |
+| Docker Required | No | No | Yes |
+| GitHub Actions | Works* | N/A | Works |
+| Best For | Quick testing | Full dev | CI/Testing |
 
-Instant browser-based WordPress for quick tests:
+*Playground may be flaky in CI environments
+
+### WordPress Playground
 
 ```bash
-# Install CLI
-npm install -g @wp-playground/cli
-
-# Start with blueprint
 npx @wp-playground/cli server --port=8888 --blueprint=blueprint.json
-```text
+```
 
-**Blueprint Example** (`blueprint.json`):
+**Blueprint** (`blueprint.json`):
 
 ```json
 {
@@ -232,7 +125,7 @@ npx @wp-playground/cli server --port=8888 --blueprint=blueprint.json
     }
   ]
 }
-```text
+```
 
 **Multisite Blueprint**:
 
@@ -250,63 +143,24 @@ npx @wp-playground/cli server --port=8888 --blueprint=blueprint.json
     }
   ]
 }
-```text
+```
 
-### LocalWP (Full Development)
+### LocalWP
 
-Full persistent development environment:
+Sites: `~/Local Sites/`. WP-CLI path: `/Applications/Local.app/Contents/Resources/extraResources/bin/wp-cli.phar`
 
 ```bash
-# Default sites location
-~/Local Sites/
-
-# WP-CLI with LocalWP
 cd "~/Local Sites/site-name/app/public"
 wp plugin list
-wp option get siteurl
-
-# LocalWP's WP-CLI path
-/Applications/Local.app/Contents/Resources/extraResources/bin/wp-cli.phar
-```text
-
-**Plugin Sync Script** (`bin/localwp-sync.sh`):
-
-```bash
-#!/bin/bash
-PLUGIN_SLUG="your-plugin-slug"
-SITE_NAME="project-name"
-PLUGIN_DIR="$HOME/Local Sites/$SITE_NAME/app/public/wp-content/plugins/$PLUGIN_SLUG"
-
-rsync -av --delete \
-  --exclude='node_modules' \
-  --exclude='vendor' \
-  --exclude='tests' \
-  --exclude='.git' \
-  ./ "$PLUGIN_DIR/"
-
-echo "Plugin synced to LocalWP"
-```text
+```
 
 ### wp-env (Docker/CI)
 
-Docker-based environment for testing:
-
 ```bash
-# Install
-npm install -g @wordpress/env
-
-# Start
-wp-env start
-
-# Stop
-wp-env stop
-
-# Run WP-CLI
+wp-env start                          # npm install -g @wordpress/env
 wp-env run cli wp plugin list
-
-# Run tests
 wp-env run tests-cli phpunit
-```text
+```
 
 **Configuration** (`.wp-env.json`):
 
@@ -315,64 +169,37 @@ wp-env run tests-cli phpunit
   "core": "WordPress/WordPress#6.4",
   "phpVersion": "8.1",
   "plugins": [".", "https://downloads.wordpress.org/plugin/query-monitor.latest-stable.zip"],
-  "config": {
-    "WP_DEBUG": true,
-    "WP_DEBUG_LOG": true,
-    "SCRIPT_DEBUG": true
-  }
+  "config": { "WP_DEBUG": true, "WP_DEBUG_LOG": true, "SCRIPT_DEBUG": true }
 }
-```text
+```
 
-**Multisite** (`.wp-env.json`):
+**Multisite** — add to `config`:
 
 ```json
 {
-  "core": "WordPress/WordPress#6.4",
-  "phpVersion": "8.1",
-  "plugins": ["."],
-  "config": {
-    "WP_DEBUG": true,
-    "WP_ALLOW_MULTISITE": true,
-    "MULTISITE": true,
-    "SUBDOMAIN_INSTALL": false,
-    "DOMAIN_CURRENT_SITE": "localhost",
-    "PATH_CURRENT_SITE": "/",
-    "SITE_ID_CURRENT_SITE": 1,
-    "BLOG_ID_CURRENT_SITE": 1
-  }
+  "WP_ALLOW_MULTISITE": true,
+  "MULTISITE": true,
+  "SUBDOMAIN_INSTALL": false,
+  "DOMAIN_CURRENT_SITE": "localhost",
+  "PATH_CURRENT_SITE": "/",
+  "SITE_ID_CURRENT_SITE": 1,
+  "BLOG_ID_CURRENT_SITE": 1
 }
-```text
+```
 
 ## Theme Development
 
-### Theme Structure (Block Theme)
+### Block Theme Structure (FSE)
 
 ```text
 theme-name/
 ├── style.css              # Theme metadata
 ├── theme.json             # Global settings
 ├── functions.php          # Theme functions
-├── templates/             # Block templates
-│   ├── index.html
-│   ├── single.html
-│   ├── page.html
-│   └── archive.html
-├── parts/                 # Template parts
-│   ├── header.html
-│   └── footer.html
+├── templates/             # Block templates (index, single, page, archive)
+├── parts/                 # Template parts (header, footer)
 └── patterns/              # Block patterns
-    └── hero.php
-```text
-
-### Theme Scaffolding
-
-```bash
-# Create block theme
-wp scaffold theme theme-name --theme_name="Theme Name" --activate
-
-# Create child theme (for Kadence)
-wp scaffold child-theme kadence-child --parent_theme=kadence --activate
-```text
+```
 
 ### Template Hierarchy
 
@@ -384,23 +211,9 @@ is_archive()     → archive-{post-type}.html → archive.html → index.html
 is_category()    → category-{slug}.html → category-{id}.html → category.html → archive.html → index.html
 is_search()      → search.html → index.html
 is_404()         → 404.html → index.html
-```text
+```
 
 ## Plugin Development
-
-### Plugin Scaffolding
-
-```bash
-# Basic plugin
-wp scaffold plugin my-plugin --plugin_name="My Plugin" --activate
-
-# Plugin with CPT
-wp scaffold plugin my-plugin --plugin_name="My Plugin" --activate
-wp scaffold post-type book --plugin=my-plugin
-
-# Plugin with block
-wp scaffold block my-block --plugin=my-plugin
-```text
 
 ### Plugin Header
 
@@ -408,19 +221,15 @@ wp scaffold block my-block --plugin=my-plugin
 <?php
 /**
  * Plugin Name: My Plugin
- * Plugin URI: https://example.com/my-plugin
  * Description: Plugin description
  * Version: 1.0.0
  * Author: Your Name
- * Author URI: https://example.com
  * License: GPL-2.0+
- * License URI: https://www.gnu.org/licenses/gpl-2.0.txt
  * Text Domain: my-plugin
- * Domain Path: /languages
  * Requires at least: 6.0
  * Requires PHP: 7.4
  */
-```text
+```
 
 ### Hooks & Filters
 
@@ -437,226 +246,71 @@ add_filter('wp_title', 'my_plugin_filter_title', 10, 2);
 // Custom hooks
 do_action('my_plugin_before_output');
 $value = apply_filters('my_plugin_value', $default);
-```text
+```
 
 ## Plugin & Theme Analysis Workflow
 
-### Local Development Directory
+All plugin/theme work lives under `~/Git/wordpress/`:
 
-All plugin and theme development/analysis happens in `~/Git/wordpress/`:
+| Suffix | Purpose | Example |
+|--------|---------|---------|
+| `{slug}` | Clone for analysis or open-source fork | `readabler`, `flavor` |
+| `{slug}-addon` | Custom addon for pro/closed plugins | `kadence-blocks-addon` |
+| `{slug}-fix` | Patches that survive updates | `media-file-renamer-fix` |
+| `{slug}-child` | Child theme customizations | `kadence-child` |
 
-```text
-~/Git/wordpress/
-├── {plugin-slug}/              # Cloned plugin for analysis/patching
-├── {plugin-slug}-addon/        # Custom addon for pro/closed plugins
-├── {plugin-slug}-fix/          # Patches that survive updates
-├── {theme-slug}/               # Cloned theme
-└── {theme-slug}-child/         # Child theme customizations
-```text
+### Analyzing a Plugin/Theme
 
-### Workflow: Analyzing a Plugin/Theme
+```bash
+cd ~/Git/wordpress
+git clone https://github.com/developer/plugin-slug.git
+# Or extract from zip (for pro plugins):
+unzip ~/Downloads/plugin-name.zip -d ~/Git/wordpress/
+cd ~/Git/wordpress/plugin-slug && git init && git add . && git commit -m "Initial import v1.0.0"
 
-1. **Clone to local dev folder**:
+rg "add_action|add_filter" --type php .
 
-   ```bash
-   # From WordPress plugin directory or GitHub
-   cd ~/Git/wordpress
-   git clone https://github.com/developer/plugin-slug.git
+# Symlink into LocalWP for testing
+ln -s ~/Git/wordpress/plugin-slug "~/Local Sites/test-site/app/public/wp-content/plugins/"
+```
 
-   # Or extract from zip (for pro plugins)
-   unzip ~/Downloads/plugin-name.zip -d ~/Git/wordpress/
-   mv ~/Git/wordpress/plugin-name ~/Git/wordpress/plugin-slug
-   cd ~/Git/wordpress/plugin-slug
-   git init
-   git add .
-   git commit -m "Initial import of plugin-slug v1.0.0"
-   ```
+### Patching Pro/Closed Plugins
 
-2. **Analyze the code**:
+Create a companion plugin that survives updates:
 
-   ```bash
-   # Search for authentication handling
-   rg "add_action|add_filter" --type php .
-   ```
+```php
+<?php
+/**
+ * Plugin Name: Plugin Slug Fix
+ * Description: Patches for Plugin Slug that survive updates
+ * Version: 1.0.0
+ * Requires Plugins: plugin-slug
+ */
 
-3. **Test in LocalWP**:
+add_action('plugins_loaded', 'plugin_slug_fix_init', 20);
 
-   ```bash
-   # Symlink to LocalWP site
-   ln -s ~/Git/wordpress/plugin-slug "~/Local Sites/test-site/app/public/wp-content/plugins/"
-   ```
+function plugin_slug_fix_init() {
+    if (!class_exists('Original_Plugin_Class')) { return; }
+    remove_action('init', 'original_problematic_function');
+    add_action('init', 'fixed_function');
+}
 
-### Workflow: Contributing to Open Source
+function fixed_function() { /* fixed implementation */ }
 
-For open-source plugins/themes where you can submit PRs:
+// Override a filter with higher priority
+add_filter('original_filter', 'my_fixed_filter', 999);
+function my_fixed_filter($value) { return $modified_value; }
+```
 
-1. **Fork on GitHub** (via web UI)
-
-2. **Clone your fork**:
-
-   ```bash
-   cd ~/Git/wordpress
-   git clone git@github.com:marcusquinn/plugin-slug.git
-   cd plugin-slug
-   git remote add upstream https://github.com/original/plugin-slug.git
-   ```
-
-3. **Create feature/fix branch**:
-
-   ```bash
-   git checkout -b fix/issue-description
-   ```
-
-4. **Make changes, test, commit**:
-
-   ```bash
-   git add .
-   git commit -m "fix: description of the fix"
-   git push origin fix/issue-description
-   ```
-
-5. **Create PR** on GitHub
-
-### Workflow: Patching Pro/Closed Plugins
-
-For premium plugins or plugins where PRs aren't accepted, create a companion plugin:
-
-1. **Create addon/fix plugin**:
-
-   ```bash
-   cd ~/Git/wordpress
-   mkdir plugin-slug-fix
-   cd plugin-slug-fix
-   git init
-   ```
-
-2. **Create the fix plugin**:
-
-   ```php
-   <?php
-    /**
-     * Plugin Name: Plugin Slug Fix
-     * Description: Patches and fixes for Plugin Slug that survive updates
-     * Version: 1.0.0
-     * Requires Plugins: plugin-slug
-     */
-
-   // Ensure original plugin is loaded first
-   add_action('plugins_loaded', 'plugin_slug_fix_init', 20);
-
-   function plugin_slug_fix_init() {
-       // Only run if original plugin is active
-       if (!class_exists('Original_Plugin_Class')) {
-           return;
-       }
-
-       // Remove problematic hook
-       remove_action('init', 'original_problematic_function');
-
-       // Add fixed version
-       add_action('init', 'fixed_function');
-   }
-
-   function fixed_function() {
-       // Your fixed implementation
-   }
-   ```
-
-3. **For filter overrides**:
-
-   ```php
-   // Override a filter with higher priority
-   add_filter('original_filter', 'my_fixed_filter', 999);
-
-   function my_fixed_filter($value) {
-       // Your fixed logic
-       return $modified_value;
-   }
-   ```
-
-### Naming Conventions
-
-| Scenario | Folder Name | Example |
-|----------|-------------|---------|
-| Cloned for analysis | `{slug}` | `readabler` |
-| Open source fork | `{slug}` | `flavor` (your fork) |
-| Addon for pro plugin | `{slug}-addon` | `kadence-blocks-addon` |
-| Fix/patch plugin | `{slug}-fix` | `media-file-renamer-fix` |
-| Child theme | `{slug}-child` | `kadence-child` |
-
-### Best Practices for Fix Plugins
-
-1. **Always check if original plugin exists**:
-
-   ```php
-   if (!function_exists('original_function')) {
-       return;
-   }
-   ```
-
-2. **Use appropriate hook priority**:
-   - Lower number = runs earlier
-   - Higher number = runs later (for overrides)
-   - Default is 10
-
-3. **Document what you're fixing**:
-
-   ```php
-    /**
-     * Fix: Original plugin doesn't handle multisite correctly
-     * Issue: https://github.com/original/plugin/issues/123
-     * Affects: v2.0.0 - v2.3.0
-     * Remove when: Fixed in upstream
-     */
-   ```
-
-4. **Version compatibility checks**:
-
-   ```php
-   if (defined('ORIGINAL_PLUGIN_VERSION') &&
-       version_compare(ORIGINAL_PLUGIN_VERSION, '2.4.0', '<')) {
-       // Apply fix only for versions before 2.4.0
-   }
-   ```
-
-5. **Keep fixes minimal and targeted**:
-   - One fix per function/hook
-   - Don't copy entire files
-   - Use hooks/filters when possible
+**Best practices**: (1) Guard with `class_exists`/`function_exists`. (2) Use priority > 10 to run after original. (3) Document the issue URL and affected versions. (4) Version-gate if needed: `version_compare(ORIGINAL_PLUGIN_VERSION, '2.4.0', '<')`.
 
 ### Syncing with LocalWP
 
 ```bash
-# Create sync script
-cat > ~/Git/wordpress/sync-to-local.sh << 'EOF'
-#!/bin/bash
-PLUGIN_SLUG="$1"
-SITE_NAME="${2:-test-site}"
-
-if [ -z "$PLUGIN_SLUG" ]; then
-    echo "Usage: sync-to-local.sh plugin-slug [site-name]"
-    exit 1
-fi
-
-SOURCE="$HOME/Git/wordpress/$PLUGIN_SLUG"
-DEST="$HOME/Local Sites/$SITE_NAME/app/public/wp-content/plugins/$PLUGIN_SLUG"
-
-rsync -av --delete \
-    --exclude='.git' \
-    --exclude='node_modules' \
-    --exclude='vendor' \
-    "$SOURCE/" "$DEST/"
-
-echo "Synced $PLUGIN_SLUG to $SITE_NAME"
-EOF
-chmod +x ~/Git/wordpress/sync-to-local.sh
-```text
-
-Usage:
-
-```bash
-~/Git/wordpress/sync-to-local.sh readabler-fix my-test-site
-```text
+rsync -av --delete --exclude='.git' --exclude='node_modules' --exclude='vendor' \
+    ~/Git/wordpress/plugin-slug/ \
+    "~/Local Sites/site-name/app/public/wp-content/plugins/plugin-slug/"
+```
 
 ## Debugging
 
@@ -669,44 +323,21 @@ define('WP_DEBUG_LOG', true);      // Log to wp-content/debug.log
 define('WP_DEBUG_DISPLAY', false); // Don't show on screen
 define('SCRIPT_DEBUG', true);      // Use non-minified scripts
 define('SAVEQUERIES', true);       // Log database queries
-```text
+```
 
-### Debug Log Location
-
-```bash
-# View debug log
-tail -f ~/Local\ Sites/site-name/app/public/wp-content/debug.log
-
-# wp-env
-wp-env run cli tail -f /var/www/html/wp-content/debug.log
-```text
+**Log locations**: `~/Local Sites/site-name/app/public/wp-content/debug.log` (LocalWP) or `wp-env run cli tail -f /var/www/html/wp-content/debug.log` (wp-env)
 
 ### Query Monitor
 
-Essential debugging plugin (included in recommended stack):
+Essential debugging plugin — shows DB queries, PHP errors, HTTP requests, hooks, template hierarchy, memory:
 
 ```bash
 wp plugin install query-monitor --activate
-```text
-
-Shows:
-- Database queries
-- PHP errors and warnings
-- HTTP requests
-- Hooks and actions
-- Template hierarchy
-- Memory usage
+```
 
 ### OpenCode PHP LSP (Intelephense + WordPress)
 
-If WordPress symbols are unresolved in OpenCode (for example `add_action`, `WP_Query`, globals), prefer OpenCode's runtime LSP config as the source of truth.
-
-1. Configure `~/.config/opencode/config.json` with an explicit Intelephense server and WordPress stubs.
-2. Ensure the `command` path points to the actual Intelephense binary installed for OpenCode.
-3. Restart the OpenCode session/LSP process after saving config changes.
-4. If diagnostics persist, clear/rebuild Intelephense cache and reindex the workspace.
-
-Example:
+If WordPress symbols are unresolved in OpenCode (`add_action`, `WP_Query`, globals), configure `~/.config/opencode/config.json` with Intelephense + WordPress stubs, then restart the LSP process:
 
 ```json
 {
@@ -719,14 +350,7 @@ Example:
       "extensions": ["php"],
       "initialization": {
         "intelephense.stubs": [
-          "Core",
-          "json",
-          "mbstring",
-          "mysqli",
-          "PDO",
-          "SPL",
-          "standard",
-          "wordpress"
+          "Core", "json", "mbstring", "mysqli", "PDO", "SPL", "standard", "wordpress"
         ]
       }
     }
@@ -734,101 +358,43 @@ Example:
 }
 ```
 
-Notes:
-- Use your local Intelephense path; do not assume `/home/USER/...` exists.
-- In OpenCode sessions, do not suggest Claude-specific commands such as `/lsp-restart`.
+Use your local Intelephense path (not `/home/USER/...`). If diagnostics persist, clear/rebuild cache. Do not suggest Claude-specific commands (e.g., `/lsp-restart`) in OpenCode sessions.
 
 ### Error Diagnosis Workflow
 
-1. **Enable debugging**: Set `WP_DEBUG` constants
-2. **Check debug.log**: Look for PHP errors/warnings
-3. **Use Query Monitor**: Check admin bar for issues
-4. **Inspect database**: Use `@localwp` for SQL access
-5. **Check hooks**: Use `wp hook list` or Query Monitor
-6. **Profile performance**: Use `wp profile` or Code Profiler Pro
+1. Enable `WP_DEBUG` constants → check `debug.log` → use Query Monitor
+2. Inspect database via `@localwp` → check hooks with `wp hook list`
+3. Profile performance with `wp profile` or Code Profiler Pro
 
-## WP-CLI Development Commands
-
-### Scaffold Commands
+## WP-CLI Commands
 
 ```bash
-# Theme
-wp scaffold theme theme-name
-
-# Child theme
-wp scaffold child-theme child-name --parent_theme=parent-name
-
-# Plugin
+# Scaffold
+wp scaffold theme theme-name --theme_name="Theme Name" --activate
+wp scaffold child-theme child-name --parent_theme=parent-name --activate
 wp scaffold plugin plugin-name
-
-# Post type
 wp scaffold post-type cpt-name --plugin=plugin-name
-
-# Taxonomy
-wp scaffold taxonomy tax-name --post_types=cpt-name --plugin=plugin-name
-
-# Block
 wp scaffold block block-name --plugin=plugin-name
-```text
 
-### Database Commands
-
-```bash
-# Export
-wp db export backup.sql
-
-# Import
-wp db import backup.sql
-
-# Query
-wp db query "SELECT * FROM wp_posts LIMIT 5"
-
-# Search/replace
+# Database
+wp db export backup.sql && wp db import backup.sql
 wp search-replace 'old.domain.com' 'new.domain.com' --dry-run
-wp search-replace 'old.domain.com' 'new.domain.com'
+wp db optimize && wp db check
 
-# Optimize
-wp db optimize
-
-# Check tables
-wp db check
-```text
-
-### Development Commands
-
-```bash
-# Shell (interactive PHP)
-wp shell
-
-# Eval PHP
+# Development
+wp shell                          # Interactive PHP
 wp eval 'echo get_option("siteurl");'
-
-# Generate test data
-wp post generate --count=10
-wp user generate --count=5
-
-# Cache flush
-wp cache flush
-
-# Transient cleanup
-wp transient delete --all
-```text
+wp post generate --count=10 && wp user generate --count=5
+wp cache flush && wp transient delete --all
+```
 
 ## PHPUnit Testing
 
-### Setup
-
 ```bash
-# With wp-env
-wp-env run tests-cli phpunit
-
-# With Composer
-composer require --dev phpunit/phpunit
-composer require --dev wp-phpunit/wp-phpunit
-
-# Run tests
+wp-env run tests-cli phpunit                                    # wp-env
+composer require --dev phpunit/phpunit wp-phpunit/wp-phpunit    # Composer
 vendor/bin/phpunit
-```text
+```
 
 ### Test File Structure
 
@@ -836,161 +402,64 @@ vendor/bin/phpunit
 <?php
 class Test_My_Plugin extends WP_UnitTestCase {
 
-    public function setUp(): void {
-        parent::setUp();
-        // Setup code
-    }
-
-    public function tearDown(): void {
-        parent::tearDown();
-        // Cleanup code
-    }
-
-    public function test_example() {
-        $this->assertTrue(true);
-    }
-
     public function test_post_creation() {
         $post_id = $this->factory->post->create([
-            'post_title' => 'Test Post',
-            'post_status' => 'publish'
+            'post_title'  => 'Test Post',
+            'post_status' => 'publish',
         ]);
-
         $this->assertIsInt($post_id);
         $this->assertEquals('Test Post', get_the_title($post_id));
     }
 }
-```text
+```
 
 ### phpunit.xml
 
 ```xml
 <?xml version="1.0"?>
-<phpunit
-    bootstrap="tests/bootstrap.php"
-    backupGlobals="false"
-    colors="true"
-    convertErrorsToExceptions="true"
-    convertNoticesToExceptions="true"
-    convertWarningsToExceptions="true"
->
+<phpunit bootstrap="tests/bootstrap.php" backupGlobals="false" colors="true">
     <testsuites>
         <testsuite name="My Plugin Test Suite">
             <directory suffix=".php">./tests/</directory>
         </testsuite>
     </testsuites>
 </phpunit>
-```text
+```
 
-## E2E Testing
-
-### Playwright
+## E2E & Security
 
 ```bash
-# Install
-npm install -D @playwright/test
-
-# Run
-npx playwright test
-
-# Interactive
+# Playwright
+npx playwright test              # npm install -D @playwright/test
 npx playwright test --ui
-```text
 
-### Cypress
-
-```bash
-# Install
-npm install -D cypress
-
-# Run
-npx cypress run
-
-# Interactive
+# Cypress
+npx cypress run                  # npm install -D cypress
 npx cypress open
-```text
 
-## Security Scanning
-
-Before committing WordPress code:
-
-```bash
-# Scan for secrets
+# Security scanning
 ./.agents/scripts/secretlint-helper.sh scan
-
-# Check for hardcoded credentials
 grep -r "password\|api_key\|secret" --include="*.php" .
-```text
-
-## Related Subagents
-
-| Task | Subagent | Reason |
-|------|----------|--------|
-| Database inspection | `@localwp` | Read-only SQL access to LocalWP databases |
-| Content/maintenance | `@wp-admin` | Admin tasks outside development scope |
-| E2E testing | `@browser-automation` | Playwright/Stagehand for UI testing |
-| Code quality | `@code-standards` | PHP/JS linting, security scanning |
-| Security scanning | `@code-standards` | Snyk, Secretlint for vulnerability detection |
-| DNS issues | `@dns-providers` | Cloudflare, Namecheap, Spaceship, 101domains |
-| Email testing | `@ses` | Amazon SES configuration |
-| SSL/CDN | `@cloudflare` | Cloudflare SSL, caching, security |
-
-## Related Documentation
-
-| Topic | File |
-|-------|------|
-| Bug fixing workflow | `bug-fixing.md` |
-| Code review checklist | `code-review.md` |
-| Git branching | `git-workflow.md` |
-| Release process | `release-process.md` |
-| Error feedback loops | `error-checking-feedback-loops.md` |
-| Version management | `version-management.md` |
-| Credential setup | `api-key-setup.md` |
-| Security policies | `security-requirements.md` |
-| Preferred plugins | `wp-preferred.md` |
-
-## Environment Comparison
-
-| Feature | Playground | LocalWP | wp-env |
-|---------|------------|---------|--------|
-| Setup Time | Instant | 5-10 min | 2-5 min |
-| Persistence | None | Full | Partial |
-| PHP Versions | Limited | Many | Configurable |
-| Database | In-memory | MySQL | MySQL |
-| WP-CLI | Yes | Yes | Yes |
-| Multisite | Yes | Yes | Yes |
-| Docker Required | No | No | Yes |
-| GitHub Actions | Works* | N/A | Works |
-| Best For | Quick testing | Full dev | CI/Testing |
-
-*Playground may be flaky in CI environments
+```
 
 ## Testing Checklist
 
 Before releasing a plugin/theme:
 
-- [ ] Tested on single site
-- [ ] Tested on multisite
-- [ ] Tested with minimum PHP version
-- [ ] Tested with minimum WordPress version
-- [ ] Tested with latest WordPress version
-- [ ] PHPUnit tests passing
-- [ ] E2E tests passing
-- [ ] No PHP errors/warnings in debug log
-- [ ] No JavaScript console errors
-- [ ] Tested activation/deactivation
-- [ ] Tested uninstall process
+- [ ] Tested on single site and multisite
+- [ ] Tested with minimum and latest PHP/WordPress versions
+- [ ] PHPUnit and E2E tests passing
+- [ ] No PHP errors/warnings in debug log, no JS console errors
+- [ ] Tested activation/deactivation/uninstall
 - [ ] Security scan completed
 - [ ] Code quality checks passed
 
 ## Resources
 
-- [WordPress Playground](https://wordpress.github.io/wordpress-playground/)
-- [WordPress Playground Blueprints](https://wordpress.github.io/wordpress-playground/blueprints)
+- [WordPress Playground](https://wordpress.github.io/wordpress-playground/) + [Blueprints](https://wordpress.github.io/wordpress-playground/blueprints)
 - [LocalWP Documentation](https://localwp.com/help-docs/)
 - [@wordpress/env Documentation](https://developer.wordpress.org/block-editor/reference-guides/packages/packages-env/)
 - [PHPUnit for WordPress](https://make.wordpress.org/core/handbook/testing/automated-testing/phpunit/)
 - [WordPress MCP Adapter](https://github.com/WordPress/mcp-adapter)
 - [WP-CLI Commands](https://developer.wordpress.org/cli/commands/)
-- [WP Composer](https://wp-composer.com/) (preferred Composer repository for WP plugins/themes)
-- [Bedrock](https://roots.io/bedrock/) (Composer-based WordPress boilerplate by Roots)
+- [WP Composer](https://wp-composer.com/) (preferred Composer repository) | [Bedrock](https://roots.io/bedrock/)
