@@ -376,7 +376,7 @@ _deploy_prompt_agents_md() {
 	local target_dirs=()
 
 	case "$runtime_id" in
-	claude)
+	claude-code)
 		_deploy_prompt_agents_md_claude
 		return $?
 		;;
@@ -712,7 +712,7 @@ show_prompt_deployment_status() {
 			;;
 		agents-md-autodiscovery)
 			case "$rid" in
-			claude)
+			claude-code)
 				if grep -q "aidevops" "${HOME}/.claude/commands/AGENTS.md" 2>/dev/null ||
 					grep -q "aidevops" "${HOME}/.config/Claude/AGENTS.md" 2>/dev/null; then
 					deployed="yes"
@@ -785,12 +785,12 @@ _pia_usage() {
 	echo "  help                  Show this help"
 	echo ""
 	echo "Supported runtimes:"
-	echo "  opencode, claude, codex, cursor, droid, gemini,"
+	echo "  opencode, claude-code, codex, cursor, droid, gemini-cli,"
 	echo "  windsurf, continue, kilo, kiro, aider"
 	echo ""
 	echo "Examples:"
 	echo "  prompt-injection-adapter.sh deploy              # Deploy to all installed"
-	echo "  prompt-injection-adapter.sh deploy claude        # Deploy to Claude only"
+	echo "  prompt-injection-adapter.sh deploy claude-code  # Deploy to Claude only"
 	echo "  prompt-injection-adapter.sh status               # Show what's deployed"
 	return 0
 }
