@@ -41,7 +41,7 @@ Avoiding AI patterns is half the job. Sterile, voiceless writing is as obvious a
 
 ## Pattern Reference
 
-Each entry: **trigger words** | problem | fix direction.
+Each entry (where applicable): **trigger words** | problem | fix direction.
 
 **1. Undue Significance**
 *stands/serves as, testament, vital/crucial/pivotal, underscores importance, reflects broader, evolving landscape, key turning point*
@@ -104,7 +104,7 @@ All main words capitalised. Use sentence case: only first word and proper nouns.
 Headings or bullet points decorated with emojis. Remove unless the context is explicitly casual/social.
 
 **18. Curly Quotation Marks**
-ChatGPT uses curly quotes ("…") instead of straight quotes ("..."). Normalise to straight.
+ChatGPT uses curly quotes ("example") instead of straight quotes ("example"). Normalise to straight.
 
 **19. Collaborative Artifacts**
 *I hope this helps, Of course!, Certainly!, You're absolutely right!, Would you like..., let me know, here is a...*
@@ -148,7 +148,7 @@ Vague upbeat endings. Replace with a specific next fact: what happens next, when
 **After:**
 > The software update adds batch processing, keyboard shortcuts, and offline mode. Early feedback from beta testers has been positive, with most reporting faster task completion.
 
-**Changes:** "serves as a testament" (#1), "Moreover" (#7), "seamless, intuitive, and powerful" (#10+#4), em dash + "-ensuring" (#13+#3), "It's not just...it's..." (#9), "Industry experts believe" (#5), "pivotal role"+"evolving landscape" (#7) — all cut. Replaced with specific features and concrete feedback.
+**Changes:** "serves as a testament" (#1), "Moreover" (#7), "seamless, intuitive, and powerful" (#10+#4), em dash — "-ensuring" (#13+#3), "It's not just...it's..." (#9), "Industry experts believe" (#5), "pivotal role"+"evolving landscape" (#7) — all cut. Replaced with specific features and concrete feedback.
 
 ## Reference
 
