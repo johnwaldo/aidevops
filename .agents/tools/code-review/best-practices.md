@@ -28,7 +28,7 @@ tools:
 
 <!-- AI-CONTEXT-END -->
 
-> **IMPORTANT**: Supplementary to [AGENTS.md](../../AGENTS.md). For conflicts, AGENTS.md takes precedence.
+> **IMPORTANT**: Supplementary to [AGENTS.md](../../../AGENTS.md). For conflicts, AGENTS.md takes precedence.
 
 ## Shell Script Standards (MANDATORY)
 
@@ -188,6 +188,10 @@ wait_for_deploy() {
     local elapsed=0
     local iteration=0
     local max_iterations
+    if ! [[ "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" -le 0 ]]; then
+        echo "[wait_for_deploy] interval must be a positive integer (got: $interval)" >&2
+        return 1
+    fi
     max_iterations=$(( max_wait / interval ))
 
     while [[ "$iteration" -lt "$max_iterations" ]]; do
