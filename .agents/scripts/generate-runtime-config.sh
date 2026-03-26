@@ -374,10 +374,15 @@ if output_format == "opencode-json":
     config['agent'] = sorted_agents
     config['default_agent'] = "Build+"
 
-    # Instructions
+    # Instructions — merge to preserve user-added entries
     instructions_path = os.path.expanduser("~/.aidevops/agents/AGENTS.md")
     if os.path.exists(instructions_path):
-        config['instructions'] = [instructions_path]
+        existing = config.get('instructions', [])
+        if not isinstance(existing, list):
+            existing = [existing] if existing else []
+        if instructions_path not in existing:
+            existing.append(instructions_path)
+        config['instructions'] = existing
 
     # Provider options — prompt caching
     if 'provider' not in config:
@@ -1150,9 +1155,13 @@ _generate_mcp_for_runtime() {
 	mcp_count=$((mcp_count + 1))
 
 	# OpenAPI Search (remote, zero install)
-	register_mcp_for_runtime "$runtime_id" "openapi-search" \
-		'{"command":"npx","args":["-y","openapi-mcp-server"]}'
-	mcp_count=$((mcp_count + 1))
+	# Skip opencode — _generate_agents_opencode already sets a remote URL entry;
+	# registering the npx variant here would overwrite it.
+	if [[ "$runtime_id" != "opencode" ]]; then
+		register_mcp_for_runtime "$runtime_id" "openapi-search" \
+			'{"command":"npx","args":["-y","openapi-mcp-server"]}'
+		mcp_count=$((mcp_count + 1))
+	fi
 
 	# macOS Automator (macOS only)
 	if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -1403,7 +1412,9 @@ main() {
 			print_info "  Target runtime: $target_runtime"
 		else
 			print_info "  Target runtimes: all installed"
-			rt_detect_installed
+			# rt_detect_installed returns non-zero when no runtimes are found;
+			# guard with || true so set -e does not abort before return 0.
+			rt_detect_installed || true
 		fi
 		return 0
 	fi

@@ -61,6 +61,32 @@ if ! declare -f get_runtime_prompt_mechanism >/dev/null 2>&1; then
 	if [[ -f "${_PIA_DIR}/runtime-registry.sh" ]]; then
 		# shellcheck source=/dev/null
 		source "${_PIA_DIR}/runtime-registry.sh"
+
+		# Populate _PIA_RUNTIME_IDS from the registry so show_prompt_deployment_status
+		# and other callers that iterate this array work correctly when the registry
+		# is the source of truth (the stub branch below is skipped in this path).
+		_PIA_RUNTIME_IDS=()
+		while IFS= read -r _pia_rt_id; do
+			[[ -n "$_pia_rt_id" ]] && _PIA_RUNTIME_IDS+=("$_pia_rt_id")
+		done < <(rt_list_ids 2>/dev/null || true)
+
+		# Compatibility wrappers — thin aliases to registry functions.
+		get_runtime_prompt_mechanism() {
+			rt_prompt_mechanism "$1" 2>/dev/null || echo ""
+			return 0
+		}
+
+		is_runtime_installed() {
+			local _pia_bin
+			_pia_bin=$(rt_binary "$1" 2>/dev/null) || return 1
+			[[ -n "$_pia_bin" ]] && type -P "$_pia_bin" &>/dev/null
+			return $?
+		}
+
+		detect_installed_runtimes() {
+			rt_detect_installed 2>/dev/null || true
+			return 0
+		}
 	else
 		# Stub: parallel arrays for prompt mechanism lookup
 		# These match the t1665.1 design spec exactly.
@@ -689,7 +715,10 @@ show_prompt_deployment_status() {
 	local i
 	for i in "${!_PIA_RUNTIME_IDS[@]}"; do
 		local rid="${_PIA_RUNTIME_IDS[$i]}"
-		local mechanism="${_PIA_PROMPT_MECHANISMS[$i]}"
+		# Use get_runtime_prompt_mechanism() — works whether the stub arrays or
+		# the registry-backed wrappers are active (avoids unbound _PIA_PROMPT_MECHANISMS).
+		local mechanism
+		mechanism=$(get_runtime_prompt_mechanism "$rid" 2>/dev/null || echo "")
 		local installed="no"
 		local deployed="no"
 
