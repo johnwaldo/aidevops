@@ -233,7 +233,17 @@ LAZY_MCPS = {
 # =============================================================================
 
 def parse_frontmatter(filepath):
-    """Parse YAML frontmatter from markdown file."""
+    """Parse YAML frontmatter from markdown file.
+
+    Intentionally minimal — avoids PyYAML dependency. Supported syntax:
+      - Unquoted single-line key: value pairs
+      - Dash-prefixed list items (- item)
+    Unsupported (will produce incorrect results):
+      - Quoted strings containing colons (e.g., title: "Key: Value")
+      - Multi-line values or block scalars
+      - Nested mappings beyond one level
+    Agent frontmatter files must stay within these constraints.
+    """
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -728,8 +738,14 @@ _generate_subagents_opencode() {
 
 	print_info "Generating subagent markdown files..."
 
-	# Remove existing subagent files (regenerate fresh)
-	find "$agent_dir" -name "*.md" -type f -delete 2>/dev/null || true
+	# Remove only previously generated subagent stubs (identified by the MANDATORY
+	# marker line we write). This avoids deleting user-created markdown files that
+	# may exist in the same directory.
+	while IFS= read -r -d '' stub_file; do
+		if grep -q "MANDATORY.*Your first action MUST be to read" "$stub_file" 2>/dev/null; then
+			rm -f "$stub_file"
+		fi
+	done < <(find "$agent_dir" -name "*.md" -type f -print0 2>/dev/null)
 
 	# Generate subagent stubs from subfolders
 	generate_subagent_stub() {
@@ -813,7 +829,7 @@ _generate_subagents_opencode() {
 		echo 1
 	}
 
-	export -f generate_subagent_stub
+	export -f generate_subagent_stub 2>/dev/null || true
 	export AGENTS_DIR
 
 	local _ncpu
@@ -1104,8 +1120,6 @@ _generate_mcp_for_runtime() {
 
 	print_info "Registering MCP servers for $display_name..."
 
-	local pkg_runner
-	pkg_runner=$(_get_pkg_runner)
 	local mcp_count=0
 
 	# Shared MCP definitions — defined once, registered for each runtime

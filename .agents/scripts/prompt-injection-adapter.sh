@@ -65,8 +65,8 @@ if ! declare -f get_runtime_prompt_mechanism >/dev/null 2>&1; then
 		# Stub: parallel arrays for prompt mechanism lookup
 		# These match the t1665.1 design spec exactly.
 		_PIA_RUNTIME_IDS=(
-			"opencode" "claude" "codex" "cursor" "droid"
-			"gemini" "windsurf" "continue" "kilo" "kiro" "aider"
+			"opencode" "claude-code" "codex" "cursor" "droid"
+			"gemini-cli" "windsurf" "continue" "kilo" "kiro" "aider"
 		)
 		_PIA_RUNTIME_BINARIES=(
 			"opencode" "claude" "codex" "cursor" "droid"
@@ -166,10 +166,12 @@ _pia_ensure_reference_in_file() {
 		# Prepend reference to existing file (preserve user content)
 		local tmp_file
 		tmp_file=$(mktemp)
+		trap '[[ -n "${tmp_file:-}" && -f "${tmp_file:-}" ]] && rm -f "$tmp_file"' EXIT INT TERM
 		echo "$ref_line" >"$tmp_file"
 		echo "" >>"$tmp_file"
 		cat "$target_file" >>"$tmp_file"
 		mv "$tmp_file" "$target_file"
+		trap - EXIT INT TERM
 		_pia_log "success" "Added reference to $target_file"
 	else
 		# Create new file with just the reference
@@ -280,8 +282,9 @@ _pia_log() {
 # =============================================================================
 
 # OpenCode: set "instructions" field in opencode.json to auto-load AGENTS.md
+# This function is OpenCode-specific; runtime_id parameter removed as it was
+# unused (config path is hardcoded to opencode.json).
 _deploy_prompt_json_instructions() {
-	local runtime_id="$1"
 	local config_file="${HOME}/.config/opencode/opencode.json"
 
 	if [[ ! -f "$config_file" ]]; then
@@ -468,7 +471,7 @@ _deploy_prompt_factory() {
 
 # Gemini CLI: deploy AGENTS.md to ~/.gemini/
 _deploy_prompt_gemini() {
-	_deploy_prompt_agents_md "gemini"
+	_deploy_prompt_agents_md "gemini-cli"
 	return $?
 }
 
@@ -605,7 +608,7 @@ with open('$tmp_file', 'w') as f:
 
 # Deploy system prompts for a specific runtime.
 # Arguments:
-#   $1 - runtime_id (e.g., "opencode", "claude", "codex")
+#   $1 - runtime_id (e.g., "opencode", "claude-code", "codex")
 deploy_prompts_for_runtime() {
 	local runtime_id="$1"
 	local mechanism
@@ -618,7 +621,7 @@ deploy_prompts_for_runtime() {
 
 	case "$mechanism" in
 	json-instructions)
-		_deploy_prompt_json_instructions "$runtime_id"
+		_deploy_prompt_json_instructions
 		;;
 	agents-md-autodiscovery)
 		_deploy_prompt_agents_md "$runtime_id"

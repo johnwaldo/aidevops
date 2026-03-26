@@ -177,15 +177,54 @@ update_claude_config() {
 
 # Unified runtime config update (t1665.4)
 # Generates config for all installed runtimes in a single pass.
-# Called by setup.sh as an alternative to separate update_opencode_config + update_claude_config.
+# Respects per-runtime manage_* feature flags (manage_opencode_config,
+# manage_claude_config) and falls back to legacy scripts when the unified
+# generator is not present (one-release-cycle migration window).
 update_runtime_configs() {
 	print_info "Updating runtime configurations..."
+
+	if [[ ! -f ".agents/scripts/generate-runtime-config.sh" ]]; then
+		# Legacy fallback — unified generator not yet present
+		update_opencode_config
+		update_claude_config
+		return 0
+	fi
+
+	# Respect per-runtime opt-outs before invoking the unified generator
+	local opencode_enabled=1
+	local claude_enabled=1
+
+	if ! is_feature_enabled manage_opencode_config 2>/dev/null; then
+		print_info "OpenCode config management disabled via config (integrations.manage_opencode_config)"
+		opencode_enabled=0
+	fi
+
+	if ! is_feature_enabled manage_claude_config 2>/dev/null; then
+		print_info "Claude config management disabled via config (integrations.manage_claude_config)"
+		claude_enabled=0
+	fi
+
+	if [[ "$opencode_enabled" -eq 0 && "$claude_enabled" -eq 0 ]]; then
+		print_info "All runtime config management disabled — skipping"
+		return 0
+	fi
+
+	# Build --runtime flags for enabled runtimes only
+	local runtime_args=()
+	if [[ "$opencode_enabled" -eq 1 && "$claude_enabled" -eq 1 ]]; then
+		# Both enabled — generate for all runtimes
+		runtime_args=("all")
+	elif [[ "$opencode_enabled" -eq 1 ]]; then
+		runtime_args=("all" "--runtime" "opencode")
+	elif [[ "$claude_enabled" -eq 1 ]]; then
+		runtime_args=("all" "--runtime" "claude-code")
+	fi
 
 	_run_generator ".agents/scripts/generate-runtime-config.sh" \
 		"Generating configuration for all installed runtimes..." \
 		"All runtime configurations updated" \
 		"Runtime configuration encountered issues" \
-		all
+		"${runtime_args[@]}"
 
 	return 0
 }
