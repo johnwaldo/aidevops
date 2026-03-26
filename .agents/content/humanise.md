@@ -148,7 +148,7 @@ Vague upbeat endings. Replace with a specific next fact: what happens next, when
 **After:**
 > The software update adds batch processing, keyboard shortcuts, and offline mode. Early feedback from beta testers has been positive, with most reporting faster task completion.
 
-**Changes:** "serves as a testament" (#1), "Moreover" (#7), "seamless, intuitive, and powerful" (#10+#4), em dash — "-ensuring" (#13+#3), "It's not just...it's..." (#9), "Industry experts believe" (#5), "pivotal role"+"evolving landscape" (#7) — all cut. Replaced with specific features and concrete feedback.
+**Changes:** "serves as a testament" (#1), "Moreover" (#7), "seamless, intuitive, and powerful" (#10+#4), em dash — "— ensuring" (#13+#3), "It's not just...it's..." (#9), "Industry experts believe" (#5), "pivotal role"+"evolving landscape" (#7) — all cut. Replaced with specific features and concrete feedback.
 
 ## Reference
 
