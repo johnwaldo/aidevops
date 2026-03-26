@@ -18,18 +18,13 @@ tools:
 
 ## Quick Reference
 
-- **Type**: Encrypted messaging app built on XMTP — per-conversation identity, E2E encryption, CLI agent mode
-- **License**: Open source
-- **CLI**: `@xmtp/convos-cli` (npm) — join, create, and participate in conversations
-- **Agent mode**: `convos agent serve` — long-lived ndjson stdin/stdout protocol for real-time participation
-- **Website**: [convos.org](https://convos.org/)
-- **Upstream skill**: [convos.org/skill.md](https://convos.org/skill.md)
-- **Environments**: `dev` (test network, default), `production` (real users)
-- **Config**: `~/.convos/.env` (created by `convos init`), `~/.convos/identities/` (per-conversation)
+- **Type**: Encrypted messaging on XMTP — per-conversation identity, E2E encryption, CLI agent mode
+- **CLI**: `@xmtp/convos-cli` (npm) — `convos agent serve` for real-time participation
+- **Website/Skill**: [convos.org](https://convos.org/) · [convos.org/skill.md](https://convos.org/skill.md)
+- **Environments**: `dev` (default/test), `production` (real users)
+- **Config**: `~/.convos/.env` · `~/.convos/identities/` (per-conversation)
 
-**Key differentiator**: Every conversation creates a unique identity — no cross-conversation linkability. Messages are end-to-end encrypted via XMTP's MLS protocol. Groups support invites, profiles, reactions, attachments, and self-destruction.
-
-**Relationship to XMTP**: Convos is a consumer-facing app built on the XMTP protocol. `xmtp.md` covers the protocol/SDK layer for building custom apps. `convos.md` covers participating in Convos conversations as an agent. The two are complementary.
+Every conversation creates a unique identity — no cross-conversation linkability. Messages are E2E encrypted via XMTP MLS.
 
 | Criterion | Convos CLI | XMTP Agent SDK |
 |-----------|-----------|----------------|
@@ -37,108 +32,73 @@ tools:
 | Identity | Per-conversation (automatic) | Wallet/DID (developer-managed) |
 | Interface | CLI + ndjson bridge script | TypeScript event-driven SDK |
 | Agent mode | `convos agent serve` (stdin/stdout) | `agent.on("text", ...)` |
-| Best for | Participating in existing Convos groups | Building new messaging products |
 
 <!-- AI-CONTEXT-END -->
 
 ## Agent Behaviour
 
-Your job is to help groups do things. Your value comes from connecting what others have said — the pattern across conversations, the contradiction nobody caught, the thing someone mentioned once that just became relevant. You're not running the group. You're serving it. Tell people they can train you just by talking to you.
+Help groups do things. Your value is connecting patterns across conversations — the contradiction nobody caught, the thing someone mentioned once that just became relevant. You're not running the group; you're serving it. Tell people they can train you by talking to you.
 
-The detailed behavioural rules are delivered via the bridge script's `SYSTEM_MSG` (see Bridge Scripts below).
+Detailed behavioural rules are delivered via the bridge script's `SYSTEM_MSG`.
 
-## Getting Started
-
-If you haven't been supplied an invite URL, slug, or conversation ID, ask the user for one. Invite links start with `https://popup.convos.org`.
+## Setup
 
 ```bash
-# Install and initialize
 npm install -g @xmtp/convos-cli
 convos init --env production
 ```
 
-This creates `~/.convos/.env`. Each conversation gets its own isolated identity in `~/.convos/identities/`. The channel is Convos — never ask users which platform they're on or for API credentials.
+If no invite URL/slug/conversation ID was supplied, ask the user for one. Invite links start with `https://popup.convos.org`.
 
-## Joining a Conversation
-
-```bash
-# Join with a display name (waits up to 120s for acceptance; use --timeout to change)
-convos conversations join "<invite-url-or-slug>" \
-  --profile-name "Your Name" --env production
-
-# Join and capture the conversation ID
-CONV_ID=$(convos conversations join "<slug>" \
-  --profile-name "Your Name" --json --env production | jq -r '.conversationId')
-```
-
-## Creating a Conversation
+## Joining and Creating
 
 ```bash
-# Create (add --permissions admin-only for restricted groups)
-CONV_ID=$(convos conversations create \
-  --name "Group Name" --profile-name "Your Name" \
-  --json --env production | jq -r '.conversationId')
+# Join (waits up to 120s; use --timeout to change)
+convos conversations join "<invite-url-or-slug>" --profile-name "Your Name" --env production
 
-# Generate invite (shows QR code in terminal)
+# Join and capture ID
+CONV_ID=$(convos conversations join "<slug>" --profile-name "Your Name" --json --env production | jq -r '.conversationId')
+
+# Create
+CONV_ID=$(convos conversations create --name "Group Name" --profile-name "Your Name" --json --env production | jq -r '.conversationId')
+
+# Generate invite (shows QR code; always display full output)
 convos conversation invite "$CONV_ID"
-# Get invite URL for scripting
 INVITE_URL=$(convos conversation invite "$CONV_ID" --json | jq -r '.url')
-```
 
-Always display the full unmodified output when generating invites so the QR code renders correctly.
-
-### Processing Join Requests
-
-After someone opens your invite, you must process their join request:
-
-```bash
-# Process all pending requests
+# Process join requests (invitee must open invite URL first)
 convos conversations process-join-requests --conversation "$CONV_ID"
-
-# Watch for requests in real-time (use when timing is unknown)
-convos conversations process-join-requests --watch --conversation "$CONV_ID"
+convos conversations process-join-requests --watch --conversation "$CONV_ID"  # real-time
 ```
-
-The invitee must open/scan the invite URL *before* you process.
 
 ## Agent Mode
 
-`convos agent serve` is the core of real-time agent participation. It streams messages, processes joins, and accepts commands via ndjson on stdin/stdout.
+`convos agent serve` streams messages, processes joins, and accepts commands via ndjson stdin/stdout.
 
-> **You MUST provide either a conversation ID or `--name` to create a new one.**
-> Running `convos agent serve` with neither will fail.
+> **Must provide a conversation ID or `--name`** — running without either fails.
 
 ```bash
-# Attach to existing conversation
 convos agent serve "$CONV_ID" --profile-name "Your Name" --env production
-
-# Create new conversation and start serving
 convos agent serve --name "Group Name" --profile-name "Your Name" --env production
-
-# With periodic health checks
 convos agent serve "$CONV_ID" --profile-name "Your Name" --heartbeat 30 --env production
 ```
 
-When started, agent serve: creates/attaches to the conversation, prints a QR code invite to stderr, emits a `ready` event, processes pending join requests, streams messages in real-time, accepts commands on stdin, and automatically adds new members who join via invite.
+On start: creates/attaches to conversation, prints QR invite to stderr, emits `ready`, processes pending joins, streams messages, accepts stdin commands, auto-adds new members.
 
-### Events (stdout)
-
-One JSON object per line with an `event` field:
+### Events (stdout — one JSON object per line)
 
 | Event | Meaning | Key fields |
 |-------|---------|------------|
 | `ready` | Session started | `conversationId`, `inviteUrl`, `inboxId` |
-| `message` | Someone sent a message | `id`, `senderInboxId`, `content`, `contentType`, `sentAt`, `senderProfile` |
+| `message` | Message received | `id`, `senderInboxId`, `content`, `contentType`, `sentAt`, `senderProfile` |
 | `member_joined` | New member added | `inboxId`, `conversationId` |
-| `sent` | Your message was delivered | `id`, `text`, `replyTo` |
+| `sent` | Your message delivered | `id`, `text`, `replyTo` |
 | `heartbeat` | Health check | `conversationId`, `activeStreams` |
-| `error` | Something went wrong | `message` |
+| `error` | Error | `message` |
 
-Messages with `catchup: true` were fetched during a stream reconnection — consider whether to respond to old catchup messages or ignore them.
+Messages with `catchup: true` were fetched during reconnection — consider ignoring them.
 
 ### Message Content Types
-
-The `content` field is always a string. Format depends on `contentType.typeId`:
 
 | typeId | Example |
 |--------|---------|
@@ -149,11 +109,7 @@ The `content` field is always a string. Format depends on `contentType.typeId`:
 | `remoteStaticAttachment` | `[remote attachment: video.mp4 (4521 bytes) https://...]` |
 | `group_updated` | `Alice changed group name to "New Name"` |
 
-Replies and reactions reference another message by ID. `group_updated` covers: name changes, joins by invite, member add/remove, admin promotions, profile name/photo changes.
-
-### Commands (stdin)
-
-One compact JSON object per line (no pretty-printing):
+### Commands (stdin — compact ndjson, one per line)
 
 ```jsonl
 {"type":"send","text":"Hello!"}
@@ -174,39 +130,20 @@ One compact JSON object per line (no pretty-printing):
 
 > **AI AGENTS: YOU MUST USE A BRIDGE SCRIPT.**
 >
-> Do not try to manually run `agent serve` and send messages separately — that
-> creates race conditions and you will miss messages. You cannot natively pipe
-> stdin/stdout to a long-running process. Write the bridge script below, run it,
-> and let it handle the event loop.
+> Do not manually run `agent serve` and send messages separately — that creates race conditions and you will miss messages. Write the bridge script, run it as a **separate background process**, and let it handle the event loop. Never source it or run it inline — other processes sharing its file descriptors will leak output into agent serve's stdin.
 
-### How It Works
-
-1. Write the bridge script to a file (use the template below)
-2. Make it executable (`chmod +x bridge.sh`)
-3. Run it as a **separate background process** (`./bridge.sh "$CONV_ID" &`)
-
-**The bridge MUST run as its own process.** Do not source it, run it inline, or execute it in the same shell. If other processes share the bridge's file descriptors, their output can leak into agent serve's stdin and get sent as chat messages.
-
-### Bridge Script Template
-
-This template uses a headless AI dispatch for reply generation. Replace `your-ai-dispatch` calls with your preferred backend. For aidevops, replace with `Claude run --session-id "$SESSION_ID" --message "..."`.
-
-The sub-session gets full tool access and retains conversation history via `--session-id`. If your backend is stateless, prepend `SYSTEM_MSG` to every call instead of delivering it once on `ready`.
-
-The bridge processes sub-session output line by line: lines starting with `{` are passed directly to agent serve as stdin commands; other lines are sent as text messages.
+Replace `your-ai-dispatch` with your backend. For aidevops: `Claude run --session-id "$SESSION_ID" --message "..."`. The sub-session retains history via `--session-id`. If stateless, prepend `SYSTEM_MSG` to every call. Lines starting with `{` are passed as stdin commands; other lines are sent as text messages.
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Close inherited stdin so nothing leaks into agent serve
-exec 0</dev/null
+exec 0</dev/null  # Close inherited stdin
 
 CONV_ID="${1:?Usage: $0 <conversation-id>}"
 SESSION_ID="convos-${CONV_ID}"
 MY_INBOX=""
 
-# Prevent duplicate bridges for the same conversation
 LOCK_FILE="/tmp/convos-bridge-${CONV_ID}.lock"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
@@ -214,26 +151,21 @@ if ! flock -n 9; then
   exit 1
 fi
 
-# Named pipes for agent serve communication
 FIFO_DIR=$(mktemp -d)
 FIFO_IN="$FIFO_DIR/in"
 FIFO_OUT="$FIFO_DIR/out"
 mkfifo "$FIFO_IN" "$FIFO_OUT"
 trap 'rm -rf "$FIFO_DIR" "$LOCK_FILE"' EXIT
 
-# Start agent serve with named pipes
 convos agent serve "$CONV_ID" --profile-name "AI Agent" \
   < "$FIFO_IN" > "$FIFO_OUT" 2>/dev/null &
 AGENT_PID=$!
 
-# Persistent write FD — stays open for the lifetime of the script
 exec 3>"$FIFO_IN"
 
-# Message queue — sends one at a time, waits for "sent" confirmation
 QUEUE_FILE="$FIFO_DIR/queue"
 : > "$QUEUE_FILE"
 
-# Queue a reply: JSON commands pass through, text gets wrapped
 queue_reply() {
   local reply="$1"
   while IFS= read -r line; do
@@ -247,7 +179,6 @@ queue_reply() {
   send_next
 }
 
-# Send the next queued command to agent serve
 send_next() {
   [[ ! -s "$QUEUE_FILE" ]] && return 0
   head -1 "$QUEUE_FILE" >&3
@@ -314,7 +245,6 @@ Current group members:
 $PROFILES
 SYSMSG
 )
-      # Replace this dispatch call with your AI backend
       reply=$(your-ai-dispatch \
         --session-id "$SESSION_ID" \
         --message "$SYSTEM_MSG" \
@@ -323,7 +253,6 @@ SYSMSG
       ;;
 
     sent)
-      # Previous message confirmed — send the next queued one
       send_next
       ;;
 
@@ -341,7 +270,6 @@ SYSMSG
       msg_id=$(echo "$event" | jq -r '.id // empty')
       content=$(echo "$event" | jq -r '.content')
 
-      # Replace this dispatch call with your AI backend
       reply=$(your-ai-dispatch \
         --session-id "$SESSION_ID" \
         --message "$sender_name (msg-id: $msg_id): $content" \
@@ -361,76 +289,41 @@ wait "$AGENT_PID"
 
 ## CLI Reference
 
-Commands for reading and querying while participating. Always pass `--json` when parsing output programmatically.
-
-### Members, Profiles, and History
+Always pass `--json` when parsing output programmatically.
 
 ```bash
-# Members (inbox IDs + permission levels)
+# Members and profiles
 convos conversation members "$CONV_ID" --json
+convos conversation profiles "$CONV_ID" --json  # refresh on member_joined or profile changes
 
-# Profiles (display names + avatars) — refresh on member_joined or profile changes
-convos conversation profiles "$CONV_ID" --json
-
-# Recent messages (sync from network first)
+# Messages
 convos conversation messages "$CONV_ID" --json --sync --limit 20
-
-# Oldest first
 convos conversation messages "$CONV_ID" --json --limit 50 --direction ascending
-
-# Filter by type
 convos conversation messages "$CONV_ID" --json --content-type text
 convos conversation messages "$CONV_ID" --json --exclude-content-type reaction
-
-# Time range (nanosecond timestamps)
 convos conversation messages "$CONV_ID" --json --sent-after <ns> --sent-before <ns>
-```
 
-### Attachments
-
-```bash
-# Download (optionally specify output path)
+# Attachments
 convos conversation download-attachment "$CONV_ID" <message-id> --output ./photo.jpg
-
-# Send (small files inline, large files auto-uploaded)
 convos conversation send-attachment "$CONV_ID" ./photo.jpg
-```
 
-### Profile Management
-
-Profiles are per-conversation — different name and avatar in each group.
-
-```bash
+# Profile (per-conversation — different name/avatar in each group)
 convos conversation update-profile "$CONV_ID" --name "New Name"
 convos conversation update-profile "$CONV_ID" --name "New Name" --image "https://example.com/avatar.jpg"
-convos conversation update-profile "$CONV_ID" --name "" --image ""  # Go anonymous
-```
+convos conversation update-profile "$CONV_ID" --name "" --image ""  # go anonymous
 
-### Group Management
-
-```bash
+# Group management
 convos conversation info "$CONV_ID" --json
 convos conversation permissions "$CONV_ID" --json
 convos conversation update-name "$CONV_ID" "New Name"
 convos conversation update-description "$CONV_ID" "New description"
-
-# Member management (requires super admin)
-convos conversation add-members "$CONV_ID" <inbox-id>
+convos conversation add-members "$CONV_ID" <inbox-id>    # requires super admin
 convos conversation remove-members "$CONV_ID" <inbox-id>
-
-# Lock (prevent new joins, invalidate existing invites) / unlock
-convos conversation lock "$CONV_ID"
+convos conversation lock "$CONV_ID"          # prevent new joins, invalidate invites
 convos conversation lock "$CONV_ID" --unlock
+convos conversation explode "$CONV_ID" --force  # permanently destroy (irreversible)
 
-# Permanently destroy conversation (irreversible)
-convos conversation explode "$CONV_ID" --force
-```
-
-### Send Messages (CLI)
-
-For scripting or one-off sends outside of agent mode:
-
-```bash
+# One-off sends (outside agent mode)
 convos conversation send-text "$CONV_ID" "Hello!"
 convos conversation send-reply "$CONV_ID" <message-id> "Replying to you"
 convos conversation send-reaction "$CONV_ID" <message-id> add "(thumbs up)"
@@ -441,18 +334,18 @@ convos conversation send-reaction "$CONV_ID" <message-id> remove "(thumbs up)"
 
 | Mistake | Correct approach |
 |---------|-----------------|
-| `agent serve` without conversation ID or `--name` | Pass a conversation ID to join existing, or `--name` to create new |
-| Manually polling and sending messages separately | Use a bridge script with named pipes for stdin/stdout |
-| Running bridge inline or in shared shell | Write bridge to a file, run as separate background process |
-| Using markdown in messages | Convos does not render markdown — write plain text |
-| Sending via CLI while in agent mode | Use stdin commands (`{"type":"send",...}`) — CLI sends create race conditions |
-| Forgetting `--env production` | Default is `dev` (test network) — always pass `--env production` for real conversations |
-| Replying to system events | Only `replyTo` messages with `contentType.typeId` of `text`, `reply`, or `attachment` |
-| Generating invite but not processing joins | Run `process-join-requests` after the invitee opens the link |
+| `agent serve` without conversation ID or `--name` | Pass a conversation ID or `--name` to create new |
+| Manually polling and sending separately | Use bridge script with named pipes |
+| Running bridge inline or in shared shell | Write to file, run as separate background process |
+| Using markdown in messages | Convos does not render markdown — plain text only |
+| Sending via CLI while in agent mode | Use stdin commands — CLI sends create race conditions |
+| Forgetting `--env production` | Default is `dev` (test network) |
+| Replying to system events | Only `replyTo` messages with `typeId` of `text`, `reply`, or `attachment` |
+| Not processing joins after invite | Run `process-join-requests` after invitee opens the link |
 | Referencing inbox IDs in chat | Fetch profiles and use display names |
-| Announcing tool usage in chat | Just do it silently and respond naturally |
-| Responding to every message | Only speak when it adds something — react instead of replying when possible |
-| Launching the bridge twice | The template uses `flock` to prevent this — always check for an existing process |
+| Announcing tool usage in chat | Do it silently, respond naturally |
+| Responding to every message | Only speak when it adds something — react instead |
+| Launching the bridge twice | Template uses `flock` to prevent this |
 
 ## Troubleshooting
 
@@ -460,28 +353,26 @@ convos conversation send-reaction "$CONV_ID" <message-id> remove "(thumbs up)"
 |---------|----------|
 | `convos: command not found` | `npm install -g @xmtp/convos-cli` |
 | `Error: Not initialized` | `convos init --env production` |
-| Join request times out | Invitee must open/scan the invite URL *before* creator processes requests |
-| Messages not appearing | Sync first: `convos conversation messages <id> --json --sync --limit 20` |
-| Permission denied on group ops | Check `convos conversation permissions <id> --json` — only super admins can add/remove members, lock, or explode |
-| Invite expired or invalid | Generate new: `convos conversation invite <id>`. Locking invalidates all existing invites |
-| Agent serve exits unexpectedly | Check stderr. Common causes: invalid conversation ID, identity not found (`convos identity list`), network issues. Use `--heartbeat 30` to monitor |
+| Join request times out | Invitee must open/scan invite URL *before* creator processes requests |
+| Messages not appearing | `convos conversation messages <id> --json --sync --limit 20` |
+| Permission denied on group ops | `convos conversation permissions <id> --json` — super admins only for add/remove/lock/explode |
+| Invite expired | Generate new: `convos conversation invite <id>`. Locking invalidates all existing invites |
+| Agent serve exits unexpectedly | Check stderr: invalid conversation ID, identity not found (`convos identity list`), network issues. Use `--heartbeat 30` |
 
 ## Tips
 
 - Use `--json` when parsing output — human-readable format can change between versions
-- Use `--sync` before reading messages to ensure fresh data from the network
-- Identities are automatic — creating or joining a conversation creates one. Rarely need to manage directly
-- Show full QR code output when generating invites. In agent mode, the QR code PNG path is in the `ready` event's `qrCodePath` field
-- Lock before exploding — lock a conversation first to prevent new joins, then explode when ready
+- Use `--sync` before reading messages to ensure fresh data
+- Identities are automatic — creating or joining a conversation creates one
+- Show full QR code output when generating invites; in agent mode the QR path is in the `ready` event's `qrCodePath` field
+- Lock before exploding — prevents new joins while you prepare
 
 ## Related
 
-- `services/communications/xmtp.md` — XMTP protocol and Agent SDK (the protocol layer Convos is built on)
-- `services/communications/simplex.md` — SimpleX Chat (zero-knowledge, no identifiers)
+- `services/communications/xmtp.md` — XMTP protocol and Agent SDK
+- `services/communications/simplex.md` — SimpleX Chat (zero-knowledge)
 - `services/communications/matterbridge.md` — Multi-platform chat bridge
-- `services/communications/matrix-bot.md` — Matrix bot integration (federated)
-- `tools/security/opsec.md` — Operational security guidance
+- `services/communications/matrix-bot.md` — Matrix bot integration
+- `tools/security/opsec.md` — Operational security
 - `tools/ai-assistants/headless-dispatch.md` — Headless AI dispatch patterns
-- Convos: https://convos.org/
-- Convos Skill: https://convos.org/skill.md
-- XMTP Docs: https://docs.xmtp.org/
+- Convos: https://convos.org/ · XMTP Docs: https://docs.xmtp.org/
