@@ -18,100 +18,43 @@ tools:
 
 ## Quick Reference
 
-- **Purpose**: Extract text from screenshots, photos, signs, UI captures, and documents
 - **Repo**: <https://github.com/PaddlePaddle/PaddleOCR> (71k stars, Apache-2.0)
-- **Version**: v3.4.0 (Jan 2026), PP-OCRv5 + PaddleOCR-VL-1.5
-- **Install**: `pip install paddleocr` (library) / `pip install paddleocr-mcp` (MCP server)
+- **Version**: v3.4.0 (Jan 2026) — PP-OCRv5 + PaddleOCR-VL-1.5
+- **Install**: `pip install paddleocr` / `pip install paddleocr-mcp` (MCP server)
 - **Languages**: 100+ (PP-OCRv5), 111 (VL-1.5)
-- **Backend**: PaddlePaddle 3.0 (CPU, NVIDIA GPU, Apple Silicon)
+- **Backend**: PaddlePaddle 3.0 — CPU, NVIDIA GPU, Apple Silicon
 
-**When to use PaddleOCR**:
+**Use PaddleOCR for**: screenshot/photo/sign/UI text extraction, batch OCR with bounding boxes, scene text (varied lighting/angles/fonts), table/layout recognition (PP-StructureV3), local document understanding (PaddleOCR-VL, 0.9B), MCP server integration.
 
-- Screenshot / photo / sign / UI capture text extraction
-- Batch OCR of image files with bounding box positions
-- Scene text with varied lighting, angles, fonts
-- Table and layout recognition (PP-StructureV3)
-- Local document understanding (PaddleOCR-VL, 0.9B)
-- MCP server integration with agent frameworks
-
-**When to use alternatives**:
-
-- PDF to markdown with layout preservation -- use MinerU
-- Structured JSON extraction from invoices -- use Docling + ExtractThinker
-- Quick local OCR with zero setup -- use GLM-OCR via Ollama
-- PDF form filling / signing -- use LibPDF
+**Use alternatives for**: PDF→markdown (MinerU), structured JSON from invoices (Docling + ExtractThinker), zero-setup local OCR (GLM-OCR via Ollama), PDF form filling (LibPDF).
 
 <!-- AI-CONTEXT-END -->
 
 ## Installation
 
-### Python Library
-
 ```bash
-# Install PaddleOCR (includes PaddlePaddle CPU backend)
-pip install paddleocr
-
-# Or with uv (faster)
-uv pip install paddleocr
-
-# GPU support (CUDA 12)
-pip install paddlepaddle-gpu paddleocr
-```
-
-### MCP Server
-
-```bash
-# Install MCP server with local inference
-pip install "paddleocr-mcp[local]"
-
-# CPU-only (no CUDA required)
-pip install "paddleocr-mcp[local-cpu]"
-
-# Zero-install via uvx
-uvx --from paddleocr-mcp paddleocr_mcp
-
-# Verify
-paddleocr_mcp --help
+pip install paddleocr                        # CPU (includes PaddlePaddle)
+pip install paddlepaddle-gpu paddleocr       # CUDA 12
+pip install "paddleocr-mcp[local]"           # MCP server (local inference)
+pip install "paddleocr-mcp[local-cpu]"       # MCP server (CPU-only)
+uvx --from paddleocr-mcp paddleocr_mcp       # Zero-install via uvx
 ```
 
 ## Models
 
-### PP-OCRv5 (Text Detection + Recognition)
+| Model | Best For | Size | Speed | GPU | Bbox |
+|-------|----------|------|-------|-----|------|
+| **PP-OCRv5** | Screenshots, scene text, batch OCR | ~100MB | Fast | No | Yes |
+| **PaddleOCR-VL-1.5** | Document understanding, cross-page | ~2GB | Medium | Yes | Yes |
+| **PP-StructureV3** | Tables, layout → HTML/markdown | ~200MB | Medium | No | Yes |
+| **GLM-OCR** (Ollama) | Quick local OCR, zero setup | ~2GB | Fast | No | No |
+| **GPT-4o / Claude** | Complex reasoning + vision | Cloud | Fast | No | No |
 
-The default OCR pipeline. Detects and recognises text in any image.
+**PP-OCRv5**: 13% accuracy improvement over v4, 100+ languages, 2M-param multilingual models, improved handwriting, polygon bounding boxes.
 
-- **Accuracy**: 13% improvement over PP-OCRv4 on real-world scenarios
-- **Languages**: 100+ (Chinese, English, Japanese, Korean, Latin, Cyrillic, Arabic, Devanagari, etc.)
-- **Multilingual models**: 2M parameters, lightweight enough for mobile
-- **Handwriting**: Improved cursive and non-standard handwriting recognition
-- **Output**: Text + bounding boxes (polygon coordinates)
+**PaddleOCR-VL-1.5**: NaViT + ERNIE-4.5-0.3B, 94.5% OmniDocBench v1.5 (SOTA <4B), handles skew/warping/cross-page tables. HuggingFace: `PaddlePaddle/PaddleOCR-VL-1.5`. Needs GPU.
 
-### PaddleOCR-VL-1.5 (Vision-Language Model)
-
-A 0.9B parameter VLM for document understanding -- not just OCR but reasoning about document content.
-
-- **Architecture**: NaViT dynamic-resolution encoder + ERNIE-4.5-0.3B language model
-- **Languages**: 111 (added Tibetan, Bengali over VL-1.0)
-- **Accuracy**: 94.5% on OmniDocBench v1.5 (SOTA for models under 4B)
-- **Capabilities**: Text spotting, seal recognition, irregular layout positioning, cross-page table merging, cross-page paragraph/heading recognition
-- **Handles**: Skew, warping, scanning artefacts, varied lighting, screen photography
-- **HuggingFace**: `PaddlePaddle/PaddleOCR-VL-1.5`
-- **Requires GPU** -- not recommended for CPU inference
-
-### PP-StructureV3 (Layout + Table Recognition)
-
-Document structure analysis: detects tables, figures, headers, and converts tables to HTML/markdown.
-
-### Model Selection
-
-| Scenario | Model | Why |
-|----------|-------|-----|
-| Screenshot / photo text | PP-OCRv5 | Fast, accurate, CPU-friendly |
-| Batch image OCR | PP-OCRv5 | Lightweight, 100+ languages |
-| Document understanding | PaddleOCR-VL-1.5 | Structured reasoning, cross-page |
-| Table extraction | PP-StructureV3 | HTML/markdown table output |
-| Mobile / edge | PP-OCRv5 (mobile) | 2M param multilingual models |
-| Maximum accuracy | PaddleOCR-VL-1.5 | SOTA on benchmarks, needs GPU |
+**Limitations**: PaddlePaddle dependency (~500MB), not for PDF→markdown (use MinerU), no built-in structured extraction (pair with ExtractThinker).
 
 ## Python API
 
@@ -120,8 +63,7 @@ import paddle
 paddle.set_flags({"FLAGS_use_mkldnn": False})  # Required on Linux CPU (PaddlePaddle 3.3.0)
 from paddleocr import PaddleOCR
 
-# Basic OCR (auto-downloads PP-OCRv5 models on first run)
-# PaddleOCR 3.4.0: use .predict(), not .ocr(); enable_mkldnn=False for Linux CPU
+# Basic OCR — use .predict() not .ocr() (3.4.0+), enable_mkldnn=False on Linux CPU
 ocr = PaddleOCR(lang='en', enable_mkldnn=False)
 for result in ocr.predict('screenshot.png'):
     for text, score in zip(result['rec_texts'], result['rec_scores']):
@@ -129,34 +71,28 @@ for result in ocr.predict('screenshot.png'):
 ```
 
 ```python
-# Table / layout recognition
-from paddleocr import PPStructureV3
-
+from paddleocr import PPStructureV3   # Table / layout
 engine = PPStructureV3()
 result = engine.predict("document.png")
-# Returns structured layout with tables, text blocks, figures
-```
 
-```python
-# PaddleOCR-VL (document understanding)
-from paddleocr import PaddleOCRVL
-
+from paddleocr import PaddleOCRVL    # Document understanding
 vlm = PaddleOCRVL(model_name="PaddleOCR-VL-1.5")
 result = vlm.predict("complex_document.png")
 ```
 
-## MCP Server Setup
+**3.4.0 API changes** (breaking):
 
-PaddleOCR ships a native MCP server (v0.5.0) built on FastMCP v2. Four working modes:
+| Old | New | Notes |
+|-----|-----|-------|
+| `PaddleOCR(show_log=False)` | Removed | Causes `ValueError` |
+| `use_angle_cls=True` | `use_textline_orientation=True` | Deprecated, still works |
+| `ocr.ocr(image)` | `ocr.predict(image)` | Returns `OCRResult`, not nested lists |
 
-| Mode | Flag | Use Case |
-|------|------|----------|
-| Local | `--ppocr_source local` | Offline, runs inference on your machine |
-| AI Studio | `--ppocr_source aistudio` | Baidu cloud, no local GPU needed |
-| Qianfan | `--ppocr_source qianfan` | Baidu AI Cloud |
-| Self-hosted | `--ppocr_source self_hosted` | Your own inference server |
+## MCP Server
 
-### Claude Desktop / Agent Config (Local Mode)
+Four modes via `--ppocr_source`: `local` (offline), `aistudio` (Baidu cloud), `qianfan` (Baidu AI Cloud), `self_hosted`.
+
+**Claude Desktop config (local mode)**:
 
 ```json
 {
@@ -173,217 +109,60 @@ PaddleOCR ships a native MCP server (v0.5.0) built on FastMCP v2. Four working m
 }
 ```
 
-### Pipeline Options
-
-Set `PADDLEOCR_MCP_PIPELINE` to one of:
-
-- `OCR` -- PP-OCRv5 text detection + recognition
-- `PP-StructureV3` -- layout and table recognition
-- `PaddleOCR-VL` -- vision-language model (v1.0)
-- `PaddleOCR-VL-1.5` -- vision-language model (v1.5, recommended)
-
-### MCP Server CLI
+`PADDLEOCR_MCP_PIPELINE` options: `OCR`, `PP-StructureV3`, `PaddleOCR-VL`, `PaddleOCR-VL-1.5`.
 
 ```bash
-# Local OCR via stdio (default transport)
-paddleocr_mcp --pipeline OCR --ppocr_source local
-
-# VL-1.5 via stdio
+paddleocr_mcp --pipeline OCR --ppocr_source local              # stdio (default)
 paddleocr_mcp --pipeline PaddleOCR-VL-1.5 --ppocr_source local
-
-# HTTP transport (for remote / multi-client)
-paddleocr_mcp --pipeline OCR --ppocr_source local --http
-
-# Self-hosted inference server
+paddleocr_mcp --pipeline OCR --ppocr_source local --http       # HTTP transport
 paddleocr_mcp --pipeline OCR --ppocr_source self_hosted --server_url http://127.0.0.1:8080
 ```
 
 ## Workflow Examples
 
-### Screenshot OCR
-
 ```bash
-# Using the helper script (recommended — handles API version differences)
-paddleocr-helper.sh ocr screenshot.png
+paddleocr-helper.sh ocr screenshot.png   # recommended — handles API differences
 
-# Python one-liner (PaddleOCR 3.4.0+)
+# Batch directory
 python -c "
-import paddle; paddle.set_flags({'FLAGS_use_mkldnn': False})
-from paddleocr import PaddleOCR
-ocr = PaddleOCR(lang='en', enable_mkldnn=False)
-for r in ocr.predict('screenshot.png'):
-    for text in r['rec_texts']:
-        print(text)
-"
-```
-
-### Batch Image OCR
-
-```bash
-# Process all images in a directory
-python -c "
-import glob, paddle
-paddle.set_flags({'FLAGS_use_mkldnn': False})
+import glob, paddle; paddle.set_flags({'FLAGS_use_mkldnn': False})
 from paddleocr import PaddleOCR
 ocr = PaddleOCR(lang='en', enable_mkldnn=False)
 for img in sorted(glob.glob('images/*.png')):
-    print(f'=== {img} ===')
     for r in ocr.predict(img):
-        for text in r['rec_texts']:
-            print(text)
+        for text in r['rec_texts']: print(text)
 "
-```
-
-### Screenshot Capture + OCR (Linux)
-
-```bash
-# Capture region and OCR
-import -window root /tmp/capture.png && paddleocr-helper.sh ocr /tmp/capture.png
-```
-
-### Multi-Language OCR
-
-```bash
-# Chinese + English mixed text
-python -c "
-import paddle; paddle.set_flags({'FLAGS_use_mkldnn': False})
-from paddleocr import PaddleOCR
-ocr = PaddleOCR(lang='ch', enable_mkldnn=False)  # 'ch' handles Chinese + English
-for r in ocr.predict('mixed_text.png'):
-    for text, score in zip(r['rec_texts'], r['rec_scores']):
-        print(f'{text} ({score:.2f})')
-"
+# Chinese+English mixed: lang='ch'
+# Linux capture: import -window root /tmp/capture.png && paddleocr-helper.sh ocr /tmp/capture.png
 ```
 
 ## Language Support
 
-PP-OCRv5 supports 100+ languages via lightweight multilingual models (2M parameters each):
-
-| Language Group | Examples | Lang Code |
-|---------------|----------|-----------|
+| Group | Examples | Codes |
+|-------|----------|-------|
 | Chinese | Simplified, Traditional | `ch`, `chinese_cht` |
 | Latin | English, French, German, Spanish | `en`, `fr`, `german`, `es` |
 | Cyrillic | Russian, Ukrainian, Serbian | `ru`, `uk`, `rs_cyrillic` |
 | Arabic | Arabic, Farsi, Urdu | `ar`, `fa`, `ur` |
 | Devanagari | Hindi, Marathi, Nepali | `hi`, `mr`, `ne` |
 | CJK | Japanese, Korean | `japan`, `korean` |
-| Southeast Asian | Thai, Vietnamese, Tamil | `th`, `vi`, `ta` |
+| SE Asian | Thai, Vietnamese, Tamil | `th`, `vi`, `ta` |
 
 Full list: <https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version3.x/model_list/multi_languages.en.md>
 
 ## Hardware Requirements
 
-| Component | PP-OCRv5 (CPU) | PP-OCRv5 (GPU) | PaddleOCR-VL-1.5 |
-|-----------|----------------|----------------|-------------------|
-| **RAM** | 4GB+ | 4GB+ | 8GB+ |
-| **VRAM** | N/A | 2GB+ | 4GB+ (recommended) |
-| **Disk** | ~500MB (PaddlePaddle + models) | ~1.5GB | ~2GB |
-| **CPU** | Any x86_64 / ARM64 | Any | Any |
-| **GPU** | N/A | NVIDIA CUDA 12, Apple Silicon | NVIDIA GPU strongly recommended |
+| | PP-OCRv5 CPU | PP-OCRv5 GPU | PaddleOCR-VL-1.5 |
+|-|-------------|-------------|------------------|
+| RAM | 4GB+ | 4GB+ | 8GB+ |
+| VRAM | — | 2GB+ | 4GB+ |
+| Disk | ~500MB | ~1.5GB | ~2GB |
 
-**Supported accelerators**: NVIDIA GPU (including RTX 50 series), Apple Silicon (MPS), Kunlunxin XPU, Huawei Ascend NPU, Hygon DCU.
-
-**Performance note**: PP-OCRv5 runs well on CPU with MKL-DNN acceleration. PaddleOCR-VL-1.5 is not recommended for CPU inference -- use GPU.
-
-## Model Comparison
-
-| Model | Best For | Size | Speed | Local | Bounding Boxes |
-|-------|----------|------|-------|-------|----------------|
-| **PP-OCRv5** | Scene text, screenshots | ~100MB | Fast (CPU/GPU) | Yes | Yes |
-| **PaddleOCR-VL-1.5** | Document understanding | ~2GB | Medium (GPU) | Yes | Yes |
-| **PP-StructureV3** | Tables, layout | ~200MB | Medium | Yes | Yes |
-| **GLM-OCR** (Ollama) | Quick local OCR | ~2GB | Fast | Yes | No |
-| **GPT-4o / Claude** | Complex reasoning + vision | Cloud | Fast | No | No |
-
-**PaddleOCR advantages over GLM-OCR**:
-
-- Bounding box output for text localisation
-- 100+ language models (vs. prompt-dependent)
-- Better scene text accuracy (varied lighting, angles)
-- Table and layout recognition (PP-StructureV3)
-- Native MCP server for agent integration
-- Active development with regular releases
-
-**PaddleOCR limitations**:
-
-- PaddlePaddle framework dependency (~500MB)
-- Not designed for PDF-to-markdown (use MinerU)
-- No built-in structured extraction (use with ExtractThinker for that)
-- VL models require GPU for practical use
-
-## Integration with aidevops
-
-### With ExtractThinker (Structured Extraction)
-
-```python
-# PaddleOCR for raw text, then ExtractThinker for structured JSON
-from paddleocr import PaddleOCR
-ocr = PaddleOCR(use_angle_cls=True, lang='en')
-raw_text = "\n".join(line[1][0] for line in ocr.ocr('receipt.png')[0])
-
-# Pass raw_text to ExtractThinker with a Pydantic schema
-# See tools/document/document-extraction.md
-```
-
-### With MinerU (PDF Pipeline)
-
-PaddleOCR handles image inputs; MinerU handles PDF inputs. They complement each other:
-
-```text
-Image/Screenshot --> PaddleOCR --> Raw text + bounding boxes
-PDF document     --> MinerU    --> Markdown/JSON (layout-aware)
-```
-
-### MCP Server in Agent Framework
-
-The PaddleOCR MCP server integrates directly with Claude Desktop and the aidevops agent framework. Configure it in your MCP config (see MCP Server Setup above), then agents can call OCR tools directly.
-
-## Platform-Specific Notes
-
-### Verified: Linux x86_64 (Ubuntu 24.04, Python 3.12)
-
-Tested 2026-03-01 with PaddleOCR 3.4.0 + PaddlePaddle 3.3.0 (CPU):
-
-- **Installation**: Clean install via `paddleocr-helper.sh install` -- no issues
-- **OneDNN crash**: PaddlePaddle 3.3.0 crashes with `NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]` when OneDNN/MKL-DNN is enabled (default on Linux CPU). **Fix**: `enable_mkldnn=False` in PaddleOCR constructor, plus `paddle.set_flags({"FLAGS_use_mkldnn": False})`. The helper script applies this automatically.
-- **API changes in 3.4.0**: `show_log` parameter removed (causes `ValueError`), `use_angle_cls` deprecated (use `use_textline_orientation`), `.ocr()` deprecated (use `.predict()` which returns `OCRResult` objects). The helper script handles both APIs.
-- **Model cache**: Models download from HuggingFace on first use to `~/.paddlex/official_models/` (not `~/.paddleocr/` as in older versions). ~100MB for PP-OCRv5 server det + mobile rec models.
-- **Startup speed**: Set `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` to skip connectivity check (~5s savings).
-- **OCR accuracy**: Excellent on screenshot-like images with varied fonts and sizes. 42 text regions detected from an 800x600 test screenshot with >95% confidence on most lines.
-
-### macOS Apple Silicon
-
-Not yet verified. Expected to work with CPU backend (`pip install paddlepaddle`). MPS acceleration available via PaddlePaddle 3.0+. Report issues to the aidevops repo.
-
-### Linux with NVIDIA GPU
-
-Not yet verified. Install `paddlepaddle-gpu` for CUDA 12 support. The OneDNN workaround should not be needed on GPU (the crash is specific to the OneDNN CPU backend).
+Accelerators: NVIDIA (incl. RTX 50, CUDA 12), Apple Silicon (MPS), Kunlunxin XPU, Huawei Ascend NPU, Hygon DCU.
 
 ## Troubleshooting
 
-### PaddlePaddle Installation Issues
-
-```bash
-# Check PaddlePaddle is installed correctly
-python -c "import paddle; print(paddle.__version__)"
-
-# If GPU not detected, install GPU version explicitly
-pip install paddlepaddle-gpu
-
-# Apple Silicon: use CPU version (MPS support via PaddlePaddle 3.0)
-pip install paddlepaddle
-```
-
-### OneDNN Crash on Linux CPU (PaddlePaddle 3.3.0)
-
-PaddlePaddle 3.3.0 has a bug where OneDNN/MKL-DNN crashes during inference on Linux CPU with:
-
-```text
-NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
-[pir::ArrayAttribute<pir::DoubleAttribute>] (onednn_instruction.cc:116)
-```
-
-**Fix**: Disable OneDNN before creating the PaddleOCR instance:
+**OneDNN crash on Linux CPU** (`NotImplementedError: ConvertPirAttribute2RuntimeAttribute`):
 
 ```python
 import paddle
@@ -392,57 +171,44 @@ from paddleocr import PaddleOCR
 ocr = PaddleOCR(lang="en", enable_mkldnn=False)
 ```
 
-The `paddleocr-helper.sh` applies this fix automatically. This may be resolved in a future PaddlePaddle release.
+`paddleocr-helper.sh` applies this automatically.
 
-### PaddleOCR 3.4.0 API Changes
+**Model cache**: 3.4.0 stores models in `~/.paddlex/official_models/` (~100MB for PP-OCRv5). Set `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` to skip connectivity check (~5s savings).
 
-PaddleOCR 3.4.0 (Jan 2026) introduced breaking API changes:
+**Slow CPU**: resize to max 1920px; reuse `PaddleOCR()` instance; use mobile models. `enable_mkldnn=True` improves speed but crashes on PaddlePaddle 3.3.0.
 
-| Old API | New API | Notes |
-|---------|---------|-------|
-| `PaddleOCR(show_log=False)` | Removed | Causes `ValueError: Unknown argument` |
-| `PaddleOCR(use_angle_cls=True)` | `PaddleOCR(use_textline_orientation=True)` | Deprecated, still works with warning |
-| `ocr.ocr(image)` | `ocr.predict(image)` | Returns `OCRResult` objects, not nested lists |
-
-The `paddleocr-helper.sh` handles both old and new APIs automatically.
-
-### Model Download Failures
+**MCP not responding**:
 
 ```bash
-# Models auto-download on first use (~100MB for PP-OCRv5)
-# PaddleOCR 3.4.0 caches models in ~/.paddlex/official_models/
-# Older versions use ~/.paddleocr/
-# If download fails, check network and retry
-# Set PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True to skip connectivity check
-```
-
-### Slow Performance on CPU
-
-- Reduce image size before OCR (resize to max 1920px width)
-- Use PP-OCRv5 mobile models for faster inference
-- For batch processing, reuse the `PaddleOCR()` instance (model loads once)
-- **Note**: `enable_mkldnn=True` can improve CPU performance but crashes on PaddlePaddle 3.3.0 (see above). Test before enabling.
-
-### MCP Server Not Responding
-
-```bash
-# Verify MCP server starts
 paddleocr_mcp --help
-
-# Test with stdio
 echo '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}' | paddleocr_mcp --pipeline OCR --ppocr_source local
-
-# Check logs for model download progress on first run
 ```
+
+## Integration
+
+```python
+# PaddleOCR → ExtractThinker (structured JSON)
+from paddleocr import PaddleOCR
+ocr = PaddleOCR(use_angle_cls=True, lang='en')
+raw_text = "\n".join(line[1][0] for line in ocr.ocr('receipt.png')[0])
+# Pass to ExtractThinker — see tools/document/document-extraction.md
+```
+
+```
+Image/Screenshot --> PaddleOCR --> Raw text + bounding boxes
+PDF document     --> MinerU    --> Markdown/JSON (layout-aware)
+```
+
+## Platform Notes
+
+**Linux x86_64** (verified 2026-03-01, PaddleOCR 3.4.0 + PaddlePaddle 3.3.0 CPU): OneDNN fix required (see Troubleshooting). `paddleocr-helper.sh install` clean. 42 regions from 800×600 screenshot, >95% confidence.
+
+**macOS Apple Silicon**: unverified. CPU backend expected to work; MPS via PaddlePaddle 3.0+.
+
+**Linux NVIDIA GPU**: unverified. Install `paddlepaddle-gpu`; OneDNN workaround not needed on GPU.
 
 ## Resources
 
-- **GitHub**: <https://github.com/PaddlePaddle/PaddleOCR>
-- **MCP Server**: <https://pypi.org/project/paddleocr-mcp/>
-- **PaddleOCR-VL-1.5**: <https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5>
-- **PP-OCRv5 Paper**: <https://arxiv.org/abs/2510.14528>
-- **Language List**: <https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version3.x/model_list/multi_languages.en.md>
-- **OCR Overview**: `tools/ocr/overview.md`
-- **GLM-OCR (alternative)**: `tools/ocr/glm-ocr.md`
-- **Document Extraction**: `tools/document/document-extraction.md`
-- **MinerU (PDF)**: `tools/conversion/mineru.md`
+- GitHub: <https://github.com/PaddlePaddle/PaddleOCR> | MCP: <https://pypi.org/project/paddleocr-mcp/>
+- VL-1.5: <https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5> | Paper: <https://arxiv.org/abs/2510.14528>
+- `tools/ocr/overview.md`, `tools/ocr/glm-ocr.md`, `tools/document/document-extraction.md`, `tools/conversion/mineru.md`
