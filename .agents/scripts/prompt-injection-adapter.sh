@@ -104,7 +104,9 @@ if ! declare -f get_runtime_prompt_mechanism >/dev/null 2>&1; then
 			local i
 			for i in "${!_PIA_RUNTIME_IDS[@]}"; do
 				if [[ "${_PIA_RUNTIME_IDS[$i]}" == "$runtime_id" ]]; then
-					command -v "${_PIA_RUNTIME_BINARIES[$i]}" &>/dev/null
+					# Use type -P to probe for real executables only — avoids
+					# false positives from shell builtins (e.g. "continue").
+					type -P -- "${_PIA_RUNTIME_BINARIES[$i]}" &>/dev/null
 					return $?
 				fi
 			done
@@ -114,7 +116,9 @@ if ! declare -f get_runtime_prompt_mechanism >/dev/null 2>&1; then
 		detect_installed_runtimes() {
 			local i
 			for i in "${!_PIA_RUNTIME_IDS[@]}"; do
-				if command -v "${_PIA_RUNTIME_BINARIES[$i]}" &>/dev/null; then
+				# Use type -P to probe for real executables only — avoids
+				# false positives from shell builtins (e.g. "continue").
+				if type -P -- "${_PIA_RUNTIME_BINARIES[$i]}" &>/dev/null; then
 					echo "${_PIA_RUNTIME_IDS[$i]}"
 				fi
 			done
@@ -205,11 +209,16 @@ _pia_json_set() {
 import json, sys
 with open('$json_file') as f:
     data = json.load(f)
-# Apply the equivalent of jq filter via exec
-# Only supports the specific patterns we use
+# Apply the equivalent of jq filter — merge, do not overwrite
 filter_str = '''$jq_filter'''
 if '.instructions' in filter_str:
-    data['instructions'] = ['$_PIA_AGENTS_MD']
+    existing = data.get('instructions', [])
+    if not isinstance(existing, list):
+        existing = []
+    new_entry = '$_PIA_AGENTS_MD'
+    if new_entry not in existing:
+        existing.append(new_entry)
+    data['instructions'] = existing
 with open('$tmp_file', 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
@@ -291,15 +300,18 @@ _deploy_prompt_json_instructions() {
 		fi
 	fi
 
-	# Set instructions field
-	if _pia_json_set "$config_file" ".instructions = [\"${_PIA_AGENTS_MD}\"]"; then
-		_pia_log "success" "Set OpenCode instructions to load ${_PIA_AGENTS_MD}"
+	# Merge our AGENTS.md path into the existing instructions array (preserve
+	# any entries the user already has — do not overwrite the whole array).
+	if _pia_json_set "$config_file" \
+		".instructions = ((.instructions // []) + [\"${_PIA_AGENTS_MD}\"] | unique)"; then
+		_pia_log "success" "Merged AGENTS.md into OpenCode instructions in ${config_file}"
 	else
-		_pia_log "warning" "Failed to set OpenCode instructions field"
+		_pia_log "warning" "Failed to update OpenCode instructions field"
 		return 1
 	fi
 
-	# Also deploy the config-root AGENTS.md (session greeting)
+	# Also deploy the config-root AGENTS.md (session greeting).
+	# Back up any existing file before writing so user content is not lost.
 	local opencode_config_dir="${HOME}/.config/opencode"
 	local template_source
 	# Look for template in both repo and deployed locations
@@ -307,8 +319,18 @@ _deploy_prompt_json_instructions() {
 		"${_PIA_DIR}/../../templates/opencode-config-agents.md" \
 		"${HOME}/.aidevops/templates/opencode-config-agents.md"; do
 		if [[ -f "$template_source" ]]; then
-			cp "$template_source" "${opencode_config_dir}/AGENTS.md"
-			_pia_log "success" "Deployed greeting template to ${opencode_config_dir}/AGENTS.md"
+			local agents_md_target="${opencode_config_dir}/AGENTS.md"
+			# Only write if content differs (idempotent) — back up if it does
+			if [[ -f "$agents_md_target" ]] && ! diff -q "$template_source" "$agents_md_target" &>/dev/null; then
+				cp "$agents_md_target" "${agents_md_target}.bak"
+				_pia_log "info" "Backed up existing ${agents_md_target} to ${agents_md_target}.bak"
+			fi
+			if [[ ! -f "$agents_md_target" ]] || ! diff -q "$template_source" "$agents_md_target" &>/dev/null; then
+				cp "$template_source" "$agents_md_target"
+				_pia_log "success" "Deployed greeting template to ${agents_md_target}"
+			else
+				_pia_log "info" "OpenCode AGENTS.md already up to date"
+			fi
 			break
 		fi
 	done
@@ -478,7 +500,9 @@ _deploy_prompt_windsurf() {
 _deploy_prompt_continue() {
 	local continue_dir="${HOME}/.continue"
 
-	if ! command -v continue &>/dev/null && [[ ! -d "$continue_dir" ]]; then
+	# Use type -P to probe for the real executable — avoids false positive from
+	# the "continue" shell builtin which command -v would match on any system.
+	if ! type -P -- continue &>/dev/null && [[ ! -d "$continue_dir" ]]; then
 		_pia_log "info" "Continue.dev not installed — skipping"
 		return 0
 	fi
@@ -520,19 +544,54 @@ _deploy_prompt_aider() {
 		return 0
 	fi
 
-	# Append read entry — aider YAML is simple enough for sed
-	# Check if read: section exists
+	# Append read entry — aider YAML is simple enough for targeted editing.
+	# Check if a read: section exists.
 	if grep -q '^read:' "$aider_config" 2>/dev/null; then
-		# Add entry under existing read: section
+		# Distinguish block format (^read:$  or ^read:[[:space:]]*$) from
+		# inline format (^read:[[:space:]]*[^ ]).  Inline lists like
+		# `read: []` or `read: ["/path"]` cannot be safely extended with awk
+		# block insertion — doing so corrupts the YAML.
+		local read_line
+		read_line=$(grep '^read:' "$aider_config" | head -1)
 		local tmp_file
 		tmp_file=$(mktemp)
-		# Use awk to insert after the read: line (Bash 3.2 safe)
-		awk -v path="$_PIA_AGENTS_MD" '
-			/^read:/ { print; print "  - " path; next }
-			{ print }
-		' "$aider_config" >"$tmp_file"
-		mv "$tmp_file" "$aider_config"
-		_pia_log "success" "Added AGENTS.md to aider read: list"
+		if echo "$read_line" | grep -q '^read:[[:space:]]*$'; then
+			# Block format: insert a new list item after the read: header line.
+			awk -v path="$_PIA_AGENTS_MD" '
+				/^read:[[:space:]]*$/ { print; print "  - " path; next }
+				{ print }
+			' "$aider_config" >"$tmp_file"
+			mv "$tmp_file" "$aider_config"
+			_pia_log "success" "Added AGENTS.md to aider read: list"
+		else
+			# Inline format (e.g. `read: []` or `read: ["/x"]`): convert to
+			# block format first, then append our entry, preserving existing items.
+			python3 -c "
+import sys, re
+with open('$aider_config') as f:
+    content = f.read()
+# Extract existing inline items from the read: line
+m = re.search(r'^read:\s*\[(.*?)\]', content, re.MULTILINE)
+existing = []
+if m and m.group(1).strip():
+    for item in m.group(1).split(','):
+        item = item.strip().strip('\"').strip(\"'\")
+        if item:
+            existing.append(item)
+new_entry = '$_PIA_AGENTS_MD'
+if new_entry not in existing:
+    existing.append(new_entry)
+block = 'read:\n' + ''.join('  - ' + e + '\n' for e in existing)
+content = re.sub(r'^read:\s*\[.*?\]\n?', block, content, flags=re.MULTILINE)
+with open('$tmp_file', 'w') as f:
+    f.write(content)
+" 2>/dev/null && mv "$tmp_file" "$aider_config" || {
+				rm -f "$tmp_file"
+				_pia_log "warning" "Could not parse inline read: list in $aider_config — appending new section"
+				printf '\nread:\n  - %s\n' "$_PIA_AGENTS_MD" >>"$aider_config"
+			}
+			_pia_log "success" "Added AGENTS.md to aider read: list (converted inline to block)"
+		fi
 	else
 		# Append new read: section
 		printf '\nread:\n  - %s\n' "$_PIA_AGENTS_MD" >>"$aider_config"
