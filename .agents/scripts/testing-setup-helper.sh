@@ -853,14 +853,14 @@ _verify_linter_shellcheck() {
 # Verify secretlint — tries system binary then npx fallback
 _verify_linter_secretlint() {
 	local project_dir="$1"
+	local linter_cmd=()
 	if command -v secretlint >/dev/null 2>&1; then
-		if (cd "$project_dir" && secretlint "**/*" 2>/dev/null); then
-			echo "pass:secretlint"
-		else
-			echo "fail:secretlint"
-		fi
+		linter_cmd=(secretlint "**/*")
 	elif command -v npx >/dev/null 2>&1 && (cd "$project_dir" && npx --no-install secretlint --version >/dev/null 2>&1); then
-		if (cd "$project_dir" && npx --no-install secretlint "**/*" 2>/dev/null); then
+		linter_cmd=(npx --no-install secretlint "**/*")
+	fi
+	if [[ ${#linter_cmd[@]} -gt 0 ]]; then
+		if (cd "$project_dir" && "${linter_cmd[@]}" 2>/dev/null); then
 			echo "pass:secretlint"
 		else
 			echo "fail:secretlint"
@@ -874,14 +874,14 @@ _verify_linter_secretlint() {
 # Verify markdownlint — tries system binary then npx fallback
 _verify_linter_markdownlint() {
 	local project_dir="$1"
+	local linter_cmd=()
 	if command -v markdownlint-cli2 >/dev/null 2>&1; then
-		if (cd "$project_dir" && markdownlint-cli2 "**/*.md" 2>/dev/null); then
-			echo "pass:markdownlint"
-		else
-			echo "fail:markdownlint"
-		fi
+		linter_cmd=(markdownlint-cli2 "**/*.md")
 	elif command -v npx >/dev/null 2>&1 && (cd "$project_dir" && npx --no-install markdownlint-cli2 --version >/dev/null 2>&1); then
-		if (cd "$project_dir" && npx --no-install markdownlint-cli2 "**/*.md" 2>/dev/null); then
+		linter_cmd=(npx --no-install markdownlint-cli2 "**/*.md")
+	fi
+	if [[ ${#linter_cmd[@]} -gt 0 ]]; then
+		if (cd "$project_dir" && "${linter_cmd[@]}" 2>/dev/null); then
 			echo "pass:markdownlint"
 		else
 			echo "fail:markdownlint"
