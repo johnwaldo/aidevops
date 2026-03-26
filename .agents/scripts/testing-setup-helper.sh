@@ -44,6 +44,7 @@ else
 		echo "INFO: $*" >&2
 		return 0
 	}
+	readonly ERROR_UNKNOWN_COMMAND="Unknown command"
 fi
 
 set -euo pipefail
@@ -69,13 +70,13 @@ resolve_project_path() {
 }
 
 # Check if a file matching a glob pattern exists in the project
-# Uses bash globbing — no external tools needed
+# Uses compgen for safe glob matching without ls word-splitting issues
 has_file() {
 	local project_dir="$1"
 	local pattern="$2"
-	# shellcheck disable=SC2086
-	ls ${project_dir}/${pattern} >/dev/null 2>&1
-	return $?
+	local matches
+	matches=$(compgen -G "${project_dir}/${pattern}" 2>/dev/null) || true
+	[[ -n "$matches" ]]
 }
 
 # Check if a directory exists in the project
@@ -145,15 +146,14 @@ discover_runners() {
 	fi
 
 	# Pytest
-	if [[ -f "${project_dir}/pyproject.toml" ]] || [[ -f "${project_dir}/setup.py" ]]; then
-		if command -v pip >/dev/null 2>&1 && pip show pytest >/dev/null 2>&1; then
-			local configured="false"
-			if [[ -f "${project_dir}/pytest.ini" ]] || [[ -f "${project_dir}/pyproject.toml" ]]; then
-				configured="true"
-			fi
-			runners=$(echo "$runners" | jq --arg c "$configured" \
-				'. + [{"name":"pytest","source":"pip package","configured":($c == "true")}]')
+	if { [[ -f "${project_dir}/pyproject.toml" ]] || [[ -f "${project_dir}/setup.py" ]]; } &&
+		command -v pip >/dev/null 2>&1 && pip show pytest >/dev/null 2>&1; then
+		local configured="false"
+		if [[ -f "${project_dir}/pytest.ini" ]] || [[ -f "${project_dir}/pyproject.toml" ]]; then
+			configured="true"
 		fi
+		runners=$(echo "$runners" | jq --arg c "$configured" \
+			'. + [{"name":"pytest","source":"pip package","configured":($c == "true")}]')
 	fi
 
 	# Cargo test (Rust)
@@ -169,8 +169,8 @@ discover_runners() {
 	fi
 
 	# Bats (Bash testing)
-	if has_file "$project_dir" "*.bats" || has_dir "$project_dir" "test" &&
-		ls "${project_dir}"/test/*.bats >/dev/null 2>&1; then
+	if has_file "$project_dir" "*.bats" || { has_dir "$project_dir" "test" &&
+		ls "${project_dir}"/test/*.bats >/dev/null 2>&1; }; then
 		runners=$(echo "$runners" | jq \
 			'. + [{"name":"bats","source":".bats files","configured":true}]')
 	fi
@@ -362,10 +362,9 @@ discover_coverage() {
 	fi
 
 	# Coverage directory exists
-	if has_dir "$project_dir" "coverage"; then
-		if [[ "$(echo "$coverage" | jq -r '.enabled')" == "false" ]]; then
-			coverage='{"enabled":true,"tool":"unknown","config_file":"none"}'
-		fi
+	if has_dir "$project_dir" "coverage" &&
+		[[ "$(echo "$coverage" | jq -r '.enabled')" == "false" ]]; then
+		coverage='{"enabled":true,"tool":"unknown","config_file":"none"}'
 	fi
 
 	echo "$coverage"

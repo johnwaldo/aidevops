@@ -133,11 +133,17 @@ Install vitest? Bundle 'web-app' recommends it for unit testing.
 3. Use jest instead — already installed
 ```
 
-If yes, run `testing-setup-helper.sh install-runner vitest .` which:
+If yes, the agent performs the installation directly:
 - Adds the dependency (`npm install -D vitest` / `pip install pytest` / etc.)
 - Creates a minimal config file from templates
 - Creates a sample test file if no tests exist
 - Adds a `test` script to package.json (if applicable)
+
+> **Note:** Runner installation is agent-driven (the agent runs the appropriate
+> package manager commands), not a helper subcommand. The helper provides
+> `discover`, `gaps`, `status`, and `verify` — the deterministic parts.
+> Installation requires judgment (choosing between alternatives, handling
+> conflicts) and is handled by the agent directly.
 
 **4b. Missing coverage configuration:**
 
@@ -168,7 +174,7 @@ Install pre-commit quality hooks?
 
 ### Step 5: Generate Configuration
 
-After collecting choices, generate all configuration files via `testing-setup-helper.sh configure`:
+After collecting choices, generate all configuration files. The agent creates these directly:
 
 - Test runner configs (vitest.config.ts, jest.config.js, pytest.ini, etc.)
 - Coverage configs (.nycrc, c8 config in vitest.config.ts, etc.)
