@@ -261,8 +261,12 @@ curl -sI https://example.com | grep -i cf-ray
 curl -sI https://example.com | head -5
 
 # Verify TLS 1.1 is rejected at the edge
+# Requires curl 7.54.0+ with OpenSSL backend (--tlsv1.1 and --tls-max flags)
 curl --tlsv1.1 --tls-max 1.1 https://example.com 2>&1 | head -3
 # Expected: SSL handshake failure or protocol error
+# Fallback for older/minimal curl builds (openssl s_client):
+# openssl s_client -connect example.com:443 -tls1_1 2>&1 | head -5
+# Expected: handshake failure or "no protocols available"
 ```
 
 ### Multisite with Domain Mapping
