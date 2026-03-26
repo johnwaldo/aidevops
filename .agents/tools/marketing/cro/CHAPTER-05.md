@@ -4,7 +4,7 @@ The value proposition is the primary reason a visitor should choose your product
 
 ### What is a Value Proposition?
 
-A clear statement that: explains how your product solves problems, delivers specific benefits, and tells the ideal customer why to choose you over competitors.
+A clear statement that explains how your product solves problems, delivers specific benefits, and tells the ideal customer why to choose you over competitors.
 
 It's NOT a tagline, positioning statement, feature list, or generic marketing speak.
 
@@ -27,7 +27,10 @@ It's NOT a tagline, positioning statement, feature list, or generic marketing sp
 - Subheadline: 2-3 sentences (what, for whom, why useful)
 - Bullets: 3-5 key benefits
 
-Example (Slack): "Where work happens" / "Slack is your digital HQ—a place where work flows between your people, systems, partners and customers" / Bring your team together / Stay in sync, wherever you are / Connect your tools and services
+Example (Slack):
+- **Headline**: "Where work happens"
+- **Subheadline**: "Slack is your digital HQ—a place where work flows between your people, systems, partners and customers"
+- **Bullets**: Bring your team together; Stay in sync, wherever you are; Connect your tools and services
 
 **Formula 2: Problem + Solution + Benefit**
 "Tired of complex PM software requiring weeks of training? Our platform gets your team running in minutes—so you focus on delivering projects, not learning software."
@@ -95,7 +98,11 @@ Focus on what customers value, not what you think is important.
 - Headline: benefit vs. outcome, specific vs. general, question vs. statement, short vs. long
 - Messaging: feature vs. benefit, problem vs. solution, emotional vs. rational, you-focused vs. we-focused
 
-Example test: Control "Project Management Software for Teams" vs. Variant A "Deliver Projects On Time, Every Time" vs. Variant B "Never Miss Another Deadline" vs. Variant C "Get 30% More Done in the Same Time"
+Example test:
+- **Control**: "Project Management Software for Teams"
+- **Variant A**: "Deliver Projects On Time, Every Time"
+- **Variant B**: "Never Miss Another Deadline"
+- **Variant C**: "Get 30% More Done in the Same Time"
 
 Run for statistical significance, implement winner, generate new test ideas.
 
