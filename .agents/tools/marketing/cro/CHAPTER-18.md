@@ -74,7 +74,7 @@ Real-world CRO implementations across e-commerce, SaaS, and B2B services, plus a
 - **Week 1 — Setup/Audit:** Install GA4, heatmaps (Hotjar/FullStory), event tracking. Conduct CRO audit. Identify quick wins.
 - **Week 2 — Research:** Analyze GA data, heatmaps, recordings. Survey customers, interview recent converters, analyze competitors.
 - **Week 3 — Prioritize:** PIE framework scoring, test roadmap, stakeholder alignment, testing tool setup (Optimizely/VWO), document baselines.
-- **Week 4 — Quick Wins:** Fix critical UX issues, add trust signals, optimize page speed, fix mobile issues, improve above-fold content.
+- **Week 4 — Quick Wins:** Resolve critical UX issues, add trust signals, optimize page speed, fix mobile issues, improve above-fold content.
 
 ### Phase 2: Testing (Months 2–3)
 

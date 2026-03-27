@@ -27,7 +27,7 @@ Parse `$ARGUMENTS` to select an operation. Default is `check` (inbox summary).
 | `flag <id> <flag>` | `email-mailbox-helper.sh flag "$MESSAGE_ID" "$FLAG"` | Apply flag to message |
 | `archive <id>` | `email-mailbox-helper.sh archive "$MESSAGE_ID"` | Archive a message |
 
-All helper scripts are under `~/.aidevops/agents/scripts/`.
+All helper scripts are under `scripts/` (repo-relative; deployed to `~/.aidevops/agents/scripts/`).
 
 ## Output Format
 
