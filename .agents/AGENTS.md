@@ -282,6 +282,7 @@ Read subagents on-demand. Full index: `subagent-index.toon`.
 | Business | `business.md`, `business/company-runners.md` |
 | Planning | `workflows/plans.md`, `scripts/commands/define.md`, `tools/task-management/beads.md` |
 | Code quality | `tools/code-review/code-standards.md` |
+| Shell/Bash compat | `reference/bash-compat.md` |
 | Git/PRs/Releases | `workflows/git-workflow.md`, `tools/git/github-cli.md`, `workflows/release.md` |
 | Documents/PDF | `tools/document/document-creation.md`, `tools/pdf/overview.md`, `tools/conversion/pandoc.md` |
 | OCR | `tools/ocr/overview.md`, `tools/ocr/paddleocr.md`, `tools/ocr/glm-ocr.md` |
