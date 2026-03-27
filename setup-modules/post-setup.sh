@@ -177,7 +177,10 @@ setup_tabby() {
 
 	# Show status and offer to sync
 	echo ""
-	bash "$tabby_helper" status || true
+	if ! bash "$tabby_helper" status; then
+		print_warning "Tabby profile status check failed; skipping sync prompt"
+		return 0
+	fi
 	echo ""
 	read -r -p "Sync Tabby profiles from repos.json? [Y/n]: " sync_tabby
 	if [[ "$sync_tabby" =~ ^[Yy]?$ ]]; then
