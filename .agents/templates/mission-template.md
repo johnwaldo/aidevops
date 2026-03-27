@@ -51,13 +51,26 @@ Milestones are sequential. Features within each milestone are parallelisable. Ea
 ### Milestone 1: {Name}
 
 **Status:** pending  <!-- pending | active | validating | passed | failed | skipped -->
-**Estimate:** ~{X}h | **Validation:** {What must be true for this milestone to pass}
+**Estimate:** ~{X}h
+**Validation:** {What must be true for this milestone to pass — e.g., "all tests pass", "UI renders correctly", "API responds to all endpoints"}
 
 | # | Feature | Task ID | Status | Estimate | Worker | PR |
 |---|---------|---------|--------|----------|--------|----|
 | 1.1 | {Feature description} | {tNNN} | pending | ~{X}h | | |
+| 1.2 | {Feature description} | {tNNN} | pending | ~{X}h | | |
 
-<!-- Add milestones following the same pattern. -->
+### Milestone 2: {Name}
+
+**Status:** pending
+**Estimate:** ~{X}h
+**Validation:** {Validation criteria}
+
+| # | Feature | Task ID | Status | Estimate | Worker | PR |
+|---|---------|---------|--------|----------|--------|----|
+| 2.1 | {Feature description} | {tNNN} | pending | ~{X}h | | |
+| 2.2 | {Feature description} | {tNNN} | pending | ~{X}h | | |
+
+<!-- Add more milestones following the same pattern. -->
 
 ## Resources
 
