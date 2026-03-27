@@ -293,13 +293,13 @@ def hex_to_hsl(hex_color: str) -> tuple[float, float, float]:
     """Convert hex colour to HSL (hue 0-360, sat 0-1, light 0-1)."""
     hex_color = hex_color.lstrip("#")
     r, g, b = (int(hex_color[i : i + 2], 16) / 255.0 for i in (0, 2, 4))
-    h, l, s = colorsys.rgb_to_hls(r, g, b)
-    return h * 360, s, l
+    h, lightness, s = colorsys.rgb_to_hls(r, g, b)
+    return h * 360, s, lightness
 
 
-def hsl_to_hex(h: float, s: float, l: float) -> str:
+def hsl_to_hex(h: float, s: float, lightness: float) -> str:
     """Convert HSL (hue 0-360, sat 0-1, light 0-1) to hex."""
-    r, g, b = colorsys.hls_to_rgb(h / 360.0, l, s)
+    r, g, b = colorsys.hls_to_rgb(h / 360.0, lightness, s)
     return "#{:02X}{:02X}{:02X}".format(int(r * 255), int(g * 255), int(b * 255))
 
 
