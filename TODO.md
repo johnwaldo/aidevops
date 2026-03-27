@@ -116,6 +116,7 @@ Tasks with no open blockers - ready to work on. Use `/ready` to refresh this lis
 ### Repo Hygiene
 
 - [ ] t1692 chore: clean up repo root — remove stale content/ (duplicates .agents/content/), remove bv Linux binary, move ssh/ssh-key-audit.sh to .agents/scripts/ #chore #repo-hygiene ~30m ref:GH#11081 assignee:marcusquinn started:2026-03-27
+- [ ] t1693 chore: move docs/configuration.md to .agents/reference/ and remove empty docs/ directory — single-file docs/ dir is unnecessary; configuration.md belongs with other reference docs #chore #repo-hygiene ~30m ref:GH#11116 assignee:marcusquinn started:2026-03-27
 
 ### Setup/Update Bugs
 
