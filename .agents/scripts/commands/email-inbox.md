@@ -14,20 +14,19 @@ Parse `$ARGUMENTS` to select an operation. Default is `check` (inbox summary).
 
 | Command | Helper call | Purpose |
 |---------|-------------|---------|
-| *(empty)* / `check` | `email-mailbox-helper.sh inbox --summary` | Inbox summary (unread, flagged, pending triage) |
-| `triage [--limit N]` | `email-triage-helper.sh run --limit 50` | AI triage of unread messages (classify, prioritize, flag) |
+| *(empty)* / `check` | `email-mailbox-helper.sh inbox <account>` | Inbox summary (unread, flagged, pending triage) |
+| `triage [--limit N]` | `email-triage-helper.sh batch --input <file> --limit 50` | AI triage of unread messages (classify, prioritize, flag) |
 | `compose [--reply <id>]` | `email-compose-helper.sh` workflow | Compose new email or reply |
-| `search "<query>"` | `email-mailbox-helper.sh search "$QUERY"` | Full-text search |
-| `search --from <addr>` | `email-mailbox-helper.sh search --from "$ADDR"` | Search by sender |
-| `search --flag <flag>` | `email-mailbox-helper.sh search --flag "$FLAG"` | Search by flag |
-| `search --since <period>` | `email-mailbox-helper.sh search --since "$PERIOD"` | Search by date range |
-| `organize [--apply]` | `email-mailbox-helper.sh organize --dry-run` | Preview/apply category sorting |
-| `folders` | `email-mailbox-helper.sh folders` | List folders with message counts |
-| `thread <id>` | `email-mailbox-helper.sh thread "$MESSAGE_ID"` | Show full email thread |
-| `flag <id> <flag>` | `email-mailbox-helper.sh flag "$MESSAGE_ID" "$FLAG"` | Apply flag to message |
-| `archive <id>` | `email-mailbox-helper.sh archive "$MESSAGE_ID"` | Archive a message |
+| `search "<query>"` | `email-mailbox-helper.sh search <account> --query "$QUERY"` | Full-text search |
+| `search --from <addr>` | `email-mailbox-helper.sh search <account> --query "from:$ADDR"` | Search by sender |
+| `search --flag <flag>` | `email-mailbox-helper.sh search <account> --query "flag:$FLAG"` | Search by flag |
+| `search --since <period>` | `email-mailbox-helper.sh search <account> --query "since:$PERIOD"` | Search by date range |
+| `folders` | `email-mailbox-helper.sh folders <account>` | List folders with message counts |
+| `read <id>` | `email-mailbox-helper.sh read <account> --uid "$MESSAGE_ID"` | Show full email thread |
+| `flag <id> <flag>` | `email-mailbox-helper.sh flag <account> --uid "$MESSAGE_ID" --flag "$FLAG"` | Apply flag to message |
+| `archive <id>` | `email-mailbox-helper.sh move <account> --uid "$MESSAGE_ID" --dest Archive` | Archive a message |
 
-All helper scripts are under `scripts/`.
+All helper scripts are under `scripts/` (repo-relative; deployed to `~/.aidevops/agents/scripts/`).
 
 ## Output Format
 
