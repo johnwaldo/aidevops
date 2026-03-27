@@ -20,7 +20,9 @@
 ```bash
 # Seed bracketing
 seed-bracket-helper.sh generate --type product --prompt "Product rotating on white background"
+seed-bracket-helper.sh status  # Check progress of latest run
 seed-bracket-helper.sh score 4005 8 9 7 8 9 && seed-bracket-helper.sh report
+seed-bracket-helper.sh list    # Show all bracket runs
 
 # Unified video generation CLI (Sora 2, Veo 3.1, Nanobanana Pro)
 video-gen-helper.sh generate sora "A cat reading a book" sora-2-pro 8 1280x720
