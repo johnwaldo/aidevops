@@ -153,10 +153,8 @@ All plugin/theme work lives under `~/Git/wordpress/`:
 | `{slug}-child` | Child theme customizations | `kadence-child` |
 
 ```bash
-cd ~/Git/wordpress
-git clone https://github.com/developer/plugin-slug.git
-# Pro plugins: unzip ~/Downloads/plugin-name.zip -d ~/Git/wordpress/
-cd ~/Git/wordpress/plugin-slug && git init && git add . && git commit -m "Initial import v1.0.0"
+cd ~/Git/wordpress && git clone https://github.com/developer/plugin-slug.git
+# Pro plugins: unzip ~/Downloads/plugin-name.zip -d ~/Git/wordpress/ && git init && git add . && git commit -m "Initial import v1.0.0"
 rg "add_action|add_filter" --type php .
 ln -s ~/Git/wordpress/plugin-slug "~/Local Sites/test-site/app/public/wp-content/plugins/"
 ```
