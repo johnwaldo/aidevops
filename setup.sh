@@ -883,6 +883,7 @@ _setup_post_setup_steps() {
 	setup_draft_responses
 	setup_profile_readme
 	setup_oauth_token_refresh
+	setup_tabby
 	print_final_instructions
 
 	# Check for tool updates if --update flag was passed
