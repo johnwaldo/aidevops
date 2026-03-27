@@ -129,20 +129,9 @@ When referencing specific functions or code include the pattern `file_path:line_
 - For remote repos: fetch README first, check size with `gh api`, use `includePatterns`
 
 # Screenshot Size Limits (CRITICAL — session-crashing)
-# Anthropic hard-rejects images >8000px on any dimension. This crashes the session
-# because the oversized image is already in message history — every subsequent
-# API call fails with the same error. There is no recovery except starting a new
-# session and losing all conversation context.
-# GH#4213 added guardrails to browser-qa-helper.sh but agents take screenshots
-# through at least 5 other paths that bypass those guardrails entirely.
-- NEVER use `fullPage: true` for screenshots intended for AI vision review. Use viewport-sized screenshots instead (`fullPage: false` or omit the option).
-- When full-page capture is genuinely needed (human review, visual regression, saving to disk for later), save to file and resize before including in conversation context:
-  `sips --resampleHeightWidthMax 1568 screenshot.png --out screenshot-resized.png` (macOS)
-  `magick screenshot.png -resize "1568x1568>" screenshot-resized.png` (ImageMagick, cross-platform)
-- For AI vision review: target max 1568px on the longest side. Images above this are auto-downscaled by the API, adding latency with no quality benefit.
-- Anthropic hard limit: 8000px on any single dimension. Images at or above this are rejected outright.
-- The Playwright MCP `browser_screenshot` tool returns base64 images directly into conversation context with NO resize hook. There is no way to intercept or resize these images after the tool returns. Prefer `browser-qa-helper.sh screenshot` which has built-in guardrails, or use viewport-sized screenshots via Playwright direct.
-- The `browser-qa-helper.sh screenshot` command is the ONLY screenshot path with automatic size guardrails (post-capture resize to `--max-dim`, default 4000px). All other paths — Playwright MCP, Playwriter MCP, dev-browser scripts, raw Playwright code — have zero size protection.
+# Images >8000px crash the session irrecoverably. NEVER use `fullPage: true` for AI review.
+# Target max 1568px longest side. Use `browser-qa-helper.sh screenshot` (only path with guardrails).
+# Full rules: `reference/screenshot-limits.md`
 
 # Error Prevention (top recurring patterns from session mining)
 #
@@ -318,28 +307,13 @@ When referencing specific functions or code include the pattern `file_path:line_
 - NEVER include private repo names in TODO.md, issue titles, issue bodies, or comments on public repos. Use "a managed private repo" or similar generic references. issue-sync-helper.sh has automated sanitization as a safety net, but prevention at source is primary.
 
 # Parallel Model Verification (t1364)
-# High-stakes operations are verified by a second model before execution.
-# This catches single-model hallucinations before destructive operations cause
-# irreversible damage. Different providers have different failure modes, so
-# correlated errors are rare. Verification is targeted — not every operation,
-# only those matching the risk taxonomy.
-- Before destructive operations (force push, DB drop, production deploy, secret exposure): source `verify-operation-helper.sh` and call `check_operation()`. If risk is critical/high, call `verify_operation()` and respect the result.
-- pre-edit-check.sh accepts `--verify-op "command"` to gate operations at the pre-edit stage.
-- dispatch.sh automatically screens task descriptions via `check_task_high_stakes()` before committing workers.
-- Verification is opt-out (`VERIFY_ENABLED=false`) not opt-in. High-stakes operations are verified by default.
-- Verification uses the cheapest model tier (haiku) — cost is minimal per check.
-- When verification is unavailable (no verifier model reachable): critical operations are blocked in headless mode, warned in interactive mode. Non-critical operations proceed.
+# Before destructive operations (force push, DB drop, production deploy): call `check_operation()`
+# from `verify-operation-helper.sh`. Critical/high risk → `verify_operation()` and respect result.
+# Full details: `reference/model-verification.md`
 
 # Tamper-Evident Audit Logging (t1412.8)
-# Security-sensitive operations are logged to an append-only JSONL file with
-# SHA-256 hash chaining. Each entry includes the hash of the previous entry,
-# creating a chain. Modifying or deleting any entry breaks the chain, making
-# tampering detectable via `audit-log-helper.sh verify`.
-- Log security-sensitive operations via `audit-log-helper.sh log <type> <message> [--detail k=v ...]`. Event types: `worker.dispatch`, `worker.complete`, `worker.error`, `credential.access`, `credential.rotate`, `config.change`, `config.deploy`, `security.event`, `security.injection`, `security.scan`, `operation.verify`, `operation.block`, `system.startup`, `system.update`, `system.rotate` (15 types). Run `audit-log-helper.sh help` for details.
-- Log file: `~/.aidevops/.agent-workspace/observability/audit.jsonl` (0600 permissions, owner-only).
-- Verify chain integrity: `audit-log-helper.sh verify`. Run before log rotation and during security audits.
-- NEVER log credential values — only key names, scopes, and access metadata. The audit log is plaintext.
-- Full docs: `tools/security/tamper-evident-audit.md`.
+# Log security-sensitive operations: `audit-log-helper.sh log <type> <message>`.
+# NEVER log credential values. Full details: `reference/audit-logging.md`
 
 # Git Workflow and Traceability
 Git is the primary audit trail for all work. Every change should be discoverable through the chain: TODO task -> GitHub issue -> worktree/ref -> PR -> merge commit. A PR without a TODO entry, or an issue closed without a PR link, is an audit gap.
@@ -362,39 +336,8 @@ Git is the primary audit trail for all work. Every change should be discoverable
 **Pulse scope boundary (t1405, GH#2928):** When dispatched by the pulse, `PULSE_SCOPE_REPOS` (comma-separated repo slugs) defines which repos you may create branches and PRs on. Filing issues is always allowed on any repo. Code changes (branches, PRs, commits) are restricted to repos in `PULSE_SCOPE_REPOS`. If the target repo is not in scope, file the issue and stop — do not implement the fix. If `PULSE_SCOPE_REPOS` is empty or unset (interactive mode), no scope restriction applies. This prevents pulse-dispatched workers from creating PRs on repos outside the user's managed scope.
 
 # External Repo Issue/PR Submission (t1407)
-# When filing issues or PRs on repos we don't maintain, template compliance bots
-# (e.g., GitHub Actions that check issue format) will auto-close submissions that
-# don't match the repo's required templates. Many popular repos enforce this —
-# well-crafted issues get closed within hours if they don't use the right format.
-#
-# This is a judgment call, not a deterministic check. Read the templates and
-# contributing guidelines, then format your submission accordingly.
-- Before `gh issue create --repo <slug>` on a repo NOT in `~/.config/aidevops/repos.json`:
-  1. Check for issue templates with explicit status handling (`404` means "missing", anything else fails):
-     ```bash
-     endpoint="repos/{slug}/contents/.github/ISSUE_TEMPLATE/"
-     resp=$(gh api --include "$endpoint") || { echo "gh api failed: $endpoint" >&2; exit 1; }
-     status=$(printf '%s\n' "$resp" | awk 'NR==1 {print $2}')
-     if [[ "$status" == "404" ]]; then
-       templates="[]"
-     elif [[ "$status" != "200" ]]; then
-       echo "gh api error $status: $endpoint" >&2
-       exit 1
-     else
-       body=$(printf '%s\n' "$resp" | sed '1,/^\r$/d')
-       templates=$(printf '%s\n' "$body" | jq -r '.[].name')
-     fi
-     ```
-  2. If templates exist, fetch the relevant one (e.g., `bug-report.yml`) using the same `--include` status pattern; only decode `200` bodies (`base64 -d`).
-  3. Check for `CONTRIBUTING.md` using the same `--include` status pattern; continue on `404`, fail on other non-`200` statuses.
-  4. Format the issue body to match the required template structure. YAML form templates (`.yml`) generate `### Label` section headers when submitted via the web UI — replicate this structure in your `--body`.
-  5. If no templates exist, use a clear, well-structured format (title, description, steps to reproduce, expected/actual behaviour).
-- Before `gh pr create` targeting an external repo:
-  1. Check for PR templates with the same `gh api --include` status parsing (`404` allowed, other non-`200` statuses fail).
-  2. Check `CONTRIBUTING.md` for PR requirements (branch naming, commit format, CLA, etc.)
-  3. Format the PR body to match their template and follow their contributing guidelines.
-- If a submission is auto-closed by a compliance bot, read the bot's comment for formatting requirements, then resubmit with the correct format.
-- Practical examples and template mapping: `tools/git/github-cli.md` "External Repo Submissions" section.
+# When filing issues/PRs on external repos, check their templates and CONTRIBUTING.md first.
+# Compliance bots auto-close non-conforming submissions. Read `reference/external-repo-submissions.md`.
 
 **Git-readiness check:** When working in a project directory that is NOT a git repo, or is a git repo without `TODO.md` / aidevops initialisation, flag this to the user: "This project has no git tracking / no aidevops task management. Work here won't be traceable. Consider `git init` + `aidevops init` to enable the full workflow." Use judgment — a throwaway script directory doesn't need this, but any project with ongoing development does.
 
@@ -481,66 +424,9 @@ Git is the primary audit trail for all work. Every change should be discoverable
 - MCP tools loaded on-demand per subagent (reduces context overhead)
 
 # Conversational Memory Lookup
-# When the user references past work — "remember when we...", "that thing we built",
-# "last week we did...", "the session where...", "we already solved this" — they are
-# recalling something from a previous session. The current session has no memory of it
-# unless you actively search. This is a judgment call, not a keyword trigger.
-#
-# Progressive discovery — same principle as agent context loading. Search from
-# short-term/local (instant, free) through long-term/remote (API calls, expensive).
-# Stop as soon as you have enough context to respond. Don't search all sources for
-# every vague reference — match the source to the question.
-#
-# Tier 1 — Local cached (instant, zero cost):
-# 1. Cross-session memory: `memory-helper.sh recall "keywords"` (CLI) or
-#    `aidevops_memory_recall` (MCP tool) — curated signal, most likely to have
-#    the answer. Solutions, decisions, preferences, patterns.
-# 2. TODO.md + completed tasks: `rg "keyword" TODO.md` — task IDs, PR numbers,
-#    completion dates, brief descriptions of all past work.
-#
-# Tier 2 — Local indexed (fast, local I/O):
-# 3. Git history: `git log --all --oneline --grep="keyword"` — commits, branches,
-#    PRs, code changes. High volume but precise when the keyword is specific.
-# 4. Session transcripts (Claude Code): `~/.claude/transcripts/*.jsonl` — full
-#    JSONL conversation logs. `rg "keyword" ~/.claude/transcripts/`. Recovers
-#    exact conversation context, what was discussed, tool calls made.
-#    For structured field searches, pipe through jq:
-#    `rg -l "keyword" ~/.claude/transcripts/ | xargs -I{} jq 'select(.type=="assistant") | .message.content' {}`
-# 5. Session database: runtime-specific — see AGENTS.md for paths per runtime.
-# 6. Observability metrics: `~/.aidevops/.agent-workspace/observability/metrics.jsonl`
-#    — JSONL log of LLM request metadata, costs, models, tokens per session.
-#    Fields per record: provider, model, session_id, request_id, project,
-#    input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-#    cost_input, cost_output, cost_total, stop_reason, git_branch, recorded_at.
-#    Example: jq -s '[.[] | select(.project=="aidevops")] | group_by(.model)
-#    | map({model:.[0].model, total_cost:([.[].cost_total] | add),
-#    requests:length})' ~/.aidevops/.agent-workspace/observability/metrics.jsonl
-#
-# Tier 3 — Remote targeted (API calls, need a specific number):
-# 7. GitHub issue/PR comments: `gh issue view {num} --comments --repo {slug}`,
-#    `gh pr view {num} --comments --repo {slug}`, or the API equivalents
-#    `gh api repos/{slug}/issues/{num}/comments` and
-#    `gh api repos/{slug}/pulls/{num}/comments` (for inline review comments).
-#    Discussion, review feedback, decisions made in threads — context that never
-#    reaches git or memory. Get the issue/PR number from TODO.md first.
-#
-# Tier 4 — Remote broad (expensive, last resort):
-# 8. GitHub search: `gh search issues "keyword" --repo {slug}` (issues),
-#    `gh search prs "keyword" --repo {slug}` (PRs),
-#    `gh search code "keyword" --repo {slug}` (code). Broad search when you
-#    don't know the issue/PR number.
-# 9. GitHub discussions: `gh api repos/{slug}/discussions` (if enabled).
-#    Long-form design discussions, RFCs, community Q&A.
-# 10. GitHub wiki: `gh api repos/{slug}/pages` or clone the wiki repo
-#    (`git clone https://github.com/{slug}.wiki.git`). Persistent documentation that may contain
-#    architectural decisions, onboarding guides, or historical context.
-#
-# Examples:
-# "Remember that auth fix?" → memory recall + git log.
-# "What did we discuss about the database schema?" → memory recall + transcripts.
-# "How much did last week's batch run cost?" → observability metrics.
-# "What did the reviewer say about that PR?" → TODO.md (get PR#) + PR comments.
-# "Was there a discussion about the migration?" → GitHub discussions/wiki.
+# When user references past work ("remember when...", "that thing we built"), search
+# progressively: memory recall → TODO.md → git log → transcripts → GitHub API.
+# Full 4-tier lookup guide: `reference/memory-lookup.md`
 
 # Intelligence Over Determinism (CORE PRINCIPLE)
 You are an LLM. You can read an issue body, understand context, assess whether something is blocked, stuck, duplicated, or ready — and act on that understanding. No regex, state machine, or if/then ruleset can do this. The framework exists to give you goals, tools, and boundaries — not to script your decisions.
@@ -576,18 +462,8 @@ Short, concise, GitHub-flavored markdown. Numbered options for prompts (never "[
 Never apply AI tool suggestions (review bots, linters, PR reviewers) without independent verification. AI reviewers hallucinate. Verify claims against runtime, docs, or project conventions.
 
 # Review Bot Gate (t1382, GH#3827)
-# Before merging any PR, wait for AI code review bots (CodeRabbit, Gemini Code Assist,
-# etc.) to post their reviews. PRs merged before bots post lose security findings.
-# Three enforcement layers:
-# 1. CI: `.github/workflows/review-bot-gate.yml` — required status check
-# 2. Agent: `review-bot-gate-helper.sh check <PR> [REPO]` — returns PASS/PASS_RATE_LIMITED/WAITING/SKIP
-# 3. Branch protection: add `review-bot-gate` as required check per repo
-- Before merging: run `review-bot-gate-helper.sh check <PR_NUMBER>`. If WAITING, poll up to 10 minutes. Most bots post within 2-5 minutes.
-- If the PR has `skip-review-gate` label, bypass the gate (for docs-only PRs or repos without bots).
-- In headless mode: if still WAITING after timeout, proceed but log a warning. The CI required check is the hard gate.
-- ALWAYS read bot reviews before merging. Address critical/security findings; note non-critical suggestions for follow-up.
-- PASS_RATE_LIMITED means bots are rate-limited but the PR exceeded the grace period (default 4h). Safe to merge — bot reviews will arrive later and can be addressed in follow-up PRs. Use `request-retry` to trigger a re-review once rate limits clear.
-- When many PRs are rate-limited simultaneously, use `request-retry` on the highest-priority PRs first. Stagger retries to avoid re-triggering rate limits.
+# Before merging any PR: run `review-bot-gate-helper.sh check <PR_NUMBER>`.
+# ALWAYS read bot reviews before merging. Full workflow: `reference/review-bot-gate.md`
 
 # Context Compaction Survival
 # On compaction, ALWAYS preserve: (1) task IDs + states, (2) active batch/concurrency,

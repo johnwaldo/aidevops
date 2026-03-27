@@ -71,128 +71,15 @@ For setup workflow, safety gates, and scheduling patterns, use `/routine` or rea
 
 ## Self-Improvement
 
-Every agent session — interactive, worker, or supervisor — should improve the system, not just complete its task. This is a universal principle, not specific to any one command.
-
-**Observe outcomes from existing state.** TODO.md, PLANS.md, and GitHub issues/PRs are the state database. Never duplicate this state into separate files, databases, or logs.
-
-**Signals that something needs fixing** (check via `gh` CLI, not custom state):
-- A PR has been open for 6+ hours with no progress
-- The same issue/PR appears in consecutive supervisor pulses with no state change
-- A PR was closed (not merged) — a worker failed
-- Multiple PRs fail CI with the same error pattern
-- A worker creates a PR that duplicates an existing one
-
-**Response: create a GitHub issue, not a workaround.** When you observe a systemic problem, file a GitHub issue describing the pattern, root cause hypothesis, and proposed fix. This enters the existing task queue and gets picked up by the next available worker. Never patch around a broken process — fix the process.
-
-**Route to the correct repo.** Not every improvement belongs in the current project. Before creating a self-improvement task, determine whether the problem is project-specific or framework-level:
-
-- **Framework-level** — route to the aidevops repo. Indicators: the observation references files under `~/.aidevops/`, framework scripts (`ai-actions.sh`, `ai-lifecycle.sh`, `supervisor/`, `dispatch.sh`, `pre-edit-check.sh`, helper scripts), agent prompt behaviour, supervisor/pulse logic, or cross-repo orchestration. **Use `framework-issue-helper.sh log` — not `claim-task-id.sh` — to file the issue directly on `marcusquinn/aidevops`.** The fix belongs in the framework, not in the project that happened to trigger it.
-- **Project-specific** — route to the current repo. Indicators: the observation is about this project's CI, code patterns, dependencies, or domain logic.
-
-If uncertain, ask: "Would this fix apply to every repo the framework manages, or only this one?" Framework-wide problems go to aidevops; project-specific problems stay local. Never create framework tasks in a project repo — they become invisible to framework maintainers and pollute the project's task namespace.
-
-**How to file a framework issue (GH#5149):** When you detect a framework-level problem, use the dedicated helper — not `claim-task-id.sh` in the current repo:
-
-```bash
-# Detect if a problem is framework-level (exit 0 = framework, exit 1 = project)
-~/.aidevops/agents/scripts/framework-issue-helper.sh detect "description of the problem"
-
-# File a framework issue directly on marcusquinn/aidevops (deduplicates automatically)
-~/.aidevops/agents/scripts/framework-issue-helper.sh log \
-  --title "Bug: supervisor pipeline fails when stdin is consumed" \
-  --body "Observed in ai-lifecycle.sh phase 3: ..." \
-  --label "bug"
-```
-
-This is the correct action path for framework issues. Do NOT use `claim-task-id.sh` in the project repo for framework-level observations — that pollutes the project's task namespace and makes the issue invisible to framework maintainers.
-
-**Scope boundary for code changes (t1405, GH#2928).** Separate "observe and report" from "observe and fix". When dispatched by the pulse, the `PULSE_SCOPE_REPOS` env var lists the repo slugs where you may create worktrees and PRs. Filing issues is always allowed on any repo — cross-repo bug reports are valuable. But code changes (worktrees, PRs, commits) are restricted to repos in `PULSE_SCOPE_REPOS`. If the target repo is not in scope, file the issue and stop. The issue enters that repo's queue for their maintainers (or their own pulse) to handle. If `PULSE_SCOPE_REPOS` is empty or unset (interactive mode), no scope restriction applies.
-
-**What counts as self-improvement:**
-- Filing issues for repeated failure patterns
-- Improving agent prompts when workers consistently misunderstand instructions
-- Identifying missing automation (e.g., a manual step that could be a `gh` command)
-- Flagging stale tasks that are blocked but not marked as such
-- Running the session miner pulse (`scripts/session-miner-pulse.sh`) to extract learning from past sessions
-- **Filing issues for information gaps (t1416):** When you cannot determine what happened on a task because comments lack model tier, branch name, failure diagnosis, or other audit-critical fields, file a self-improvement issue. Information gaps cause cascading waste — without knowing what was tried, the next attempt repeats the same failure. The issue/PR comment timeline is the primary audit trail; if the information isn't there, it's invisible.
-
-**Issue quality filter (GH#6508):** Before filing any enhancement or architectural change — whether via `/log-issue-aidevops`, `framework-issue-helper.sh`, or direct `gh issue create` — apply the framework's own principles to the proposal. Ask: (1) Is this addressing an observed failure, or is it preemptive? Preemptive rules for unobserved failure modes are prompt bloat. (2) Does this add a deterministic mechanism where model judgment would work better? (3) If this comes from comparing aidevops to another framework, is the "gap" actually a deliberate architectural choice? The bar for adding guidance is: **observed failure first, then minimal guidance**. Bug reports with clear reproduction steps are exempt — bugs are observed failures by definition.
-
-**Intelligence over determinism:** The harness gives you goals, tools, and boundaries — not scripts for every scenario. Deterministic rules are for things with exactly one correct answer (CLI syntax, file paths, security). Everything else — prioritisation, triage, stuck detection, what to work on — is a judgment call. If a rule says "if X then Y" but there are cases where X is true and Y is wrong, it's guidance not a rule. Use the cheapest model that can handle the decision (haiku for triage, sonnet for implementation, opus for strategy) — but never use a regex where a model call would handle outliers better. See `prompts/build.txt` "Intelligence Over Determinism" for the full principle.
-
-**Autonomous operation:** When the user says "continue", "monitor", or "keep going" — enter autonomous mode: use sleep/wait loops, maintain a perpetual todo to survive compaction, only interrupt for blocking errors that require user input.
+Every session should improve the system, not just complete its task. Observe outcomes, file issues for systemic problems, route framework-level issues to `marcusquinn/aidevops` via `framework-issue-helper.sh log`. Full guide: `reference/self-improvement.md`
 
 ---
 
 ## Agent Routing
 
-Not every task is code. The framework has multiple primary agents, each with domain expertise. When dispatching workers (via `/pulse`, `/runners`, or manual `opencode run`), route to the appropriate agent using `--agent <name>`.
+Route tasks to domain-specific agents via `--agent <name>` when dispatching workers. Default is Build+ (code). Full agent list, routing rules, and dispatch examples: `reference/agent-routing.md`
 
-**Available primary agents** (full index in `subagent-index.toon`):
-
-| Agent | Use for |
-|-------|---------|
-| Build+ | Code: features, bug fixes, refactors, CI, PRs (default) |
-| Automate | Scheduling, dispatch, monitoring, background orchestration, pulse supervisor |
-| SEO | SEO audits, keyword research, GSC, schema markup |
-| Content | Blog posts, video scripts, social media, newsletters |
-| Marketing | Email campaigns, FluentCRM, landing pages |
-| Business | Company operations, runner configs, strategy |
-| Accounts | Financial operations, invoicing, receipts |
-| Legal | Compliance, terms of service, privacy policy |
-| Research | Tech research, competitive analysis, market research |
-| Sales | CRM pipeline, proposals, outreach |
-| Social-Media | Social media management, scheduling |
-| Video | Video generation, editing, prompt engineering |
-| Health | Health and wellness content |
-
-**Routing rules:**
-- Read the task/issue description and match it to the domain above
-- If the task is clearly code (implement, fix, refactor, CI), use Build+ or omit `--agent`
-- If the task matches another domain, pass `--agent <name>` to `opencode run`
-- When uncertain, default to Build+ — it can read subagent docs on demand
-- The agent choice affects which system prompt and domain knowledge the worker loads
-- **Bundle-aware routing (t1364.6):** Project bundles can define `agent_routing` overrides per task domain. For example, a content-site bundle routes `marketing` tasks to the Marketing agent. Check with `bundle-helper.sh get agent_routing <repo-path>`. Explicit `--agent` flags always override bundle defaults.
-
-**Headless dispatch CLI:** ALWAYS use `headless-runtime-helper.sh run` for dispatching workers. This helper handles provider rotation, session persistence, backoff, and lifecycle reinforcement. NEVER use bare `opencode run` for dispatch — workers launched that way miss lifecycle reinforcement and stop after PR creation (GH#5096). NEVER use `claude`, `claude -p`, or any other CLI.
-
-**Dispatch example:**
-
-```bash
-AGENTS_DIR="$(aidevops config get paths.agents_dir)"
-AGENTS_DIR="${AGENTS_DIR:-"$HOME/.aidevops/agents"}"
-HELPER="${AGENTS_DIR/#\~/$HOME}/scripts/headless-runtime-helper.sh"
-# Path is determined by 'paths.agents_dir' in config.jsonc
-
-# Code task (default — Build+ implied)
-$HELPER run \
-  --role worker \
-  --session-key "issue-42" \
-  --dir ~/Git/myproject \
-  --title "Issue #42: Fix auth" \
-  --prompt "/full-loop Implement issue #42 -- Fix authentication bug" &
-sleep 2
-
-# SEO task
-$HELPER run \
-  --role worker \
-  --session-key "issue-55" \
-  --agent SEO \
-  --dir ~/Git/myproject \
-  --title "Issue #55: SEO audit" \
-  --prompt "/full-loop Implement issue #55 -- Run SEO audit on landing pages" &
-sleep 2
-
-# Content task
-$HELPER run \
-  --role worker \
-  --session-key "issue-60" \
-  --agent Content \
-  --dir ~/Git/myproject \
-  --title "Issue #60: Blog post" \
-  --prompt "/full-loop Implement issue #60 -- Write launch announcement blog post" &
-sleep 2
-```
+**Headless dispatch:** ALWAYS use `headless-runtime-helper.sh run` — never bare `opencode run` or `claude`.
 
 ---
 
