@@ -70,10 +70,19 @@ task_id = response.json()["task_id"]
 ```python
 @app.route('/webhook', methods=['POST'])
 def handle_webhook():
-    payload = request.json
-    if payload['status'] == 'completed':
-        process_results(payload['data'])
-    return "OK", 200
+    try:
+        payload = request.get_json(silent=True)
+        if payload is None:
+            return {"error": "Invalid or missing JSON payload"}, 400
+        if 'status' not in payload:
+            return {"error": "Missing required field: status"}, 400
+        if payload['status'] == 'completed':
+            if 'data' not in payload:
+                return {"error": "Missing required field: data"}, 400
+            process_results(payload['data'])
+        return {"ok": True}, 200
+    except Exception as e:
+        return {"error": str(e)}, 500
 ```
 
 ## Security Configuration
