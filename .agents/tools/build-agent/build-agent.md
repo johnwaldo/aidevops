@@ -18,7 +18,7 @@ mode: subagent
 - **After creating/promoting**: `~/.aidevops/agents/scripts/subagent-index-helper.sh generate`
 - **Testing**: `agent-test-helper.sh run my-tests` or `claude -p "Test query"`
 
-**Model tier**: Use `/route "task"` or `/patterns recommend "type"` before setting `model:` in frontmatter. Static rules (`haiku`→formatting, `sonnet`→code, `opus`→architecture) are starting points; pattern data overrides at >75% success, 3+ samples.
+**Model tier**: Use `/route "task"` or `/patterns recommend "type"` before setting `model:` in frontmatter. Static rules (`haiku`→formatting, `sonnet`→code, `opus`→architecture) are starting points; pattern data overrides at >75% success, 3+ samples. Record: `/remember "SUCCESS/FAILURE: agent with model — reason"`. Full docs: `tools/context/model-routing.md`.
 
 <!-- AI-CONTEXT-END -->
 
@@ -53,72 +53,25 @@ tools:
 ---
 ```
 
-MCP tool patterns (subagents only — NEVER in main agents): `context7_*: true`, `wordpress-mcp_*: true`. Path-based permissions go in `opencode.json`, not frontmatter.
-
-MCP requirements with tool filtering (future `includeTools` — enables 17k→1.5k token savings): `mcp_requirements: { chrome-devtools: { tools: [navigate_page, take_screenshot] } }`
+MCP tool patterns (subagents only — NEVER in main agents): `context7_*: true`, `wordpress-mcp_*: true`. Path-based permissions go in `opencode.json`, not frontmatter. Global disabled, per-agent enabled: `"mcp": { "hostinger-api": { "enabled": false } }` + `"agent": { "hostinger": { "tools": { "hostinger-api_*": true } } }`. Future `includeTools` enables 17k→1.5k token savings.
 
 **Main-branch write restrictions** (subagents with `write/edit: true` on `main`/`master`): ALLOWED: `README.md`, `TODO.md`, `todo/PLANS.md`, `todo/tasks/*`. BLOCKED: all other files. Add a "Write Restrictions" section to any writable subagent.
-
-## MCP Configuration Pattern
-
-Global disabled, per-agent enabled in `opencode.json`: `"mcp": { "hostinger-api": { "enabled": false } }` + `"agent": { "hostinger": { "tools": { "hostinger-api_*": true } } }`
-
-## Agent Directory Architecture
-
-`.agents/` → source of truth, deployed to `~/.aidevops/agents/` by `setup.sh`. `.opencode/agent/` → generated stubs by `generate-opencode-agents.sh`.
-
-## Code References
-
-Use search patterns, not line numbers (they drift): `Search for handle_api_error in hostinger-helper.sh; fallback: api_error or error handling`. Hierarchy: function/variable name → unique string literals → comment markers → broader pattern.
-
-## Model Tier Selection
-
-| Situation | Action |
-|-----------|--------|
-| >75% success, 3+ samples | Use pattern data (overrides static rule) |
-| Sparse/inconclusive | Fall back to routing rules |
-| Contradicts routing rules | Note conflict in agent docs |
-| No data yet | Use routing rules, record outcomes |
-
-Record: `/remember "SUCCESS/FAILURE: agent with model — reason"`. Frontmatter: `model: sonnet  # 87% success, 14 samples`. Full docs: `tools/context/model-routing.md`.
 
 ## Quality Checking: Linters First
 
 Never send an LLM to do a linter's job. Order: (1) deterministic linters (ShellCheck, ESLint, Ruff/Pylint), (2) static analysis (SonarCloud, Codacy, Secretlint), (3) LLM review (CodeRabbit — architectural only). Prefer `bun`/`bunx` over `npm`/`npx`.
-
-## Information Quality
-
-Use primary sources over tutorials. Cross-reference, prefer recent, watch for vendor agendas.
-
-| Domain | Primary Sources | Watch For |
-|--------|-----------------|-----------|
-| Code/DevOps | Official docs, RFCs, source code | Outdated tutorials, version drift |
-| SEO | Webmaster tools, Search Console | Vendor claims, outdated tactics |
-| Legal | Legislation, case law | Jurisdiction differences |
-| Health | Peer-reviewed research | Commercial claims, fads |
-| Marketing | Platform docs, first-party data | Vendor case studies |
-| Accounting | Tax authority guidance | Jurisdiction-specific rules |
-| Content | Style guides, brand guidelines | Subjective preferences as rules |
 
 ## Agent Design Checklist
 
 1. **YAML frontmatter?** All subagents require it
 2. **Universally applicable?** >80% of tasks? If not → more specific subagent
 3. **Pointer instead?** Use `rg "pattern"` or Context7 MCP if content exists elsewhere
-4. **Code example?** Authoritative? Will it drift? Security: placeholders only
+4. **Code example?** Include only when: authoritative reference with no implementation elsewhere; security-critical template; command syntax IS the documentation. Avoid when code exists in codebase (use search pattern) or will become outdated (point to source). Authoritative? Will it drift? Security: placeholders only
 5. **Instruction count?** Combine related, remove redundant
 6. **Duplicates?** `rg "pattern" .agents/` before adding
 7. **Existing agent?** Call and improve vs duplicate?
-8. **Sources verified?** Primary, cross-referenced
+8. **Sources verified?** Primary, cross-referenced — prefer official docs, RFCs, source code over tutorials
 9. **Markdown linting?** MD025/MD022/MD031/MD012. Run `bunx markdownlint-cli2 "path/to/file.md"`
-
-## Code Examples: When to Include
-
-**Include**: authoritative reference with no implementation elsewhere; security-critical template; command syntax IS the documentation.
-
-**Avoid**: code exists in codebase (use search pattern); external library (use Context7 MCP); will become outdated (point to source).
-
-When a code example fails, trigger self-assessment: update if outdated, add conditions if context-dependent, check for duplicates.
 
 ## Self-Assessment Protocol
 
@@ -139,13 +92,9 @@ When a code example fails, trigger self-assessment: update if outdated, add cond
 
 Self-checks: "Faster CLI alternative?" and "Could this return >50K tokens?" See `tools/context/context-guardrails.md`.
 
-## Agent File Structure
-
-**Main agents** (no frontmatter): `# Name` → `<!-- AI-CONTEXT-START -->` Quick Reference `<!-- AI-CONTEXT-END -->` → Detailed Documentation.
-
-**Subagents**: YAML frontmatter + content. Avoid hardcoded counts, version numbers, or dates that go stale.
-
 ## Folder Organization
+
+`.agents/` → source of truth, deployed to `~/.aidevops/agents/` by `setup.sh`. `.opencode/agent/` → generated stubs by `generate-opencode-agents.sh`.
 
 ```text
 .agents/
@@ -160,9 +109,9 @@ Self-checks: "Faster CLI alternative?" and "Could this return >50K tokens?" See 
 
 Naming: lowercase with hyphens; ALLCAPS only for entry points. Main agents at root — tooling uses `find -mindepth 2` for subagent discovery.
 
-## Slash Command Placement
+**Agent file structure** — Main agents (no frontmatter): `# Name` → `<!-- AI-CONTEXT-START -->` Quick Reference `<!-- AI-CONTEXT-END -->` → Detailed Documentation. Subagents: YAML frontmatter + content. Avoid hardcoded counts, version numbers, or dates that go stale.
 
-**CRITICAL**: Never define slash commands inline in main agents. Generic → `scripts/commands/{command}.md`. Domain-specific → `{domain}/{subagent}.md`. Main agents only **reference** commands.
+**Slash commands**: NEVER define inline in main agents. Generic → `scripts/commands/{command}.md`. Domain-specific → `{domain}/{subagent}.md`. Main agents only **reference** commands.
 
 ## Agent Lifecycle Tiers
 
@@ -190,16 +139,11 @@ Naming: lowercase with hyphens; ALLCAPS only for entry points. Main agents at ro
 
 **Orchestration agents**: Create drafts when identifying reusable patterns. After: log TODO, reference draft in Task calls, note in completion summary.
 
-## Deployment Sync
+## Deployment and Cache
 
 Agent changes in `.agents/` require `cd ~/Git/aidevops && ./setup.sh`. Offer to run on create/rename/move/merge/delete.
 
-## Cache-Aware Prompt Patterns
-
-- **Stable prefix**: Variable content at end; dynamic content at start breaks cache
-- **Instruction ordering**: Critical rules → frequent operations → edge cases (primacy effect)
-- **AI-CONTEXT blocks**: Essential stable content first, detailed docs after
-- **MCP tool definitions**: Minimize tool churn — changing tools between sessions causes cache misses
+Cache-aware patterns: stable content at prompt prefix (variable content at end breaks cache); critical rules → frequent operations → edge cases (primacy effect); minimize MCP tool churn between sessions.
 
 ## Reviewing Existing Agents
 
