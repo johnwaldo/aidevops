@@ -227,7 +227,7 @@ _register_mcp_claude() {
 	# Check if already registered
 	local existing
 	existing=$(claude mcp list 2>/dev/null || echo "")
-	if echo "$existing" | grep -q "^${mcp_name}[[:space:]]" 2>/dev/null; then
+	if echo "$existing" | grep -q "^${mcp_name}:" 2>/dev/null; then
 		print_info "$mcp_name already registered in Claude Code — skipping"
 		return 0
 	fi
