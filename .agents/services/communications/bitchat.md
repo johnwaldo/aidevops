@@ -28,8 +28,6 @@ tools:
 - **Website**: [bitchat.free](https://bitchat.free/)
 - **Whitepaper**: [WHITEPAPER.md](https://github.com/permissionlesstech/bitchat/blob/main/WHITEPAPER.md)
 
-**Key differentiator**: Bitchat operates entirely without internet infrastructure. Devices form ad-hoc Bluetooth mesh networks, relaying messages across multiple hops. This makes it uniquely suited for protests, natural disasters, remote areas, or any scenario where internet connectivity is unavailable, monitored, or disabled.
-
 **When to use Bitchat vs other protocols**:
 
 | Criterion | Bitchat | SimpleX | Matrix | XMTP |
@@ -37,238 +35,101 @@ tools:
 | Internet required | No | Yes | Yes | Yes |
 | Transport | BLE mesh | SMP relays | Client-server | Decentralized nodes |
 | User identifiers | Fingerprint (pubkey hash) | None | `@user:server` | Wallet/DID |
-| Range | Physical proximity (~100m per hop, multi-hop relay) | Global | Global | Global |
-| Best for | Offline/local comms, censorship resistance | Maximum privacy | Team collaboration | Web3/agent messaging |
+| Range | ~100m/hop, multi-hop relay | Global | Global | Global |
+| Best for | Offline/local, censorship resistance | Max privacy | Team collab | Web3/agent messaging |
 
 <!-- AI-CONTEXT-END -->
 
 ## Architecture
 
-```text
-┌──────────────────────┐     ┌──────────────────────┐
-│ Device A              │     │ Device B              │
-│ (iOS/Android/macOS)   │     │ (iOS/Android/macOS)   │
-│                       │     │                       │
-│ ┌──────────────────┐  │     │  ┌──────────────────┐ │
-│ │ Application Layer│  │     │  │ Application Layer│ │
-│ │ BitchatMessage   │  │     │  │ BitchatMessage   │ │
-│ ├──────────────────┤  │     │  ├──────────────────┤ │
-│ │ Session Layer    │  │     │  │ Session Layer    │ │
-│ │ BitchatPacket    │  │     │  │ BitchatPacket    │ │
-│ ├──────────────────┤  │     │  ├──────────────────┤ │
-│ │ Encryption Layer │  │     │  │ Encryption Layer │ │
-│ │ Noise XX         │  │     │  │ Noise XX         │ │
-│ ├──────────────────┤  │     │  ├──────────────────┤ │
-│ │ Transport Layer  │  │     │  │ Transport Layer  │ │
-│ │ BLE              │  │     │  │ BLE              │ │
-│ └──────────────────┘  │     │  └──────────────────┘ │
-└──────────┬───────────┘     └──────────┬───────────┘
-           │                            │
-           │  Bluetooth Low Energy      │
-           │  (multi-hop mesh relay)    │
-           └────────────────────────────┘
-                       │
-              ┌────────▼────────┐
-              │ Device C (relay) │
-              │ Decrements TTL,  │
-              │ forwards packet  │
-              └─────────────────┘
-```
+Devices form ad-hoc BLE mesh networks with four layers: Application (`BitchatMessage`) → Session (`BitchatPacket`, compact binary) → Encryption (Noise XX) → Transport (BLE). Each device acts as both endpoint and relay — messages hop through intermediaries (TTL-decremented) to extend range. No central coordinator; the network forms and dissolves as devices move.
 
-**Message flow**:
-
-1. Sender composes message, serialized as `BitchatPacket` (compact binary format)
-2. Noise XX handshake establishes E2E encrypted session (if not already active)
-3. Packet encrypted with ChaCha20-Poly1305 via Noise transport cipher
-4. Packet padded to standard block size (256/512/1024/2048 bytes) to resist traffic analysis
-5. Transmitted over BLE to nearby peers
-6. Relay peers decrement TTL and forward to their neighbors (multi-hop)
-7. Recipient decrypts with their Noise session cipher
-8. Delivery acknowledgment sent back through the mesh
+**Message flow**: Sender serializes a `BitchatPacket` → Noise XX handshake (if needed) → encrypt with ChaCha20-Poly1305 → pad to block size (256/512/1024/2048 bytes, resists traffic analysis) → transmit over BLE → relay peers decrement TTL and forward → recipient decrypts → delivery ACK returns through mesh.
 
 ## Protocol
 
-### Noise Protocol
-
-Bitchat uses **Noise_XX_25519_ChaChaPoly_SHA256**:
-
-- **XX pattern**: Mutual authentication without prior key knowledge — ideal for ad-hoc P2P
-- **Curve25519**: Diffie-Hellman key exchange
-- **ChaCha20-Poly1305**: AEAD cipher for transport encryption
-- **SHA-256**: Cryptographic hashing
-
-The XX handshake is a 3-message exchange providing:
-
-- **Forward secrecy**: Compromise of long-term keys does not compromise past sessions
-- **Mutual authentication**: Both parties verify each other's identity
-- **Deniability**: Difficult to cryptographically prove a specific user sent a message
-
 ### Identity and Keys
 
-Each device generates two persistent key pairs on first launch, stored in the device Keychain:
+Each device generates two persistent key pairs on first launch (stored in device Keychain):
 
 | Key | Algorithm | Purpose |
 |-----|-----------|---------|
 | Noise static key | Curve25519 | Long-term identity for Noise handshake |
 | Signing key | Ed25519 | Signing announcements, binding pubkey to nickname |
 
-**Fingerprint**: `SHA256(StaticPublicKey_Curve25519)` — used for out-of-band identity verification (QR code, read aloud).
+**Fingerprint**: `SHA256(StaticPublicKey_Curve25519)` — used for out-of-band verification (QR code, read aloud).
 
 ### Packet Format
-
-Compact binary format minimizing bandwidth:
 
 | Field | Size | Description |
 |-------|------|-------------|
 | Version | 1 byte | Protocol version (currently `1`) |
 | Type | 1 byte | Message type (message, deliveryAck, handshake, etc.) |
-| TTL | 1 byte | Time-to-live for mesh routing, decremented per hop |
+| TTL | 1 byte | Mesh routing hop limit, decremented per hop |
 | Timestamp | 8 bytes | Millisecond timestamp |
 | Flags | 1 byte | Bitmask: hasRecipient, hasSignature, isCompressed |
 | Payload Length | 2 bytes | Length of payload |
 | Sender ID | 8 bytes | Truncated peer ID |
-| Recipient ID | 8 bytes (optional) | Truncated peer ID, or `0xFF..FF` for broadcast |
+| Recipient ID | 8 bytes (opt) | Truncated peer ID, or `0xFF..FF` for broadcast |
 | Payload | Variable | Message content |
-| Signature | 64 bytes (optional) | Ed25519 signature |
+| Signature | 64 bytes (opt) | Ed25519 signature |
 
 All packets padded to next block size (PKCS#7-style) to obscure true message length.
 
-### Social Trust Layer
+### Social Trust
 
-- **Peer verification**: Out-of-band fingerprint comparison, marked as "verified" locally
+- **Peer verification**: Out-of-band fingerprint comparison, marked "verified" locally
 - **Favorites**: Prioritize trusted/frequent contacts
 - **Blocking**: Discard packets from blocked fingerprints at earliest stage
 
 ## Installation
 
-### iOS / macOS
+| Platform | Store | Source |
+|----------|-------|--------|
+| iOS/macOS | [App Store](https://apps.apple.com/us/app/bitchat-mesh/id6748219622) | [bitchat](https://github.com/permissionlesstech/bitchat) (Xcode 15+, Swift) |
+| Android | [Play Store](https://play.google.com/store/apps/details?id=com.bitchat.droid) / [APK](https://github.com/permissionlesstech/bitchat-android/releases) | [bitchat-android](https://github.com/permissionlesstech/bitchat-android) (Gradle, API 26+) |
 
-**App Store**: [Bitchat Mesh](https://apps.apple.com/us/app/bitchat-mesh/id6748219622)
-
-**Build from source**:
-
-```bash
-git clone https://github.com/permissionlesstech/bitchat.git
-cd bitchat
-
-# Build with Xcode (requires Xcode 15+)
-# Open in Xcode or use xcodegen/SPM
-xcodebuild -scheme BitChat -destination 'platform=iOS Simulator'
-```
-
-Requires iOS 16.0+ or macOS 13.0+.
-
-### Android
-
-**Play Store**: [Bitchat](https://play.google.com/store/apps/details?id=com.bitchat.droid)
-
-**APK releases**: [GitHub Releases](https://github.com/permissionlesstech/bitchat-android/releases)
-
-**Build from source**:
-
-```bash
-git clone https://github.com/permissionlesstech/bitchat-android.git
-cd bitchat-android
-
-# Build with Gradle (requires Android SDK, API 26+)
-./gradlew assembleDebug
-```
-
-Requires Android 8.0+ (API 26). Full protocol compatibility with iOS version.
-
-## Usage
-
-### Basic Operation
-
-1. Install the app on two or more devices
-2. Enable Bluetooth on all devices
-3. Devices automatically discover peers via BLE advertising
-4. Tap a discovered peer to initiate Noise handshake
-5. Exchange messages — they relay through intermediate devices if needed
-
-### Mesh Networking
-
-- Each device acts as both client and relay
-- Messages hop through intermediate devices to extend range
-- TTL field prevents infinite relay loops
-- No central coordinator — fully ad-hoc topology
-- Network forms and dissolves as devices enter/leave proximity
-
-### Broadcast vs Direct
-
-- **Direct message**: Recipient ID set to target peer's truncated ID
-- **Broadcast**: Recipient ID set to `0xFF..FF`, delivered to all peers in range
+No desktop Linux/Windows client. No CLI or bot API (native app only).
 
 ## Limitations
 
-### Range
+- **Range**: ~100m/hop open air, less indoors. Multi-hop extends range but adds latency.
+- **Bandwidth**: BLE ~1 Mbps theoretical. Text messaging only — not file transfer. Padding reduces effective throughput.
+- **Availability**: Requires physical proximity. No store-and-forward for offline recipients.
+- **No programmatic API**: Unlike SimpleX or Matrix, no WebSocket/REST API. Integration requires a native bridge or upstream API support.
 
-BLE range is approximately 100 meters per hop in open air, significantly less indoors or in dense environments. Multi-hop relay extends effective range but adds latency.
-
-### Bandwidth
-
-BLE throughput is limited (~1 Mbps theoretical, lower in practice). Bitchat is designed for text messaging, not file transfer. Packet padding further reduces effective throughput.
-
-### Availability
-
-Communication requires physical proximity. Unlike internet-based protocols, messages cannot be delivered when the recipient is out of mesh range. There is no store-and-forward mechanism for offline recipients.
-
-### Platform
-
-- iOS/macOS: Swift, requires Xcode to build
-- Android: Kotlin/Java, requires Android SDK
-- No desktop Linux/Windows client currently
-- No CLI or bot API (native app only)
-
-### No Bot API
-
-Unlike SimpleX or Matrix, Bitchat has no WebSocket/REST API for programmatic access. Integration with aidevops would require building a native bridge or waiting for upstream API support.
-
-## Security Considerations
+## Security
 
 ### Threat Model
 
-Bitchat protects against:
-
-- **Internet surveillance**: No internet traffic to monitor
-- **Server compromise**: No servers exist
-- **Network censorship**: Cannot block Bluetooth mesh without physical jamming
-- **Traffic analysis**: Packet padding and uniform sizes resist analysis
-- **Identity correlation**: Fingerprints are pubkey hashes, no phone/email required
-
-Bitchat does **not** protect against:
-
-- **Physical proximity attacks**: Attacker within BLE range can observe encrypted traffic
-- **Device compromise**: Local Keychain contains all keys
-- **Bluetooth jamming**: Physical-layer denial of service
-- **Relay manipulation**: Malicious relay nodes can drop (but not read) packets
-- **Sybil attacks**: No cost to creating multiple identities in the mesh
+| Protects against | Does NOT protect against |
+|-----------------|--------------------------|
+| Internet surveillance (no internet traffic) | Physical proximity attacks (BLE range observation) |
+| Server compromise (no servers) | Device compromise (Keychain holds all keys) |
+| Network censorship (requires physical jamming) | Bluetooth jamming (physical-layer DoS) |
+| Traffic analysis (uniform padded packets) | Relay manipulation (can drop, not read, packets) |
+| Identity correlation (pubkey hashes, no phone/email) | Sybil attacks (no cost to create mesh identities) |
 
 ### Operational Security
 
 - Verify peer fingerprints out-of-band before trusting
 - Use blocking to silence unwanted peers
-- Be aware that BLE advertising reveals device presence to nearby observers
-- Bitchat does not hide the fact that you are running the app from nearby BLE scanners
+- BLE advertising reveals device presence to nearby scanners
 
 ## Integration with aidevops
 
-### Current Status
+**Status**: No programmatic API — native app only. Direct integration with aidevops runners is not currently possible.
 
-Bitchat has no programmatic API — it is a native mobile/desktop app only. Direct integration with aidevops runners is not currently possible.
+**Future possibilities**:
 
-### Future Possibilities
-
-- **Native bridge**: A macOS app could bridge Bitchat messages to a local WebSocket, similar to how SimpleX CLI exposes its bot API
-- **Matterbridge adapter**: If Bitchat adds a CLI or API, a Matterbridge adapter could bridge it to Matrix/SimpleX/etc.
-- **Offline dispatch**: For field scenarios, Bitchat could relay task results between devices when internet is unavailable
-
-### Use Cases for aidevops
+- **Native bridge**: macOS app bridging Bitchat to a local WebSocket (similar to SimpleX CLI bot API)
+- **Matterbridge adapter**: If Bitchat adds CLI/API, bridge to Matrix/SimpleX/etc.
+- **Offline dispatch**: Relay task results between devices when internet is unavailable
 
 | Scenario | Value |
 |----------|-------|
-| Field operations | Relay AI-generated reports between devices without internet |
-| Protest/disaster comms | Censorship-resistant messaging for coordination |
+| Field operations | Relay AI-generated reports without internet |
+| Protest/disaster comms | Censorship-resistant coordination |
 | Air-gapped environments | Communicate between devices in secure facilities |
 | Local mesh notifications | Alert nearby team members of deployment status |
 
