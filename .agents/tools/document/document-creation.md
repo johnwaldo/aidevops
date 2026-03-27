@@ -41,43 +41,46 @@ document-creation-helper.sh template draft --type letter --format odt
 
 ## Architecture
 
-This agent unifies document format operations into a single decision tree. It does
-not replace the specialist agents (MinerU for layout-aware PDF parsing, DocStrange
-for structured data extraction, LibPDF for PDF form filling) -- it routes to them
-when appropriate and handles everything else.
+Unifies document format operations into a single decision tree. Routes to specialist agents (MinerU, DocStrange, LibPDF) when appropriate; handles everything else.
 
 ```text
-Input (any format)
-     |
-  [Detect format]
-     |
-  [Select tool] -- preferred tool for this format pair
-     |            \-- fallback if preferred unavailable or fails
-  [Convert / Create]
-     |
-  [Validate output] -- file exists, non-empty, format-valid
-     |
-  Output (target format)
+Input → [Detect format] → [Select tool (preferred → fallback)] → [Convert/Create] → [Validate] → Output
+```
+
+## Decision Tree
+
+```text
+1. Convert format A → B?
+   ├── Structured data extraction? → document-extraction.md / docstrange.md
+   ├── PDF form filling/signing? → tools/pdf/overview.md (LibPDF)
+   ├── PDF with complex layout → markdown? → tools/conversion/mineru.md
+   ├── Scanned PDF/image with text? → OCR pipeline (auto-detect provider)
+   └── Otherwise: use tool selection matrix below
+2. Create document from template?
+   ├── Template supplied → replace placeholders, save
+   ├── No template → offer to generate draft template
+   └── Complex/data-driven → odfpy/python-docx programmatically
+3. Generate draft template?
+   └── Collect format, fields, header/footer, logo → generate with odfpy/python-docx
 ```
 
 ## Tool Selection Matrix
 
-Each format pair has a preferred tool and fallback. The helper script checks
-availability at runtime and selects automatically.
+Each format pair has a preferred tool and fallback. The helper checks availability at runtime.
 
 ### Text/Document Formats
 
 | From | To | Preferred | Fallback | Notes |
 |------|----|-----------|----------|-------|
-| MD | ODT | pandoc | odfpy (programmatic) | pandoc preserves headings, lists, images |
+| MD | ODT | pandoc | odfpy (programmatic) | Preserves headings, lists, images |
 | MD | DOCX | pandoc | -- | Excellent quality |
-| MD | PDF | pandoc + LaTeX | pandoc + wkhtmltopdf, LibreOffice | Needs LaTeX or wkhtmltopdf for PDF engine |
+| MD | PDF | pandoc + LaTeX | pandoc + wkhtmltopdf, LibreOffice | Needs LaTeX or wkhtmltopdf |
 | MD | HTML | pandoc | -- | Native strength |
 | MD | EPUB | pandoc | -- | Native strength |
 | MD | PPTX | pandoc | -- | Slide-per-heading |
 | ODT | MD | pandoc | odfpy (extract XML) | Good quality |
-| ODT | DOCX | pandoc | LibreOffice headless | pandoc is lossless for text; LO better for complex layout |
-| ODT | PDF | LibreOffice headless | pandoc + LaTeX | LO preserves headers/footers/images faithfully |
+| ODT | DOCX | pandoc | LibreOffice headless | pandoc lossless for text; LO better for complex layout |
+| ODT | PDF | LibreOffice headless | pandoc + LaTeX | LO preserves headers/footers/images |
 | ODT | HTML | pandoc | LibreOffice headless | |
 | DOCX | MD | pandoc | -- | Excellent quality |
 | DOCX | ODT | pandoc | LibreOffice headless | |
@@ -85,7 +88,7 @@ availability at runtime and selects automatically.
 | DOCX | HTML | pandoc | -- | |
 | RTF | MD | pandoc | -- | |
 | RTF | ODT | pandoc | LibreOffice headless | |
-| HTML | MD | Reader-LM (Ollama) | pandoc | Reader-LM preserves tables better than pandoc |
+| HTML | MD | Reader-LM (Ollama) | pandoc | Reader-LM preserves tables better |
 | HTML | ODT | pandoc | LibreOffice headless | |
 | HTML | DOCX | pandoc | -- | |
 | HTML | PDF | pandoc | wkhtmltopdf, LibreOffice | |
@@ -94,10 +97,10 @@ availability at runtime and selects automatically.
 
 | From | To | Preferred | Fallback | Notes |
 |------|----|-----------|----------|-------|
-| EML | MD | email-to-markdown.py | -- | Parses MIME structure, converts HTML body to markdown, extracts attachments |
-| MSG | MD | email-to-markdown.py | -- | Uses extract-msg library, converts HTML body to markdown, extracts attachments |
+| EML | MD | email-to-markdown.py | -- | Parses MIME, converts HTML body, extracts attachments |
+| MSG | MD | email-to-markdown.py | -- | Uses extract-msg, converts HTML body, extracts attachments |
 
-**Email conversion**: Parses MIME/MSG structure, converts HTML body to markdown, extracts attachments to `{filename}_attachments/`, preserves metadata (From, To, Subject, Date) in frontmatter. Dependencies: Python stdlib for `.eml`; `extract-msg` (auto-installed) for `.msg`.
+Email conversion parses MIME/MSG structure, converts HTML body to markdown, extracts attachments to `{filename}_attachments/`, preserves metadata (From, To, Subject, Date) in frontmatter. Dependencies: Python stdlib for `.eml`; `extract-msg` (auto-installed) for `.msg`.
 
 **Thread reconstruction** (t1054.8):
 
@@ -107,9 +110,9 @@ email-batch-convert-helper.sh convert ./emails    # convert only
 email-batch-convert-helper.sh threads ./emails    # reconstruct only
 ```
 
-Thread metadata added to frontmatter: `thread_id`, `thread_position`, `thread_length`. Output includes `thread-index.md` listing all emails grouped by thread with reply hierarchy.
+Thread metadata in frontmatter: `thread_id`, `thread_position`, `thread_length`. Output includes `thread-index.md` listing all emails grouped by thread with reply hierarchy.
 
-### PDF Extraction (PDF as source)
+### PDF Extraction
 
 | From | To | Preferred | Fallback | Notes |
 |------|----|-----------|----------|-------|
@@ -144,20 +147,11 @@ Thread metadata added to frontmatter: `thread_id`, `thread_position`, `thread_le
 
 ## Tool Reference
 
-### Tier 1: Minimal (pandoc + poppler)
+**Tier 1 — Minimal** (pandoc + poppler): pandoc reads/writes md, docx, odt, html, epub, rst, latex, pptx, xlsx, csv, tsv, rtf. poppler provides pdftotext, pdfimages, pdfinfo, pdftohtml.
 
-- **pandoc**: Reads/writes md, docx, odt, html, epub, rst, latex, pptx, xlsx, csv, tsv, rtf
-- **poppler** (pdftotext, pdfimages, pdfinfo, pdftohtml): PDF text/image extraction, metadata
+**Tier 2 — Standard** (+ Python): odfpy (ODT/ODS/ODP), python-docx (DOCX), openpyxl (XLSX).
 
-### Tier 2: Standard (+ Python libraries)
-
-- **odfpy**: Create/edit ODT, ODS, ODP programmatically
-- **python-docx**: Create/edit DOCX programmatically
-- **openpyxl**: Create/edit XLSX programmatically
-
-### Tier 3: Full (+ LibreOffice headless)
-
-- **LibreOffice headless**: `soffice --headless --convert-to <format> <input>`. Highest fidelity for office format conversions.
+**Tier 3 — Full** (+ LibreOffice headless): `soffice --headless --convert-to <format> <input>`. Highest fidelity for office format conversions.
 
 ### Specialist Tools (routed to, not owned)
 
@@ -172,14 +166,12 @@ Thread metadata added to frontmatter: `thread_id`, `thread_position`, `thread_le
 
 | Provider | Model | Install | Best For |
 |----------|-------|---------|----------|
-| Reader-LM | Jina, 1.5B | `ollama pull reader-lm` | HTML to markdown with table preservation |
-| RolmOCR | Reducto, 7B | vLLM server with RolmOCR model | PDF page images to markdown with table preservation (GPU-accelerated) |
+| Reader-LM | Jina, 1.5B | `ollama pull reader-lm` | HTML→markdown with table preservation |
+| RolmOCR | Reducto, 7B | vLLM server with RolmOCR model | PDF page images→markdown (GPU-accelerated) |
 
 ## Document Creation from Templates
 
-**Placeholder syntax**: `{{field_name}}`
-
-**Template storage**: `~/.aidevops/.agent-workspace/templates/` (documents/, spreadsheets/, presentations/)
+**Placeholder syntax**: `{{field_name}}` | **Storage**: `~/.aidevops/.agent-workspace/templates/` (documents/, spreadsheets/, presentations/)
 
 ```bash
 # From template with JSON data
@@ -202,25 +194,42 @@ document-creation-helper.sh create --script generate-report.py \
 
 Use programmatic creation (odfpy/python-docx) when: document structure is data-driven, no visual template exists, or batch generation with different structures.
 
+## OCR Support
+
+**Auto-detection**: `pdftotext` returns empty or `pdffonts` shows no embedded fonts → trigger OCR.
+
+| Provider | Install | Speed | Quality | Best For |
+|----------|---------|-------|---------|----------|
+| Tesseract | `brew install tesseract` | Fast | Good (printed text) | Batch processing, simple documents |
+| EasyOCR | `pip install easyocr` | Medium | Good (80+ languages) | Multi-language documents |
+| GLM-OCR | `ollama pull glm-ocr` | Slow | Very good | Privacy-sensitive, complex layouts |
+| Vision LLM | API key required | Medium | Excellent | Photos, receipts, handwriting |
+
+**Selection order** (auto mode): Tesseract → EasyOCR → GLM-OCR → Vision LLM
+
+For screenshot/image input: keep as image, extract text (OCR), or both (image + text caption).
+
+**Related OCR agents**: `tools/ocr/glm-ocr.md`, `tools/ocr/ocr-research.md`, `tools/document/document-extraction.md`, `tools/conversion/mineru.md`
+
 ## Installation
 
 ```bash
 # macOS
-brew install pandoc poppler                                           # Tier 1
-brew install --cask libreoffice                                       # Tier 3
+brew install pandoc poppler                        # Tier 1
+brew install --cask libreoffice                    # Tier 3
 
 # Ubuntu/Debian
-sudo apt install pandoc poppler-utils                                 # Tier 1
+sudo apt install pandoc poppler-utils              # Tier 1
 sudo apt install libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress  # Tier 3
 
-# Tier 2 (Python venv at ~/.aidevops/.agent-workspace/python-env/document-creation/)
+# Tier 2 (Python venv)
 python3 -m venv ~/.aidevops/.agent-workspace/python-env/document-creation
 source ~/.aidevops/.agent-workspace/python-env/document-creation/bin/activate
 pip install odfpy python-docx openpyxl
 
 # Via helper (handles venv automatically)
 document-creation-helper.sh install --tool easyocr
-ollama pull glm-ocr                                                   # GLM-OCR
+ollama pull glm-ocr
 ```
 
 ## Usage Examples
@@ -244,60 +253,20 @@ document-creation-helper.sh convert scanned.pdf --to odt --ocr tesseract
 document-creation-helper.sh convert screenshot.png --to md --ocr auto
 ```
 
-## Decision Tree
-
-```text
-1. What is the task?
-   |
-    +-- Convert format A to format B
-    |   |
-    |   +-- Structured data extraction? → document-extraction.md or docstrange.md
-    |   +-- PDF form filling or signing? → tools/pdf/overview.md (LibPDF)
-    |   +-- PDF with complex layout to markdown? → tools/conversion/mineru.md
-    |   +-- Scanned PDF or image with text? → OCR pipeline (auto-detect provider)
-    |   +-- Otherwise: use tool selection matrix above
-    |
-    +-- Create document from template
-    |   +-- Template supplied? → replace placeholders, save
-    |   +-- No template? → offer to generate draft template
-    |   +-- Complex/data-driven? → odfpy/python-docx programmatically
-    |
-    +-- Generate draft template
-        +-- Collect: format, fields, header/footer, logo
-        +-- Generate with odfpy/python-docx → user refines in editor
-```
-
-## OCR Support
-
-**Auto-detection**: `pdftotext` returns empty → pages are images; `pdffonts` shows no embedded fonts → trigger OCR.
-
-| Provider | Install | Speed | Quality | Best For |
-|----------|---------|-------|---------|----------|
-| Tesseract | `brew install tesseract` | Fast | Good (printed text) | Batch processing, simple documents |
-| EasyOCR | `pip install easyocr` | Medium | Good (80+ languages) | Multi-language documents |
-| GLM-OCR | `ollama pull glm-ocr` | Slow | Very good | Privacy-sensitive, complex layouts |
-| Vision LLM | API key required | Medium | Excellent | Photos, receipts, handwriting |
-
-**Selection order** (auto mode): Tesseract → EasyOCR → GLM-OCR → Vision LLM
-
-For screenshot/image input, options: keep as image, extract text (OCR), or both (image + text caption).
-
-**Related OCR agents**: `tools/ocr/glm-ocr.md`, `tools/ocr/ocr-research.md`, `tools/document/document-extraction.md`, `tools/conversion/mineru.md`
-
 ## Limitations
 
-- **PDF to editable formats**: inherently lossy — text/images transfer well, exact positioning does not
-- **Spreadsheet formulas**: may not survive format conversion; values preserved, formulas need verification
+- **PDF → editable formats**: inherently lossy — text/images transfer well, exact positioning does not
+- **Spreadsheet formulas**: may not survive conversion; values preserved, formulas need verification
 - **Presentation animations/transitions**: lost in most conversions
-- **Embedded fonts**: may not transfer; output uses fallback fonts if original unavailable
+- **Embedded fonts**: may not transfer; output uses fallback fonts
 - **LibreOffice headless**: highest fidelity but large install (~500MB); pandoc used as fallback
 
 ## Related
 
-- `tools/conversion/pandoc.md` - Pandoc details and advanced options
-- `tools/conversion/mineru.md` - PDF to markdown (layout-aware, OCR)
-- `tools/document/docstrange.md` - Structured data extraction
-- `tools/document/document-extraction.md` - Docling+ExtractThinker+Presidio pipeline
-- `tools/document/extraction-workflow.md` - Extraction tool selection guide
-- `tools/pdf/overview.md` - PDF manipulation (form filling, signing)
-- `scripts/document-creation-helper.sh` - CLI helper
+- `tools/conversion/pandoc.md` — Pandoc details and advanced options
+- `tools/conversion/mineru.md` — PDF to markdown (layout-aware, OCR)
+- `tools/document/docstrange.md` — Structured data extraction
+- `tools/document/document-extraction.md` — Docling+ExtractThinker+Presidio pipeline
+- `tools/document/extraction-workflow.md` — Extraction tool selection guide
+- `tools/pdf/overview.md` — PDF manipulation (form filling, signing)
+- `scripts/document-creation-helper.sh` — CLI helper
