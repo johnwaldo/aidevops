@@ -86,7 +86,10 @@ _brew_pkg_upgrade_cmd() {
 	local sys_pkg="${2:-$1}"
 	# Emit a self-contained shell snippet that detects the package manager at
 	# update time (not at script load time) so the string stays portable.
-	printf 'if command -v brew >/dev/null 2>&1; then brew upgrade %s; elif command -v apt-get >/dev/null 2>&1; then sudo apt-get install -y --only-upgrade %s; elif command -v dnf >/dev/null 2>&1; then sudo dnf upgrade -y %s; else echo "No supported package manager found (brew/apt-get/dnf)" >&2; exit 1; fi' \
+	# sudo -n is used for apt/dnf paths: if sudo requires a password (non-TTY
+	# or container context), we emit a clear message instead of hanging on a
+	# password prompt or burning the 120s update timeout.
+	printf 'if command -v brew >/dev/null 2>&1; then brew upgrade %s; elif command -v apt-get >/dev/null 2>&1; then if sudo -n true 2>/dev/null; then sudo apt-get install -y --only-upgrade %s; else echo "sudo requires a password — rerun with elevated privileges or as root" >&2; exit 1; fi; elif command -v dnf >/dev/null 2>&1; then if sudo -n true 2>/dev/null; then sudo dnf upgrade -y %s; else echo "sudo requires a password — rerun with elevated privileges or as root" >&2; exit 1; fi; else echo "No supported package manager found (brew/apt-get/dnf)" >&2; exit 1; fi' \
 		"$brew_pkg" "$sys_pkg" "$sys_pkg"
 }
 
@@ -121,9 +124,9 @@ BREW_TOOLS=(
 )
 
 PIP_TOOLS=(
-	"pip|Beads Viewer|beads_viewer|--version|beads-viewer|pip install --user --upgrade beads-viewer"
-	"pip|DSPy|dspy|--version|dspy-ai|pip install --user --upgrade dspy-ai"
-	"pip|Crawl4AI|crawl4ai|--version|crawl4ai|pip install --user --upgrade crawl4ai"
+	"pip|Beads Viewer|beads_viewer|--version|beads-viewer|if command -v pipx >/dev/null 2>&1; then pipx install beads-viewer --force; elif command -v uv >/dev/null 2>&1; then uv tool install beads-viewer --force; else echo 'Install pipx or uv to upgrade beads-viewer on externally-managed Python' >&2; exit 1; fi"
+	"pip|DSPy|dspy|--version|dspy-ai|if command -v pipx >/dev/null 2>&1; then pipx install dspy-ai --force; elif command -v uv >/dev/null 2>&1; then uv tool install dspy-ai --force; else echo 'Install pipx or uv to upgrade dspy-ai on externally-managed Python' >&2; exit 1; fi"
+	"pip|Crawl4AI|crawl4ai|--version|crawl4ai|if command -v pipx >/dev/null 2>&1; then pipx install crawl4ai --force; elif command -v uv >/dev/null 2>&1; then uv tool install crawl4ai --force; else echo 'Install pipx or uv to upgrade crawl4ai on externally-managed Python' >&2; exit 1; fi"
 	"pip|Analytics MCP|analytics-mcp|--version|analytics-mcp|pipx upgrade analytics-mcp"
 	"pip|Outscraper MCP|outscraper-mcp-server|--version|outscraper-mcp-server|uv tool upgrade outscraper-mcp-server"
 )
@@ -292,17 +295,40 @@ get_npm_latest() {
 	return 0
 }
 
-# Get latest brew version
+# Map brew formula names to GitHub owner/repo for non-brew latest-version lookup.
+# Returns empty string if no mapping is known.
+_brew_pkg_github_repo() {
+	local pkg="$1"
+	case "$pkg" in
+	gh) echo "cli/cli" ;;
+	glab) echo "gitlab-org/cli" ;;
+	max-sixty/worktrunk/wt) echo "max-sixty/worktrunk" ;;
+	jq) echo "jqlang/jq" ;;
+	shellcheck) echo "koalaman/shellcheck" ;;
+	*) echo "" ;;
+	esac
+	return 0
+}
+
+# Get latest brew version.
+# On brew hosts: query brew info (works for all formulae including taps).
+# On non-brew hosts: fall back to GitHub Releases API for known packages.
+# Returns "unknown" if neither path resolves a version.
 get_brew_latest() {
 	local pkg="$1"
 	local brew_bin=""
 	brew_bin=$(command -v brew 2>/dev/null || true)
 	if [[ -n "$brew_bin" && -x "$brew_bin" ]]; then
 		timeout_sec "$PKG_QUERY_TIMEOUT" "$brew_bin" info "$pkg" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown"
-	elif [[ "$pkg" == "gh" ]]; then
-		get_public_release_tag "cli/cli"
 	else
-		echo "unknown"
+		# Non-brew host: resolve via GitHub Releases API for known packages.
+		local gh_repo
+		gh_repo=$(_brew_pkg_github_repo "$pkg")
+		if [[ -n "$gh_repo" ]]; then
+			get_public_release_tag "$gh_repo"
+		else
+			echo "unknown"
+		fi
 	fi
 	return 0
 }
@@ -467,7 +493,10 @@ _check_all_categories() {
 		if [[ ${#NPM_TOOLS[@]} -gt 0 ]]; then
 			check_category "NPM" "${NPM_TOOLS[@]}"
 		fi
-		if command -v brew &>/dev/null && [[ ${#BREW_TOOLS[@]} -gt 0 ]]; then
+		# Run brew-category tools on all platforms: brew hosts use brew upgrade,
+		# apt/dnf hosts use the distro-aware commands in _brew_pkg_upgrade_cmd,
+		# and get_brew_latest falls back to GitHub Releases API on non-brew hosts.
+		if [[ ${#BREW_TOOLS[@]} -gt 0 ]]; then
 			check_category "Homebrew" "${BREW_TOOLS[@]}"
 		fi
 		if command -v pip &>/dev/null && [[ ${#PIP_TOOLS[@]} -gt 0 ]]; then
