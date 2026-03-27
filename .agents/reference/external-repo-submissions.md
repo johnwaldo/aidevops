@@ -51,4 +51,4 @@ If a submission is auto-closed by a compliance bot, read the bot's comment for f
 
 ## Practical Examples
 
-Template mapping and worked examples: `tools/git/github-cli.md` "External Repo Submissions" section.
+Template mapping and worked examples: `../tools/git/github-cli.md` "External Repo Submissions" section.
