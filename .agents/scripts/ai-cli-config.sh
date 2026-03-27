@@ -19,6 +19,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/shared-constants.sh"
 #   outer_key  - top-level key whose value is an object (e.g. "mcp", "mcpServers")
 #   inner_key  - key within outer_key to set (e.g. "openapi-search")
 #   value_json - valid JSON string to assign (e.g. '{"type":"http","url":"https://..."}')
+#
+# Behaviour: if the key already exists and the value is identical, skips (idempotent).
+# If the key exists but the value differs (e.g. package name or transport changed),
+# overwrites with the new value so stale configs are fixed on aidevops update.
 json_set_nested() {
 	local file="$1"
 	local outer_key="$2"
@@ -47,10 +51,20 @@ except (FileNotFoundError, json.JSONDecodeError):
 if outer_key not in config or not isinstance(config[outer_key], dict):
     config[outer_key] = {}
 
+desired = json.loads(value_json)
+
 if inner_key in config[outer_key]:
-    print(f"{inner_key} already configured in {file_path} - skipping")
+    if config[outer_key][inner_key] == desired:
+        print(f"{inner_key} already up-to-date in {file_path} - skipping")
+        sys.exit(0)
+    # Value differs (e.g. package name or transport changed) — overwrite
+    config[outer_key][inner_key] = desired
+    with open(file_path, 'w') as f:
+        json.dump(config, f, indent=2)
+        f.write('\n')
+    print(f"Updated {inner_key} in {file_path} (value changed)")
 else:
-    config[outer_key][inner_key] = json.loads(value_json)
+    config[outer_key][inner_key] = desired
     with open(file_path, 'w') as f:
         json.dump(config, f, indent=2)
         f.write('\n')
