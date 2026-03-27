@@ -402,6 +402,72 @@ check_skill_updates() {
 	return 0
 }
 
+# Install cisco-ai-skill-scanner using the best available method.
+# Fallback chain: uv -> pipx -> venv+symlink -> pip3 --user (legacy).
+# PEP 668 (Ubuntu 24.04+) blocks pip3 --user, so isolated methods are tried first.
+# Returns 0 on success, 1 if all methods fail.
+_install_skill_scanner() {
+	# Verify Python >= 3.10 is available (or install it via uv)
+	if ! check_python_for_skill_scanner; then
+		print_warning "Skipping Cisco Skill Scanner install (Python >= 3.10 required)"
+		return 1
+	fi
+
+	local installed=false
+
+	# 1. uv tool install (preferred - fast, isolated, manages its own Python)
+	if [[ "$installed" == "false" ]] && command -v uv &>/dev/null && uv tool --help &>/dev/null; then
+		print_info "Installing Cisco Skill Scanner via uv..."
+		if run_with_spinner "Installing cisco-ai-skill-scanner" uv tool install cisco-ai-skill-scanner; then
+			print_success "Cisco Skill Scanner installed via uv"
+			installed=true
+		fi
+	fi
+
+	# 2. pipx install (designed for isolated app installs)
+	if [[ "$installed" == "false" ]] && command -v pipx &>/dev/null; then
+		print_info "Installing Cisco Skill Scanner via pipx..."
+		if run_with_spinner "Installing cisco-ai-skill-scanner" pipx install cisco-ai-skill-scanner; then
+			print_success "Cisco Skill Scanner installed via pipx"
+			installed=true
+		fi
+	fi
+
+	# 3. venv + symlink (works on PEP 668 systems without uv/pipx)
+	if [[ "$installed" == "false" ]] && command -v python3 &>/dev/null; then
+		local venv_dir="$HOME/.aidevops/.agent-workspace/work/cisco-scanner-env"
+		local bin_dir="$HOME/.local/bin"
+		print_info "Installing Cisco Skill Scanner in isolated venv..."
+		if python3 -m venv "$venv_dir" 2>/dev/null &&
+			"$venv_dir/bin/pip" install cisco-ai-skill-scanner 2>/dev/null; then
+			mkdir -p "$bin_dir"
+			ln -sf "$venv_dir/bin/skill-scanner" "$bin_dir/skill-scanner"
+			print_success "Cisco Skill Scanner installed via venv ($venv_dir)"
+			installed=true
+		else
+			rm -rf "$venv_dir" 2>/dev/null || true
+		fi
+	fi
+
+	# 4. pip3 --user (legacy fallback, fails on PEP 668 systems)
+	if [[ "$installed" == "false" ]] && command -v pip3 &>/dev/null; then
+		print_info "Installing Cisco Skill Scanner via pip3 --user..."
+		if run_with_spinner "Installing cisco-ai-skill-scanner" pip3 install --user cisco-ai-skill-scanner 2>/dev/null; then
+			print_success "Cisco Skill Scanner installed via pip3"
+			installed=true
+		fi
+	fi
+
+	if [[ "$installed" == "false" ]]; then
+		print_warning "Failed to install Cisco Skill Scanner - skipping security scan"
+		print_info "Install manually with: uv tool install cisco-ai-skill-scanner"
+		print_info "Or: pipx install cisco-ai-skill-scanner"
+		return 1
+	fi
+
+	return 0
+}
+
 scan_imported_skills() {
 	# Check prerequisites before announcing setup (GH#5240)
 	local security_helper="$HOME/.aidevops/agents/scripts/security-helper.sh"
@@ -416,65 +482,8 @@ scan_imported_skills() {
 	print_info "Running security scan on imported skills..."
 
 	# Install skill-scanner if not present
-	# Pre-check: cisco-ai-skill-scanner requires Python >= 3.10
-	# Fallback chain: uv -> pipx -> venv+symlink -> pip3 --user (legacy)
-	# PEP 668 (Ubuntu 24.04+) blocks pip3 --user, so we try isolated methods first
 	if ! command -v skill-scanner &>/dev/null; then
-		# Verify Python >= 3.10 is available (or install it via uv)
-		if ! check_python_for_skill_scanner; then
-			print_warning "Skipping Cisco Skill Scanner install (Python >= 3.10 required)"
-			return 0
-		fi
-
-		local installed=false
-
-		# 1. uv tool install (preferred - fast, isolated, manages its own Python)
-		if [[ "$installed" == "false" ]] && command -v uv &>/dev/null && uv tool --help &>/dev/null; then
-			print_info "Installing Cisco Skill Scanner via uv..."
-			if run_with_spinner "Installing cisco-ai-skill-scanner" uv tool install cisco-ai-skill-scanner; then
-				print_success "Cisco Skill Scanner installed via uv"
-				installed=true
-			fi
-		fi
-
-		# 2. pipx install (designed for isolated app installs)
-		if [[ "$installed" == "false" ]] && command -v pipx &>/dev/null; then
-			print_info "Installing Cisco Skill Scanner via pipx..."
-			if run_with_spinner "Installing cisco-ai-skill-scanner" pipx install cisco-ai-skill-scanner; then
-				print_success "Cisco Skill Scanner installed via pipx"
-				installed=true
-			fi
-		fi
-
-		# 3. venv + symlink (works on PEP 668 systems without uv/pipx)
-		if [[ "$installed" == "false" ]] && command -v python3 &>/dev/null; then
-			local venv_dir="$HOME/.aidevops/.agent-workspace/work/cisco-scanner-env"
-			local bin_dir="$HOME/.local/bin"
-			print_info "Installing Cisco Skill Scanner in isolated venv..."
-			if python3 -m venv "$venv_dir" 2>/dev/null &&
-				"$venv_dir/bin/pip" install cisco-ai-skill-scanner 2>/dev/null; then
-				mkdir -p "$bin_dir"
-				ln -sf "$venv_dir/bin/skill-scanner" "$bin_dir/skill-scanner"
-				print_success "Cisco Skill Scanner installed via venv ($venv_dir)"
-				installed=true
-			else
-				rm -rf "$venv_dir" 2>/dev/null || true
-			fi
-		fi
-
-		# 4. pip3 --user (legacy fallback, fails on PEP 668 systems)
-		if [[ "$installed" == "false" ]] && command -v pip3 &>/dev/null; then
-			print_info "Installing Cisco Skill Scanner via pip3 --user..."
-			if run_with_spinner "Installing cisco-ai-skill-scanner" pip3 install --user cisco-ai-skill-scanner 2>/dev/null; then
-				print_success "Cisco Skill Scanner installed via pip3"
-				installed=true
-			fi
-		fi
-
-		if [[ "$installed" == "false" ]]; then
-			print_warning "Failed to install Cisco Skill Scanner - skipping security scan"
-			print_info "Install manually with: uv tool install cisco-ai-skill-scanner"
-			print_info "Or: pipx install cisco-ai-skill-scanner"
+		if ! _install_skill_scanner; then
 			return 0
 		fi
 	fi
