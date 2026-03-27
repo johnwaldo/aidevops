@@ -124,11 +124,14 @@ cmd_zshrc() {
 
 # Tabby profile autorun - launches command after shell is fully interactive
 # This allows TUI apps (opencode) to work with Tabby's custom colour schemes
-if [[ -n "$TABBY_AUTORUN" ]]; then
-  local cmd="$TABBY_AUTORUN"
-  unset TABBY_AUTORUN
-  eval "$cmd"
-fi
+_tabby_autorun() {
+  if [[ -n "${TABBY_AUTORUN:-}" ]]; then
+    local cmd="$TABBY_AUTORUN"
+    unset TABBY_AUTORUN
+    eval "$cmd"
+  fi
+}
+_tabby_autorun
 ZSHRC_BLOCK
 
 	_success "Added TABBY_AUTORUN hook to .zshrc"

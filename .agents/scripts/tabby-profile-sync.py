@@ -376,24 +376,38 @@ def extract_existing_cwds(config_text: str) -> set[str]:
 
 def extract_group_id(config_text: str) -> str | None:
     """Find the 'Projects' group ID, or return None."""
-    # Look for groups section
+    # Look for groups section — capture all indented content after "groups:"
     groups_match = re.search(
-        r"^groups:\s*\n((?:\s+-\s+.*\n)*)", config_text, re.MULTILINE
+        r"^groups:\s*\n((?:[ \t]+.*\n)*)", config_text, re.MULTILINE
     )
     if not groups_match:
         return None
 
-    # Find a group named "Projects"
+    # Parse group entries by accumulating blocks (each starts with "  - ")
     group_block = groups_match.group(1)
-    # Parse group entries
-    current_id = None
+    blocks: list[dict[str, str]] = []
+    current: dict[str, str] = {}
     for line in group_block.split("\n"):
-        id_match = re.match(r"\s+-?\s*id:\s+(.+)", line)
-        if id_match:
-            current_id = id_match.group(1).strip()
-        name_match = re.match(r"\s+name:\s+(.+)", line)
-        if name_match and name_match.group(1).strip().strip("'\"") == "Projects":
-            return current_id
+        if not line.strip():
+            continue
+        # New group entry starts with "  - " (list item)
+        if re.match(r"\s+-\s+", line):
+            if current:
+                blocks.append(current)
+            current = {}
+            # The first field may be on the same line as "-"
+            line = re.sub(r"^\s+-\s+", "  ", line)
+        # Extract key: value pairs
+        kv_match = re.match(r"\s+(\w+):\s+(.+)", line)
+        if kv_match:
+            current[kv_match.group(1)] = kv_match.group(2).strip().strip("'\"")
+    if current:
+        blocks.append(current)
+
+    # Find the "Projects" group
+    for block in blocks:
+        if block.get("name") == "Projects" and "id" in block:
+            return block["id"]
     return None
 
 
@@ -556,12 +570,13 @@ def main():
         return
 
     # Insert new profiles into the profiles section
-    # Find where profiles section ends by looking for next top-level key
     lines = config_text.split("\n")
+    has_profiles_key = False
     in_profiles = False
     insert_line = None
     for i, line in enumerate(lines):
         if re.match(r"^profiles:", line):
+            has_profiles_key = True
             in_profiles = True
             continue
         if in_profiles and re.match(r"^[a-zA-Z]", line):
@@ -569,15 +584,25 @@ def main():
             insert_line = i
             break
 
-    if insert_line is None:
-        # Profiles section goes to end of file — insert before EOF
-        insert_line = len(lines)
-
     # Build the new profiles block
     new_block = "\n".join(p[1] for p in new_profiles)
 
-    # Insert
-    lines.insert(insert_line, new_block)
+    if not has_profiles_key:
+        # No profiles section exists — create one at the top of the file
+        # (after version: line if present, otherwise at the very top)
+        version_line = None
+        for i, line in enumerate(lines):
+            if re.match(r"^version:", line):
+                version_line = i
+                break
+        insert_at = (version_line + 1) if version_line is not None else 0
+        lines.insert(insert_at, f"profiles:\n{new_block}")
+    else:
+        if insert_line is None:
+            # Profiles section goes to end of file — insert before EOF
+            insert_line = len(lines)
+        lines.insert(insert_line, new_block)
+
     config_text = "\n".join(lines)
 
     # Save

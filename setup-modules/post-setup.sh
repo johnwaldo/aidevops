@@ -163,23 +163,27 @@ setup_tabby() {
 	print_info "Tabby terminal detected"
 
 	# Install zshrc hook (idempotent)
-	bash "$tabby_helper" zshrc 2>/dev/null || true
+	if ! bash "$tabby_helper" zshrc; then
+		print_warning "Failed to install Tabby zshrc hook — run manually: aidevops tabby zshrc"
+	fi
 
 	if [[ "$NON_INTERACTIVE" == "true" ]]; then
-		# Non-interactive: sync silently
-		bash "$tabby_helper" sync 2>/dev/null || true
+		# Non-interactive: sync silently, warn on failure
+		if ! bash "$tabby_helper" sync; then
+			print_warning "Tabby profile sync failed — run manually: aidevops tabby sync"
+		fi
 		return 0
 	fi
 
 	# Show status and offer to sync
 	echo ""
-	bash "$tabby_helper" status 2>/dev/null || true
+	bash "$tabby_helper" status || true
 	echo ""
 	read -r -p "Sync Tabby profiles from repos.json? [Y/n]: " sync_tabby
 	if [[ "$sync_tabby" =~ ^[Yy]?$ ]]; then
 		bash "$tabby_helper" sync
 	else
-		print_info "Skipped. Run later: tabby-helper.sh sync"
+		print_info "Skipped. Run later: aidevops tabby sync"
 	fi
 
 	return 0
