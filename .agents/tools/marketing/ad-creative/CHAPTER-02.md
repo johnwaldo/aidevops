@@ -1,323 +1,140 @@
 # Chapter 2: AI-Powered Creative Production
 
-## Section 1: AI Image Generation for Advertising
-
-### Platforms
+## AI Image Generation
 
 | Platform | Strength | Best for |
 |----------|----------|----------|
-| **Midjourney** | Artistic quality, aesthetic appeal | Concept art, hero images, backgrounds, abstract metaphors. V6: improved text rendering, photorealism |
-| **DALL-E 3** | Prompt adherence, ChatGPT integration | Marketing materials with text, editorial illustrations, social media, product concepts |
-| **Stable Diffusion** | Control, customization (open source) | High-volume generation, custom brand-trained models, proprietary pipelines. Key: ControlNet, inpainting, outpainting, img2img, model merging |
-| **Adobe Firefly** | Commercial safety, Adobe ecosystem | Lower legal risk (trained on Adobe Stock + public domain). Native: Photoshop Generative Fill, Illustrator, Express |
+| **Midjourney** | Artistic quality | Concept art, hero images, backgrounds. V6: text rendering, photorealism |
+| **DALL-E 3** | Prompt adherence, ChatGPT integration | Marketing materials with text, editorial, social media |
+| **Stable Diffusion** | Control, open source | High-volume, custom brand models. ControlNet, inpainting, img2img |
+| **Adobe Firefly** | Commercial safety | Lower legal risk (Adobe Stock trained). Native in Photoshop, Illustrator, Express |
 
 ### Prompt Engineering
 
-**Structure:** `[Subject] + [Action/Context] + [Environment] + [Style/Medium] + [Lighting] + [Camera/Technical] + [Quality Modifiers]`
+**Structure:** `[Subject] + [Action/Context] + [Environment] + [Style/Medium] + [Lighting] + [Camera/Technical] + [Quality]`
 
-**Example:**
-
-```text
-"A confident professional woman in her 30s presenting to colleagues
-in modern glass-walled conference room with city views,
-corporate photography style, natural afternoon light,
-Canon EOS R5, 85mm lens, f/2.8, highly detailed, 8k, professional color grading"
-```
-
-**Key techniques:**
-
-1. **Specificity** — "young professional checking iPhone 15 Pro in minimalist coffee shop, morning light" beats "person using phone"
-2. **Style references** — "In the style of [artist]" / "Photographed by [photographer]"
-3. **Camera parameters** — body (Canon EOS R5), lens (85mm f/1.4), film stock (Kodak Portra 400), lighting (three-point, golden hour)
-4. **Negative prompts** — "No text, no watermarks, no distortion, no extra limbs"
-5. **Weight/emphasis** — Midjourney `::` syntax; Stable Diffusion `((important word))`
-
-**Genre templates:**
+**Techniques:** (1) Specificity — "young professional checking iPhone 15 Pro in minimalist coffee shop, morning light" beats "person using phone" (2) Style refs — "In the style of [artist]" / "Photographed by [photographer]" (3) Camera params — body, lens, film stock, lighting (4) Negative prompts — "No text, no watermarks, no distortion" (5) Weight — Midjourney `::` syntax; SD `((word))`
 
 ```text
-Product: "[Product] on [surface], [lighting], shallow DOF, commercial product photography, [brand style], 8k, studio lighting"
-Lifestyle: "[Person] [activity] in [location], candid, natural lighting, documentary style, authentic emotion, warm tones, 35mm film"
-Abstract: "Abstract visualization of [concept], [color palette], [art style], flowing forms, ethereal atmosphere, gallery quality"
+Product: "[Product] on [surface], [lighting], shallow DOF, commercial photography, [brand style], 8k"
+Lifestyle: "[Person] [activity] in [location], candid, natural lighting, documentary style, warm tones, 35mm"
+Abstract: "Abstract visualization of [concept], [color palette], [art style], flowing forms, gallery quality"
 ```
 
-### Commercial Applications
+### Applications and Legal
 
-- **Concept development:** Generate 20-30 visual concepts → stakeholder review → refine → transition to production
-- **Ad creative:** Social (backgrounds, lifestyle, A/B variations, seasonal), Display (banners, conceptual imagery, hero images), E-commerce (lifestyle context, seasonal, virtual try-on)
-- **Multi-platform:** Generate in 1:1 (Instagram), 9:16 (Stories/TikTok), 16:9 (YouTube/display), 4:5 (Facebook) simultaneously. Batch via spreadsheet-driven prompt generation.
-
-### Legal and Ethical
-
-- **Copyright:** Ongoing litigation on training data; use AI images as starting points, not final deliverables; document creative process
-- **Platform rights:** Midjourney (commercial with paid plans), DALL-E (full commercial), Stable Diffusion (depends on model license), Adobe Firefly (designed for commercial safety)
-- **Disclosure:** Meta requires AI disclosure in political ads; emerging requirements across platforms; maintain internal documentation
+- **Concept pipeline:** Generate 20-30 concepts → stakeholder review → refine → production
+- **Multi-platform:** 1:1 (Instagram), 9:16 (Stories/TikTok), 16:9 (YouTube), 4:5 (Facebook). Batch via spreadsheet prompts.
+- **Copyright:** Use AI as starting points, not finals; document process. Rights: Midjourney (commercial/paid), DALL-E (full), SD (license-dependent), Firefly (commercial-safe)
+- **Disclosure:** Meta requires AI disclosure in political ads; emerging requirements across platforms
 
 ---
 
-## Section 2: AI-Powered Copywriting
-
-### Platforms
+## AI Copywriting
 
 | Platform | Strength | Best for |
 |----------|----------|----------|
-| **ChatGPT/GPT-4** | Versatile, long-form, multi-language | Ad concepts, headlines, landing pages, email sequences, video scripts. Techniques: chain-of-thought, few-shot, role assignment |
-| **Claude (Anthropic)** | 200K context, nuanced tone, reduced cliches | Long-form sales pages, brand voice development, complex campaigns, thought leadership |
-| **Jasper** | Marketing-specific templates | AIDA, PAS, Feature-to-Benefit, ad headlines, email subjects. Features: brand voice training, SEO/Surfer integration, team collaboration |
-| **Copy.ai** | Speed and volume, 90+ templates | Quick headline generation, social captions, brainstorming, content refreshing |
+| **ChatGPT/GPT-4** | Versatile, multi-language | Ad concepts, headlines, landing pages, email, video scripts |
+| **Claude** | 200K context, nuanced tone | Long-form sales, brand voice, complex campaigns |
+| **Jasper** | Marketing templates | AIDA, PAS, SEO/Surfer integration, team collaboration |
+| **Copy.ai** | Speed, 90+ templates | Quick headlines, social captions, brainstorming |
 
-### Copywriting Frameworks
-
-**AIDA:**
+### Framework Prompts
 
 ```text
-Write a [format] using AIDA:
-Product: [name and description]
-Target Audience: [demographic and psychographic]
-Key Benefits: [list]
-UVP: [differentiator]
-CTA: [desired action]
-Generate 5 variations with: hook, interest-building context, desire-creating benefits, clear action step
-```
+AIDA: Write [format] using AIDA. Product: [name]. Audience: [demo/psycho]. Benefits: [list].
+  UVP: [differentiator]. CTA: [action]. Generate 5 variations with hook, interest, desire, action.
 
-**PAS:**
+PAS: Create [format] using PAS. Problem: [pain]. Agitation: [consequences]. Solution: [product].
+  Requirements: visceral problem, amplified agitation, natural solution, proof points.
 
-```text
-Create a [format] using PAS:
-Problem: [specific pain point]
-Agitation: [emotional and practical consequences]
-Solution: [product as resolution]
-Requirements: visceral problem, amplified agitation, natural solution conclusion, specific proof points
-```
-
-**4 P's (Picture-Promise-Prove-Push):**
-
-```text
-Write [format] following 4 P's:
-Picture: aspirational vision of desired outcome
-Promise: specific, believable commitment
-Prove: evidence and social proof
-Push: urgency and clear next step
-Context: [product, audience, objectives]
+4P's: Write [format] — Picture: aspirational outcome. Promise: specific commitment.
+  Prove: evidence/social proof. Push: urgency + next step. Context: [product, audience, objectives].
 ```
 
 ### Platform-Specific Copy
 
-**Social media:**
-
 ```text
-Write [platform] ad copy for [product]:
-Platform Characteristics: [specific]
-Character Limit: [constraints]
-Hook Strategy: [pattern interrupt/question/statement]
-Key Message: [core benefit]
-CTA: [desired action]
-Generate: curiosity-driven, benefit-focused, social proof, urgency/scarcity approaches
+Social: Write [platform] ad for [product]. Limit: [N] chars. Hook: [interrupt/question/statement].
+  Message: [benefit]. CTA: [action]. Generate: curiosity, benefit, social proof, urgency approaches.
+
+Email: Write email for [objective]. Segment: [audience]. Stage: [new/engaged/lapsed].
+  Generate: 10 subject lines, opening with [context], body [AIDA/PAS/Story], 3 CTAs, P.S.
 ```
 
-**Google RSA:** 15 headlines (30 chars), 4 descriptions (90 chars). Cover: direct benefits, feature highlights, urgency, social proof, questions. Review for policy compliance, organize into ad groups.
+**Google RSA:** 15 headlines (30 chars), 4 descriptions (90 chars). Cover: benefits, features, urgency, social proof, questions.
 
-**Email:**
+### Brand Voice and Persuasion
 
-```text
-Write email for [objective]:
-Segment: [audience characteristics]
-Relationship Stage: [new/engaged/lapsed]
-Goal: [conversion objective]
-Generate: 10 subject lines (curiosity/benefit/urgency/question/how-to),
-opening referencing [context], body following [AIDA/PAS/Story], 3 CTA variations, P.S.
-```
+**Voice template:** `Dimension: [Playful vs. Serious] | We say: [example] | We don't say: [counter-example]`. Few-shot: provide 3+ approved examples, then "Write [content] in same voice."
 
-### Brand Voice Consistency
-
-**Voice attribute template:**
-
-```text
-Voice Dimension: [e.g., Playful vs. Serious]
-Description: [where brand falls]
-What we say: [example] | What we don't say: [counter-example]
-AI Implementation: "Write in a [attribute] tone, similar to: [examples]"
-```
-
-**Few-shot training:** Provide 3+ approved copy examples, then prompt: "Write [new content] in the same voice: [brief]"
-
-### Persuasion Triggers
-
-Integrate into copy prompts: social proof (specific stat/testimonial), scarcity (time/quantity limit), authority (credential/endorsement), reciprocity (value offered). Maintain brand voice throughout.
-
-**Primary emotional drivers:** Fear (loss aversion, FOMO), Greed (value, savings), Pride (status, achievement), Belonging (community, identity), Curiosity (knowledge gaps)
+**Persuasion triggers:** Social proof (stat/testimonial), scarcity (time/quantity), authority (credential), reciprocity (value). **Emotional drivers:** Fear (FOMO), Greed (savings), Pride (status), Belonging (community), Curiosity (knowledge gaps).
 
 ---
 
-## Section 3: Creative Testing and Dynamic Optimization
+## Creative Testing and DCO
 
-### AI-Powered Creative Analysis
+### Analysis Platforms
 
-| Platform | Key Capability |
-|----------|---------------|
-| VidMob | AI element analysis, performance prediction, competitive intelligence |
-| CreativeX | Creative quality scoring, element-level analysis, brand compliance |
-| Pattern89 | Predictive analytics, audience-creative matching, fatigue prediction |
+VidMob (element analysis, performance prediction) | CreativeX (quality scoring, brand compliance) | Pattern89 (predictive analytics, fatigue prediction). Computer vision detects: faces, colors, objects, scenes, text/logo placement, composition.
 
-**Computer vision detects:** face presence, color palettes, object recognition, scene identification, text/logo placement, composition
+### Dynamic Creative Optimization
 
-### Dynamic Creative Optimization (DCO)
+**Architecture:** Visual (backgrounds, products, lifestyle) + Messaging (headlines, body, CTAs) + Data (feeds, pricing, inventory) + Rules (targeting, triggers, optimization).
 
-**Architecture layers:**
+**Decisioning:** New Visitors → "Welcome Offer" | Cart Abandoners → "Still Thinking?" | Past Customers → "Welcome Back, [Name]". Context: Morning → energy | Rainy → cozy | Mobile → vertical.
 
-| Layer | Components |
-|-------|-----------|
-| Visual | Backgrounds, product imagery, lifestyle shots, illustrations |
-| Messaging | Headlines, subheadlines, body copy, CTAs |
-| Data | Product feeds, pricing, inventory, promotions |
-| Rules | Audience targeting, contextual triggers, business rules, optimization parameters |
+**Workflow:** Upload components → define rules → set goals → generate variations → distribute traffic → shift budget to winners. **Scale:** 5 hooks x 3 backgrounds x 4 products x 3 CTAs = 180 variations.
 
-**Decisioning examples:**
+**Platforms:** Meta Dynamic Creative | Google Responsive Display | Celtra (cross-channel) | Jivox (commerce) | Thunder/Salesforce (CRM).
 
-```text
-Audience-based:
-  New Visitors → "Welcome Offer Inside" + "Start Your Journey"
-  Cart Abandoners → "Still Thinking It Over?" + "Complete Your Purchase"
-  Past Customers → "Welcome Back, [Name]" + "See What's New"
+**By vertical:** E-commerce (catalog sync, real-time pricing, browse/cart triggers) | Travel (destination imagery + dates + scarcity) | Financial (compliance-approved messaging, real-time rates, credit tiers).
 
-Contextual:
-  Morning → energy/productivity imagery | Rainy → "Cozy up with..." | Mobile → vertical layout
-```
+### Fatigue Detection
 
-**Workflow:** Upload components → define rules/combinations → set optimization goals → system generates variations → traffic distributed → winning combinations get increased spend → underperformers phased out
-
-**Multivariate scale:** 5 hooks x 3 backgrounds x 4 product presentations x 3 CTAs = 180 variations. ML identifies winning patterns, auto-calculates statistical significance, shifts budget to top performers.
-
-**DCO platforms:** Meta Dynamic Creative (10 images/videos, 5 headlines, 5 body texts, 5 CTAs), Google Responsive Display (15 images, 5 headlines, 5 descriptions, 5 logos), Celtra (creative management, advanced decisioning, cross-channel), Jivox (personalization engine, commerce integration), Thunder/Salesforce (creative automation, CRM integration)
-
-### DCO by Vertical
-
-- **E-commerce:** Product catalog sync, real-time pricing, inventory, review scores. Trigger on browsing history, cart contents, purchase history. Example: user browses Nike Air Max → ad shows exact shoes + current price + "Still interested?" + "Complete your purchase"
-- **Travel:** User searches "hotels in Paris" → DCO assembles Paris imagery + hotel options for searched dates + "$129/night" + "Only 3 rooms left" + "Book Your Stay"
-- **Financial services:** Compliance-approved messaging libraries, real-time rates, personalized loan amounts, credit tier messaging
-
-### Predictive Performance and Fatigue Detection
-
-**Pre-flight prediction:** Historical assets + performance metrics + audience characteristics + platform data → expected CTR range, conversion probability, engagement predictions, optimal audience matching
-
-**In-flight triggers:** Statistical significance thresholds, performance differentials, cost efficiency thresholds, fatigue indicators
-
-**Fatigue signals:** Increasing CPM, decreasing CTR, falling conversion rates, reduced engagement, rising frequency
-
-**AI responses to fatigue:** Automatic refresh triggers, rotation to backup creative, frequency cap enforcement, audience expansion recommendations
-
-### Measuring DCO
-
-- **Efficiency:** Production time reduction, cost per variation, time to market
-- **Performance:** CTR lift vs. static, conversion rate improvement, ROAS, CPA
-- **Attribution:** Element-level reporting, holdout testing, incrementality studies, path analysis
+**Signals:** Increasing CPM, decreasing CTR, falling conversions, rising frequency. **AI responses:** Auto-refresh, rotation to backup, frequency caps, audience expansion. **Pre-flight prediction:** Historical + audience + platform → expected CTR, conversion probability, optimal matching.
 
 ---
 
-## Section 4: Personalization at Scale
+## Personalization at Scale
 
-### Personalization Dimensions
+**Dimensions:** Demographic (Gen Z: mobile-native | Millennials: value-driven | Gen X: practical | Boomers: trust) | Behavioral (abandonment: show exact products | purchase history: complementary/upgrades) | Psychographic (sustainability → environmental | status → premium | value → savings) | Contextual (morning → productivity | evening → relaxation | weather-adaptive).
 
-- **Demographic:** Gen Z (fast cuts, trend references, mobile-native), Millennials (value-driven, family-focused), Gen X (practical, time-saving), Boomers (clarity, trust signals)
-- **Behavioral:** Browse abandonment (show exact products viewed, address objections), Purchase history (complementary products, replenishment, upgrades)
-- **Psychographic:** Sustainability → environmental benefits, Status-conscious → premium positioning, Value-seekers → savings/deals, Convenience → time-saving
-- **Contextual:** Morning → energy/productivity, Afternoon → shopping, Evening → relaxation, Weather-adaptive messaging
+**CDPs:** Segment, mParticle, Tealium, Adobe Real-Time CDP, Salesforce CDP. **Engines:** Evergage/Salesforce (behavioral triggers) | Dynamic Yield (AI recommendations) | Optimizely (experimentation).
 
-### Technology Stack
+**Modular creative:** Backgrounds (5) x Products (10) x Headlines (20) x CTAs (10) x Overlays (5) = 50,000 combinations. Rules: Background → location | Product → browse history | Headline → life stage | CTA → funnel position.
 
-**CDPs:** Segment, mParticle, Tealium, Adobe Real-Time CDP, Salesforce CDP — unified profiles, real-time audience updates, cross-channel identity resolution
+**Video personalization:** Idomoo, SundaySky, Vidyard, Hippo Video. Structure: [Name] + [Category] → [Industry/Role] scenes → [Company Size] testimonials → segment pricing → personalized URL/QR.
 
-**Personalization engines:** Evergage/Salesforce Interaction Studio (real-time, behavioral triggers), Dynamic Yield/Mastercard (AI recommendations, triggered campaigns), Optimizely (experimentation, feature flagging, content recommendations)
+**Privacy-first:** Contextual targeting (no personal data) | First-party data (value exchange, progressive profiling, loyalty) | Privacy-preserving tech (differential privacy, federated learning, on-device).
 
-### Modular Creative Systems
-
-```text
-Backgrounds (5) x Product shots (10) x Headlines (20) x CTAs (10) x Overlays (5) = 50,000 combinations
-
-Rules: Background → location | Product → browsing history | Headline → life stage | CTA → funnel position | Overlays → current promotions
-```
-
-**Video personalization tools:** Idomoo, SundaySky, Vidyard, Hippo Video
-
-**Personalized video structure:** Opening with [Name] + [Product Category] → scenes relevant to [Industry]/[Job Role] → testimonials from [Company Size] companies → segment-specific pricing → personalized URL/QR code
-
-### Privacy-First Personalization
-
-**Challenges:** Cookie deprecation, GDPR/CCPA, platform privacy changes
-
-- **Contextual targeting:** Content-based, no personal data required
-- **First-party data:** Value exchange, progressive profiling, preference centers, loyalty programs
-- **Privacy-preserving tech:** Differential privacy, federated learning, on-device processing
-
-### Measuring Personalization
-
-- **Engagement:** CTR vs. non-personalized, video completion rates, interaction rates
-- **Conversion:** Conversion rate lift, AOV, time to conversion
-- **Business:** ROAS, CAC, LTV, incremental revenue
-- **Testing:** Holdout testing (personalized vs. control), incrementality studies, geo-holdout tests
+**Measuring:** Engagement (CTR lift, completion rates) | Conversion (rate lift, AOV) | Business (ROAS, CAC, LTV) | Testing (holdout, incrementality, geo-holdout).
 
 ---
 
-## Section 5: AI-Assisted Creative Strategy
+## AI Creative Strategy
 
-### Competitive Intelligence
+**Competitive intelligence:** Sources: Meta Ad Library, Google Ads Transparency, social monitoring. Tools: Pathmatics, Social Ad Scout, Semrush, SpyFu, Brandwatch. Analyze: volume/velocity, messaging themes, visual patterns, offers, channels.
 
-**Data sources:** Meta Ad Library, Google Ads Transparency, social monitoring, website change tracking
+**Audience intelligence:** Psychographic profiling, interest graphs, content consumption, lookalike expansion. Insight → creative: tutorial engagement → educational ads | visual preference → image/video-heavy | price sensitivity → value messaging | premium affinity → quality positioning.
 
-**AI analysis:** Creative volume/velocity, messaging themes, visual style patterns, offer strategies, channel focus
+**Concept generation:** Input (objective, audience, brand, competitive, platform) → AI (concepts, metaphors, angles, hooks) → Human (judgment, brand fit, feasibility, selection).
 
-**Tools:** Pathmatics, Social Ad Scout, Semrush, SpyFu, Brandwatch
-
-### Audience Intelligence
-
-AI capabilities: psychographic profiling, interest graph mapping, content consumption analysis, lookalike expansion
-
-**Insight → creative application:** High tutorial engagement → educational ads | Visual platform preference → image/video-heavy | Price sensitivity → value messaging | Premium brand affinity → quality/emotion positioning
-
-### Creative Concept Generation
-
-**AI brainstorming workflow:** Input (objective, audience, brand guidelines, competitive landscape, platform requirements) → AI generates (concept directions, visual metaphors, messaging angles, format suggestions, hook ideas) → Human refines (creative judgment, brand fit, feasibility, selection)
-
-### Performance Prediction
-
-**Pre-launch:** Creative element analysis + historical data + audience characteristics + platform/placement + competitive environment → performance probability scores, expected KPI ranges, risk assessments, optimization recommendations
-
-**Use cases:** Screen concepts before production, prioritize high-probability concepts, budget pacing, creative refresh timing
+**Performance prediction:** Creative elements + historical + audience + platform + competitive → scores, KPI ranges, risk assessments. Use: screen before production, prioritize high-probability, budget pacing, refresh timing.
 
 ---
 
-## Section 6: Integrating AI into Creative Workflows
-
-### AI-Augmented Creative Process
+## Integrating AI into Workflows
 
 | Phase | AI Role | Human Role |
 |-------|---------|-----------|
-| Discovery/Strategy | Market research, competitive analysis, trend ID, initial concepts | Strategic direction, business alignment, brand vision |
-| Concept Development | Visual concepts, copy variations, mood boards, multiple directions | Evaluation, brand fit, strategic alignment |
-| Production | Asset generation, automated editing, format adaptation, versioning | Quality control, brand guidelines, final approval |
-| Testing/Optimization | Automated testing, performance analysis, pattern recognition, fatigue detection | Strategic interpretation, creative iteration, budget decisions |
+| Discovery | Research, competitive analysis, trend ID, concepts | Strategy, brand vision |
+| Concept | Visuals, copy variations, mood boards | Evaluation, brand fit |
+| Production | Generation, editing, format adaptation | QC, guidelines, approval |
+| Testing | Automated testing, analysis, fatigue detection | Interpretation, iteration, budget |
 
-### Integrated Workflow Example
+**Pipeline:** ChatGPT concepts + competitive tools → brief → Midjourney visuals + Copy.ai headlines + Firefly refinement → assets → Meta/Google + DCO → performance data → AI analysis + auto-refresh → refined creative.
 
-```text
-Strategy: ChatGPT (concepts) + competitive tools → creative brief
-Production: Midjourney (visuals) + Copy.ai (headlines) + Adobe Firefly (refinement) → assets
-Testing: Meta/Google native + DCO platforms + analytics → performance data
-Optimization: AI analysis of winners + automated refresh + performance prediction → refined creative
-```
+**Emerging roles:** AI Creative Strategist (prompt engineering, tool mastery) | Creative Technologist (integration, automation, fine-tuning) | Performance Analyst (testing, insights). Traditional evolution: Copywriters → strategy | Designers → art direction | Producers → orchestrate AI + human.
 
-### Emerging Roles
-
-| Role | Focus |
-|------|-------|
-| AI Creative Strategist | Prompt engineering, AI tool mastery, quality control, workflow optimization |
-| Creative Technologist | Tool integration, automation, model fine-tuning, data pipelines |
-| Performance Creative Analyst | Creative performance analysis, testing programs, insight generation |
-
-**Traditional role evolution:** Copywriters → strategy + high-value creative | Designers → art direction + final refinement | Producers → orchestrate AI + human workflows
-
-### Quality Assurance
-
-- **Review checkpoints:** Concept approval, asset review before publication, performance analysis before scaling, brand safety verification
-- **Common AI errors:** Visual artifacts, text generation errors, factual inaccuracies, tone inconsistencies, cultural insensitivities
-- **Brand safety risks:** Unintended stereotypes, inappropriate imagery, off-message content
-- **Mitigation:** Clear brand guidelines for AI, review/approval workflows, bias testing, diverse evaluation teams
+**QA:** Checkpoints: concept → asset review → performance analysis → brand safety. Common errors: visual artifacts, text errors, factual inaccuracies, tone/cultural issues. Mitigation: brand guidelines for AI, review workflows, bias testing, diverse evaluation.
