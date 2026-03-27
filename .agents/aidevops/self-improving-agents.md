@@ -1,5 +1,5 @@
 ---
-description: Self-improving agent system for continuous enhancement
+description: Self-improvement principles — when and how to improve the system as a universal agent behaviour
 mode: subagent
 tools:
   read: true
@@ -12,77 +12,63 @@ tools:
   task: true
 ---
 
-# Self-Improving Agent System
+# Self-Improvement
 
-<!-- AI-CONTEXT-START -->
+Every agent session — interactive, worker, or supervisor — should improve the system, not just complete its task. This is a universal principle, not specific to any one command.
 
-## Quick Reference
+**Observe outcomes from existing state.** TODO.md, PLANS.md, and GitHub issues/PRs are the state database. Never duplicate this state into separate files, databases, or logs.
 
-- **Principle**: AGENTS.md "Self-Improvement" section — universal for all agents
-- **Mechanism**: Pulse supervisor outcome observation (Step 2a) + agent `/remember` + GitHub issues
-- **No dedicated script**: The `self-improve-helper.sh` has been archived. Self-improvement is now a universal agent behaviour, not a separate tool.
+**Signals that something needs fixing** (check via `gh` CLI, not custom state):
 
-<!-- AI-CONTEXT-END -->
+- A PR has been open for 6+ hours with no progress
+- The same issue/PR appears in consecutive supervisor pulses with no state change
+- A PR was closed (not merged) — a worker failed
+- Multiple PRs fail CI with the same error pattern
+- A worker creates a PR that duplicates an existing one
 
-## How Self-Improvement Works Now
+**Response: create a GitHub issue, not a workaround.** When you observe a systemic problem, file a GitHub issue describing the pattern, root cause hypothesis, and proposed fix. This enters the existing task queue and gets picked up by the next available worker. Never patch around a broken process — fix the process.
 
-Self-improvement is a **universal principle** embedded in every agent session — interactive, worker, or supervisor. It is defined in AGENTS.md "Self-Improvement" section and does not require a dedicated script.
+**Route to the correct repo.** Not every improvement belongs in the current project. Before creating a self-improvement task, determine whether the problem is project-specific or framework-level:
 
-### Observation
+- **Framework-level** — route to the aidevops repo. Indicators: the observation references files under `~/.aidevops/`, framework scripts (`ai-actions.sh`, `ai-lifecycle.sh`, `supervisor/`, `dispatch.sh`, `pre-edit-check.sh`, helper scripts), agent prompt behaviour, supervisor/pulse logic, or cross-repo orchestration. **Use `framework-issue-helper.sh log` — not `claim-task-id.sh` — to file the issue directly on `marcusquinn/aidevops`.** The fix belongs in the framework, not in the project that happened to trigger it.
+- **Project-specific** — route to the current repo. Indicators: the observation is about this project's CI, code patterns, dependencies, or domain logic.
 
-Every agent observes outcomes from existing state:
+If uncertain, ask: "Would this fix apply to every repo the framework manages, or only this one?" Framework-wide problems go to aidevops; project-specific problems stay local. Never create framework tasks in a project repo — they become invisible to framework maintainers and pollute the project's task namespace.
 
-- **TODO.md, PLANS.md, and GitHub issues/PRs** are the state database
-- **Pulse Step 2a** checks for stale PRs (6h+ no progress), repeated failures (closed-without-merge PRs), and duplicate work
-- **Workers** observe their own outcomes and record patterns via `/remember`
-
-### Response
-
-When a systemic problem is observed, the response is to **create a GitHub issue**, not a workaround:
+**How to file a framework issue (GH#5149):** When you detect a framework-level problem, use the dedicated helper — not `claim-task-id.sh` in the current repo:
 
 ```bash
-gh issue create --repo <owner/repo> \
-  --title "Pattern: <description of systemic problem>" \
-  --body "Observed: <evidence>. Root cause hypothesis: <theory>. Proposed fix: <action>." \
-  --label "bug,priority:high"
+# Detect if a problem is framework-level (exit 0 = framework, exit 1 = project)
+~/.aidevops/agents/scripts/framework-issue-helper.sh detect "description of the problem"
+
+# File a framework issue directly on marcusquinn/aidevops (deduplicates automatically)
+~/.aidevops/agents/scripts/framework-issue-helper.sh log \
+  --title "Bug: supervisor pipeline fails when stdin is consumed" \
+  --body "Observed in ai-lifecycle.sh phase 3: ..." \
+  --label "bug"
 ```
 
-### What Counts as Self-Improvement
+This is the correct action path for framework issues. Do NOT use `claim-task-id.sh` in the project repo for framework-level observations — that pollutes the project's task namespace and makes the issue invisible to framework maintainers.
+
+**Scope boundary for code changes (t1405, GH#2928).** Separate "observe and report" from "observe and fix". When dispatched by the pulse, the `PULSE_SCOPE_REPOS` env var lists the repo slugs where you may create worktrees and PRs. Filing issues is always allowed on any repo — cross-repo bug reports are valuable. But code changes (worktrees, PRs, commits) are restricted to repos in `PULSE_SCOPE_REPOS`. If the target repo is not in scope, file the issue and stop. The issue enters that repo's queue for their maintainers (or their own pulse) to handle. If `PULSE_SCOPE_REPOS` is empty or unset (interactive mode), no scope restriction applies.
+
+**What counts as self-improvement:**
 
 - Filing issues for repeated failure patterns
 - Improving agent prompts when workers consistently misunderstand instructions
 - Identifying missing automation (e.g., a manual step that could be a `gh` command)
 - Flagging stale tasks that are blocked but not marked as such
+- Running the session miner pulse (`scripts/session-miner-pulse.sh`) to extract learning from past sessions
+- **Filing issues for information gaps (t1416):** When you cannot determine what happened on a task because comments lack model tier, branch name, failure diagnosis, or other audit-critical fields, file a self-improvement issue. Information gaps cause cascading waste — without knowing what was tried, the next attempt repeats the same failure. The issue/PR comment timeline is the primary audit trail; if the information isn't there, it's invisible.
 
-### Recording Patterns
+**Issue quality filter (GH#6508):** Before filing any enhancement or architectural change — whether via `/log-issue-aidevops`, `framework-issue-helper.sh`, or direct `gh issue create` — apply the framework's own principles to the proposal. Ask: (1) Is this addressing an observed failure, or is it preemptive? Preemptive rules for unobserved failure modes are prompt bloat. (2) Does this add a deterministic mechanism where model judgment would work better? (3) If this comes from comparing aidevops to another framework, is the "gap" actually a deliberate architectural choice? The bar for adding guidance is: **observed failure first, then minimal guidance**. Bug reports with clear reproduction steps are exempt — bugs are observed failures by definition.
 
-Agents record learnings via cross-session memory:
+**Intelligence over determinism:** The harness gives you goals, tools, and boundaries — not scripts for every scenario. Deterministic rules are for things with exactly one correct answer (CLI syntax, file paths, security). Everything else — prioritisation, triage, stuck detection, what to work on — is a judgment call. If a rule says "if X then Y" but there are cases where X is true and Y is wrong, it's guidance not a rule. Use the cheapest model that can handle the decision (haiku for triage, sonnet for implementation, opus for strategy) — but never use a regex where a model call would handle outliers better. See `prompts/build.txt` "Intelligence Over Determinism" for the full principle.
 
-```bash
-# After a successful approach
-/remember "SUCCESS: structured debugging found root cause for bugfix (sonnet, 120s)"
+**Autonomous operation:** When the user says "continue", "monitor", or "keep going" — enter autonomous mode: use sleep/wait loops, maintain a perpetual todo to survive compaction, only interrupt for blocking errors that require user input.
 
-# After a failure
-/remember "FAILURE: architecture design with sonnet — needed opus for cross-service trade-offs"
+## Related
 
-# Recall relevant patterns
-/recall "bugfix patterns"
-```
-
-## Why the Script Was Archived
-
-The `self-improve-helper.sh` (773 lines) implemented a 4-phase cycle (analyze → refine → test → PR) using OpenCode server sessions. This has been replaced by:
-
-1. **AGENTS.md "Self-Improvement" section** — every agent session improves the system as a universal principle
-2. **Pulse Step 2a** — observes outcomes from GitHub state (stale PRs, failures, duplicates)
-3. **Cross-session memory** — agents record patterns via `/remember` and `/recall`
-4. **GitHub issues** — systemic problems become trackable tasks, not workarounds
-
-The archived script is at `scripts/archived/self-improve-helper.sh` for reference.
-
-## Related Documentation
-
-- AGENTS.md "Self-Improvement" section — the authoritative definition
 - `scripts/commands/pulse.md` — supervisor outcome observation (Step 2a)
 - `memory/README.md` — cross-session memory system
 - `tools/security/privacy-filter.md` — privacy filter for PRs
