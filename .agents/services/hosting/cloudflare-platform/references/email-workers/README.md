@@ -1,12 +1,6 @@
-# Cloudflare Email Workers Skill
+# Cloudflare Email Workers
 
-Expert guidance for building, configuring, and deploying Cloudflare Email Workers.
-
-## Overview
-
-Email Workers process incoming emails programmatically using the Cloudflare Workers runtime. Use them for custom routing, spam filtering, auto-responders, ticket systems, and notification handlers.
-
-**Use ES modules format for all new projects.** Service Worker format is deprecated.
+Process incoming emails on the Workers runtime. **ES modules format only** (Service Worker is deprecated).
 
 ## ForwardableEmailMessage API
 
@@ -16,45 +10,21 @@ interface ForwardableEmailMessage {
   readonly to: string;          // Envelope To
   readonly headers: Headers;    // Message headers
   readonly raw: ReadableStream; // Raw message stream
-  readonly rawSize: number;     // Message size in bytes
-
-  setReject(reason: string): void;
-  forward(rcptTo: string, headers?: Headers): Promise<void>;
-  reply(message: EmailMessage): Promise<void>;
+  readonly rawSize: number;     // Size in bytes
+  setReject(reason: string): void;                           // Permanent SMTP rejection
+  forward(rcptTo: string, headers?: Headers): Promise<void>; // Forward (verified dest only, X-* headers)
+  reply(message: EmailMessage): Promise<void>;               // Reply to sender
 }
+// Constructor: import { EmailMessage } from "cloudflare:email";
+// new EmailMessage(from, to, rawMimeContent)
 ```
 
-- **`setReject(reason)`**: Reject with permanent SMTP error
-- **`forward(rcptTo, headers?)`**: Forward to verified destination (only `X-*` headers allowed)
-- **`reply(message)`**: Reply to sender with new EmailMessage
-
-```typescript
-import { EmailMessage } from "cloudflare:email";
-const msg = new EmailMessage(from, to, rawMimeContent);
-```
-
-## Common Patterns
-
-### Allowlist / Blocklist
-
-```typescript
-export default {
-  async email(message, env, ctx) {
-    const allowList = ["friend@example.com"];
-    if (!allowList.includes(message.from)) {
-      message.setReject("Address not allowed");
-    } else {
-      await message.forward("inbox@corp.example.com");
-    }
-  },
-};
-```
+## Patterns
 
 ### Parse Email (postal-mime)
 
 ```typescript
 import * as PostalMime from 'postal-mime';
-
 export default {
   async email(message, env, ctx) {
     const parser = new PostalMime.default();
@@ -65,12 +35,11 @@ export default {
 };
 ```
 
-### Auto-Reply
+### Auto-Reply (mimetext)
 
 ```typescript
 import { EmailMessage } from "cloudflare:email";
 import { createMimeMessage } from 'mimetext';
-
 export default {
   async email(message, env, ctx) {
     const msg = createMimeMessage();
@@ -85,52 +54,33 @@ export default {
 };
 ```
 
-### Subject-Based Routing
+### Snippets (all inside `async email(message, env, ctx)`)
 
 ```typescript
-export default {
-  async email(message, env, ctx) {
-    const subject = (message.headers.get('Subject') || '').toLowerCase();
-    if (subject.includes('billing')) await message.forward("billing@example.com");
-    else if (subject.includes('support')) await message.forward("support@example.com");
-    else await message.forward("general@example.com");
-  },
-};
-```
+// Allowlist / blocklist
+if (!["friend@example.com"].includes(message.from)) message.setReject("Not allowed");
+else await message.forward("inbox@corp.example.com");
 
-### Async Operations (ctx.waitUntil)
+// Subject-based routing
+const subject = (message.headers.get('Subject') || '').toLowerCase();
+if (subject.includes('billing')) await message.forward("billing@example.com");
+else if (subject.includes('support')) await message.forward("support@example.com");
+else await message.forward("general@example.com");
 
-```typescript
-export default {
-  async email(message, env, ctx) {
-    await message.forward("inbox@example.com");
-    ctx.waitUntil(Promise.all([logToAnalytics(message), notifySlack(message)]));
-  },
-};
-```
+// ctx.waitUntil — non-critical async (analytics, webhooks, heavy processing on large emails)
+await message.forward("inbox@example.com");
+ctx.waitUntil(Promise.all([logToAnalytics(message), notifySlack(message)]));
 
-### Size Filtering
+// Size filter
+if (message.rawSize > 10 * 1024 * 1024) message.setReject("Message too large");
+else await message.forward("inbox@example.com");
 
-```typescript
-if (message.rawSize > 10 * 1024 * 1024) {
-  message.setReject("Message too large");
-} else {
-  await message.forward("inbox@example.com");
-}
-```
+// Store in KV/R2
+await env.EMAIL_ARCHIVE.put(`email:${Date.now()}:${message.from}`,
+  JSON.stringify({ from: email.from, subject: email.subject }));
 
-### Store in KV/R2
-
-```typescript
-const key = `email:${Date.now()}:${message.from}`;
-await env.EMAIL_ARCHIVE.put(key, JSON.stringify({ from: email.from, subject: email.subject }));
-```
-
-### Multi-Tenant Routing
-
-```typescript
-const tenantId = extractTenantId(message.to.split('@')[0]);
-const config = await env.TENANT_CONFIG.get(tenantId, 'json');
+// Multi-tenant routing
+const config = await env.TENANT_CONFIG.get(extractTenantId(message.to.split('@')[0]), 'json');
 if (config?.forwardTo) await message.forward(config.forwardTo);
 else message.setReject("Unknown recipient");
 ```
@@ -141,10 +91,8 @@ else message.setReject("Unknown recipient");
 name = "email-worker"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
-
 [[send_email]]
 name = "EMAIL"
-
 [[kv_namespaces]]
 binding = "EMAIL_ARCHIVE"
 id = "your-kv-namespace-id"
@@ -154,11 +102,7 @@ id = "your-kv-namespace-id"
 
 ```bash
 npx wrangler dev
-```
-
-Test receiving email:
-
-```bash
+# Test receiving email:
 curl --request POST 'http://localhost:8787/cdn-cgi/handler/email' \
   --url-query 'from=sender@example.com' \
   --url-query 'to=recipient@example.com' \
@@ -168,59 +112,32 @@ To: recipient@example.com
 Subject: Test Email
 
 Hello world'
+# Wrangler writes sent emails to local .eml files. Visit http://localhost:8787/ to trigger.
 ```
-
-Wrangler writes sent emails to local `.eml` files. Visit `http://localhost:8787/` to trigger.
 
 ## Deployment
 
 1. Enable Email Routing in Cloudflare dashboard
 2. Add verified destination address
 3. `npx wrangler deploy`
-4. Dashboard → Email Routing → Email Workers → create route → bind to Worker
+4. Dashboard > Email Routing > Email Workers > create route > bind to Worker
 
-## Limits
+## Limits and Troubleshooting
 
-| Limit | Value |
-|-------|-------|
-| Max message size | 25 MiB |
-| Max rules | 200 |
-| Max destination addresses | 200 |
-
-Monitor CPU limit errors with `npx wrangler tail`. Look for `EXCEEDED_CPU` — upgrade to Workers Paid plan or use `ctx.waitUntil()` for heavy operations.
+| Limit | Value | Issue | Fix |
+|-------|-------|-------|-----|
+| Message size | 25 MiB | Not forwarding | Verify dest in dashboard; check Email Routing enabled; `wrangler tail` |
+| Rules | 200 | `EXCEEDED_CPU` | Upgrade to Paid plan; use `ctx.waitUntil()` for heavy ops |
+| Dest addresses | 200 | Local dev broken | Ensure `send_email` binding; use correct curl format |
 
 ## Best Practices
 
-- `forward()` only works with verified destination addresses
-- Use `ctx.waitUntil()` for non-critical async operations (analytics, webhooks)
+- `forward()` requires verified destination addresses
 - Parse headers safely: `message.headers.get('Subject') || '(no subject)'`
-- Add type safety: `async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext)`
-- For large emails (>20MB), offload processing via `ctx.waitUntil()` before forwarding
+- Type safety: `async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext)`
+- **Deps:** `postal-mime` (^2.3.3), `mimetext` (^4.0.0), `@cloudflare/workers-types` (^4.0.0), `wrangler` (^3.0.0)
 
-## Dependencies
-
-```json
-{
-  "dependencies": {
-    "postal-mime": "^2.3.3",
-    "mimetext": "^4.0.0"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.0.0",
-    "wrangler": "^3.0.0"
-  }
-}
-```
-
-## Troubleshooting
-
-| Issue | Fix |
-|-------|-----|
-| Email not forwarding | Verify destination in dashboard; check Email Routing enabled; check `wrangler tail` |
-| CPU limit errors | Upgrade to Paid plan; use `ctx.waitUntil()` for heavy ops |
-| Local dev not working | Ensure `send_email` binding in wrangler config; use correct curl format |
-
-## Related Documentation
+## References
 
 - [Email Routing Setup](https://developers.cloudflare.com/email-routing/get-started/enable-email-routing/)
 - [Workers Platform](https://developers.cloudflare.com/workers/)
