@@ -2722,6 +2722,35 @@ _complexity_scan_collect_violations() {
 	return 0
 }
 
+# Qualification gate for opening a simplification issue on an agent doc.
+# Centralises all "should we open an issue?" criteria so the collect loop
+# stays readable and the gate is independently testable.
+# Arguments:
+#   $1 - file_path (repo-relative)
+#   $2 - line_count (integer)
+# Exit codes:
+#   0 - file qualifies (open an issue)
+#   1 - file does not qualify (skip)
+_complexity_scan_should_open_md_issue() {
+	local file_path="$1"
+	local line_count="$2"
+
+	# Must be inside .agents/ (belt-and-suspenders; caller already filters)
+	[[ "$file_path" == .agents/* ]] || return 1
+
+	# Must not be archived
+	[[ "$file_path" != *_archive/* && "$file_path" != *archived/* ]] || return 1
+
+	# Must not be a protected core-infrastructure file
+	local protected_pattern='prompts/build\.txt|^\.agents/AGENTS\.md|^AGENTS\.md|scripts/commands/pulse\.md'
+	echo "$file_path" | grep -Eq "$protected_pattern" && return 1
+
+	# Must meet the minimum line-count threshold
+	[[ "$line_count" -ge "$COMPLEXITY_MD_LINE_THRESHOLD" ]] || return 1
+
+	return 0
+}
+
 # Collect oversized agent docs (.md files in .agents/).
 # Protected files (build.txt, AGENTS.md, pulse.md) are excluded — these are
 # core infrastructure that must be simplified manually with a maintainer present.
@@ -2749,7 +2778,7 @@ _complexity_scan_collect_md_violations() {
 		[[ -f "$full_path" ]] || continue
 		local lc
 		lc=$(wc -l <"$full_path" 2>/dev/null | tr -d ' ')
-		if [[ "$lc" -ge "$COMPLEXITY_MD_LINE_THRESHOLD" ]]; then
+		if _complexity_scan_should_open_md_issue "$file" "$lc"; then
 			scan_results="${scan_results}${file}|${lc}"$'\n'
 			oversized_count=$((oversized_count + 1))
 		fi
@@ -2868,7 +2897,7 @@ Tighten and restructure this agent doc. Follow \`tools/build-agent/build-agent.m
 
 ### Confidence: medium
 
-Automated scan identified this file by size. The best simplification strategy requires human judgment — some large files are appropriately large. Reference corpora (SKILL.md, domain knowledge bases) need restructuring into chapters, not content reduction.
+Automated scan detected topic: **${topic_label:-Unknown}**. The best simplification strategy requires human judgment — some large files are appropriately large. Reference corpora (SKILL.md, domain knowledge bases) need restructuring into chapters, not content reduction.
 
 ---
 **To approve or decline**, comment on this issue:
