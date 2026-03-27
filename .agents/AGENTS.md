@@ -310,6 +310,7 @@ Read subagents on-demand. Full index: `subagent-index.toon`.
 | Model routing | `tools/context/model-routing.md`, `reference/orchestration.md` |
 | Orchestration | `reference/orchestration.md`, `tools/ai-assistants/headless-dispatch.md`, `scripts/commands/pulse.md`, `scripts/commands/dashboard.md` |
 | Upstream watch | `scripts/upstream-watch-helper.sh`, `.agents/configs/upstream-watch.json` |
+| Memory/Session lookup | `reference/memory-lookup.md`, `reference/session.md` |
 | Testing | `scripts/commands/testing-setup.md`, `tools/build-agent/agent-testing.md`, `scripts/testing-setup-helper.sh` |
 | Agent/MCP dev | `tools/build-agent/build-agent.md`, `tools/build-mcp/build-mcp.md`, `tools/mcp-toolkit/mcporter.md` |
 | Framework | `aidevops/architecture.md`, `scripts/commands/skills.md` |
@@ -322,7 +323,7 @@ Key capabilities (details in `reference/orchestration.md`, `reference/services.m
 
 - **Model routing**: local→haiku→flash→sonnet→pro→opus (cost-aware). See `tools/context/model-routing.md`.
 - **Bundle presets**: Project-type-aware defaults for model tiers, quality gates, and agent routing. Auto-detected from marker files or explicit in repos.json. See `bundles/` and `scripts/bundle-helper.sh`.
-- **Memory**: cross-session SQLite FTS5 (`/remember`, `/recall`)
+- **Memory**: cross-session SQLite FTS5 (`/remember`, `/recall`). Conversational lookup: `reference/memory-lookup.md`
 - **Orchestration**: supervisor dispatch, pulse scheduler, auto-pickup, cross-repo issue/PR/TODO visibility
 - **Contribution watch**: monitors external issues/PRs for new activity needing reply using the GitHub Notifications API. `contribution-watch-helper.sh seed|scan|status|install|uninstall` (optional `scan --backfill` for low-frequency safety-net sweeps of tracked threads). Managed repos (`pulse: true` in repos.json) are excluded to suppress internal automation noise. Prompt-injection-safe — automated scans are deterministic metadata checks (no LLM), comment bodies only shown in interactive sessions after `prompt-guard-helper.sh scan`.
 - **Upstream watch**: monitors external repos we've borrowed ideas/code from for new releases. `upstream-watch-helper.sh add|remove|check|ack|status`. Shows release diffs and changelogs between our last-seen version and latest. Distinct from skill imports (code we pulled in) and contribution watch (repos we filed issues on) — this tracks "inspiration repos" for passive monitoring. Config: `.agents/configs/upstream-watch.json`.
