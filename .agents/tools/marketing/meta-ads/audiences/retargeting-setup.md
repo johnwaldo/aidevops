@@ -1,33 +1,17 @@
 # Retargeting Setup Guide
 
-> Step-by-step guide to setting up retargeting audiences.
+All custom audiences: **Ads Manager > Audiences > Create Audience > Custom Audience > [Source]**.
 
----
+Sources: Website, Video, Facebook Page, Instagram Account, Lead Form, Customer List.
 
 ## Website Custom Audiences
 
-### Creating Website Audiences
+**Setup:** Select pixel > choose event/URL rule > set retention window (1-180 days).
 
-**Step 1: Go to Audiences**
-```
-Ads Manager → Audiences → Create Audience → Custom Audience → Website
-```
+### Essential Website Audiences
 
-**Step 2: Select Pixel**
-```
-Choose your pixel from dropdown
-```
-
-**Step 3: Define Audience**
-```
-Events: Website visitors who...
-Retention: [1-180 days]
-```
-
-### Essential Website Audiences to Create
-
-| Audience Name | Configuration |
-|---------------|--------------|
+| Audience | Configuration |
+|----------|--------------|
 | All Visitors 7d | All website visitors, 7 days |
 | All Visitors 14d | All website visitors, 14 days |
 | All Visitors 30d | All website visitors, 30 days |
@@ -40,153 +24,75 @@ Retention: [1-180 days]
 
 ### URL-Based Audiences
 
-**For Specific Page Visitors:**
-```
-Website visitors who:
-└── URL contains: /pricing
+Pattern: `URL contains: /segment` with retention window. Name: `RT_[Segment]_[Window]`.
 
-Retention: 14 days
-Name: RT_Pricing_14d
-```
-
-**For Blog Readers:**
-```
-Website visitors who:
-└── URL contains: /blog
-
-Retention: 30 days
-Name: RT_Blog_30d
-```
+Example: pricing page visitors 14d = `RT_Pricing_14d`, blog readers 30d = `RT_Blog_30d`.
 
 ### Event-Based Audiences
 
-**Standard Events to Track:**
-- PageView (all visitors)
-- ViewContent (product/key page views)
-- AddToCart (cart additions)
-- InitiateCheckout (checkout started)
-- Purchase (completed orders)
-- Lead (form submissions)
-- CompleteRegistration (signups)
+**Standard events (by funnel stage):**
+PageView > ViewContent > AddToCart > InitiateCheckout > Purchase, Lead, CompleteRegistration.
 
-**Creating Event-Based Audience:**
-```
+**Exclusion pattern** (cart abandoners example):
+
+```text
 All website visitors who:
-└── Events: AddToCart
-
-Refine by:
-└── And also: Did NOT complete: Purchase
-
-Retention: 14 days
-Name: RT_Cart_NoPurchase_14d
+  Events: AddToCart
+  And also: Did NOT complete: Purchase
+  Retention: 14 days
+  Name: RT_Cart_NoPurchase_14d
 ```
-
----
 
 ## Engagement Audiences
 
-### Video Viewer Audiences
+### Video Viewers
 
-**Creating Video Audiences:**
-```
-Create Audience → Custom Audience → Video
-```
+| Threshold | Use Case |
+|-----------|----------|
+| 3s / 10s / ThruPlay (15s+) | Low intent — awareness |
+| 25% / 50% viewed | Mid-funnel |
+| 75% viewed | High intent |
+| 95% viewed | Highest intent |
 
-**Video Engagement Options:**
-| Option | Meaning |
-|--------|---------|
-| 3 seconds | Viewed at least 3s |
-| 10 seconds | Viewed at least 10s |
-| 25% | Watched 25% of video |
-| 50% | Watched 50% of video |
-| 75% | Watched 75% of video |
-| 95% | Watched 95% of video |
-| ThruPlay | Watched 15s+ or completed |
+**Recommended audiences:** 50% viewers 30d (mid-funnel), 75% viewers 60d (high intent), 95% viewers 60d (highest intent).
 
-**Recommended Video Audiences:**
-| Audience | Config | Use Case |
-|----------|--------|----------|
-| Video_50%_30d | 50% viewers, 30 days | Mid-funnel |
-| Video_75%_60d | 75% viewers, 60 days | High intent |
-| Video_95%_60d | 95% viewers, 60 days | Highest intent |
+### Page and Instagram Engagement
 
-### Page Engagement Audiences
-
-**Creating Page Audiences:**
-```
-Create Audience → Custom Audience → Facebook Page
-```
-
-**Options:**
-- Everyone who engaged with your Page
-- Anyone who visited your Page
+Options (same for Facebook Page and Instagram Account):
+- Everyone who engaged with your account
+- Anyone who visited your profile
 - People who engaged with any post or ad
-- People who clicked any call-to-action button
-- People who sent a message to your Page
-- People who saved your Page or any post
+- People who clicked any CTA button (FB only)
+- People who sent a message
+- People who saved your page/post
 
-**Recommended:** "People who engaged with any post or ad" - 60 days
+**Recommended:** "Engaged with any post or ad" — 60 days.
 
-### Instagram Engagement Audiences
+### Lead Form Engagement
 
-**Creating IG Audiences:**
-```
-Create Audience → Custom Audience → Instagram Account
-```
-
-**Options:**
-- Everyone who engaged with your professional account
-- Anyone who visited your professional account's profile
-- People who engaged with any post or ad
-- People who sent a message to your professional account
-- People who saved any post or ad
-
-### Ad Engagement Audiences
-
-**People Who Engaged with Ads:**
-```
-Create Audience → Custom Audience → Lead form
-→ People who opened but didn't submit
-```
-
-This captures high-intent users who considered converting.
-
----
+People who opened a lead form but didn't submit — captures high-intent users who considered converting.
 
 ## Customer List Setup
 
-### Preparing Your List
+### Preparing and Uploading
 
-**Required Fields:**
-- Email (most important)
+| Field | Importance |
+|-------|-----------|
+| Email | Required (primary match key) |
+| Phone | Recommended |
+| First Name, Last Name | Recommended |
+| City, State, Country, Zip | Recommended |
 
-**Recommended Fields:**
-- Phone
-- First Name
-- Last Name
-- City
-- State
-- Country
-- Zip
+**CSV format:**
 
-**Format:**
 ```csv
 email,phone,fn,ln,ct,st,country,zip
 john@example.com,+14155551234,John,Smith,San Francisco,CA,US,94102
 ```
 
-### Uploading Customer List
+**Upload:** Create Audience > Customer List > upload CSV > map columns > review match rate. Name: `Customers_All_[Date]`.
 
-```
-1. Create Audience → Custom Audience → Customer list
-2. Select "Use a file that doesn't include LTV"
-3. Upload CSV
-4. Map columns to Meta fields
-5. Review match rate
-6. Name audience: "Customers_All_[Date]"
-```
-
-### Expected Match Rates
+### Match Rates
 
 | Data Quality | Expected Match |
 |--------------|----------------|
@@ -205,95 +111,46 @@ john@example.com,+14155551234,John,Smith,San Francisco,CA,US,94102
 | Churned customers | Monthly |
 | Leads (not customers) | Weekly |
 
----
-
 ## Audience Combinations
 
-### Creating Combined Audiences
+Use AND/OR logic with include/exclude rules:
 
-**Using AND/OR Logic:**
-
-```
-Website visitors who meet these conditions:
-├── Include people who:
-│   ├── Visited [any page] in the last 30 days
-│   └── OR Engaged with Page in the last 60 days
-│
-└── Exclude people who:
-    └── Purchased in the last 30 days
+```text
+Include: [audience A] OR [audience B]
+Exclude: [audience C]
 ```
 
 ### Recommended Combinations
 
 **Warm But Not Hot:**
-```
-Include: All Visitors 30d
-Exclude: Visitors 7d
-Exclude: Purchasers 30d
-
-= People who visited 8-30 days ago, didn't buy
-```
+Include All Visitors 30d, exclude Visitors 7d + Purchasers 30d = visited 8-30 days ago, didn't buy.
 
 **Engaged But Not Visited:**
-```
-Include: Page/IG Engagers 60d
-Exclude: Website Visitors 30d
-
-= Social engagers who haven't been to site
-```
+Include Page/IG Engagers 60d, exclude Website Visitors 30d = social engagers who haven't been to site.
 
 **Lapsed Customers:**
-```
-Include: Purchasers 365d
-Exclude: Purchasers 90d
-
-= Bought 4-12 months ago, not recently
-```
-
----
+Include Purchasers 365d, exclude Purchasers 90d = bought 4-12 months ago, not recently.
 
 ## Pixel Event Configuration
 
-### Setting Up Events
+**Setup:** Events Manager > Data Sources > Pixel > Settings > Event Setup Tool > navigate to site > configure events.
 
-**In Events Manager:**
-```
-1. Data Sources → Select Pixel
-2. Settings → Open Event Setup Tool
-3. Navigate to your website
-4. Use interface to configure events
-```
+### Aggregated Event Measurement (AEM) Priority
 
-### Event Priority (AEM)
+Rank your 8 events by value (highest to lowest):
 
-**Rank Your 8 Events by Value:**
-```
-1. Purchase (highest)
+1. Purchase
 2. InitiateCheckout
 3. AddToCart
 4. Lead
 5. CompleteRegistration
 6. ViewContent
 7. Search
-8. PageView (lowest)
-```
+8. PageView
 
-### Testing Events
-
-**Using Test Events Tool:**
-```
-1. Events Manager → Data Sources → Pixel
-2. Test Events tab
-3. Open your website
-4. Complete actions
-5. Verify events fire correctly
-```
-
----
+**Testing:** Events Manager > Pixel > Test Events tab > browse your site > verify events fire.
 
 ## Audience Maintenance
-
-### Regular Tasks
 
 | Task | Frequency |
 |------|-----------|
@@ -302,12 +159,11 @@ Exclude: Purchasers 90d
 | Remove old audiences | Quarterly |
 | Update segment definitions | Quarterly |
 
-### Audience Naming Convention
+### Naming Convention
 
-```
+```text
 [Type]_[Specifics]_[Window]
 
-Examples:
 RT_Web_AllVisitors_14d
 RT_Web_CartAbandoners_7d
 RT_Video_75pct_30d
@@ -315,18 +171,8 @@ RT_Engage_PageLikes_60d
 LAL_Customers_HighLTV_1pct
 ```
 
-### Archiving Audiences
+### Archiving
 
-**When to Archive:**
-- No longer used in campaigns
-- Data too old to be useful
-- Replaced by newer version
-
-**How to Archive:**
-- Add "ARCHIVE" prefix to name
-- Move to Archive folder
-- Don't delete (may break historical reports)
-
----
+Add "ARCHIVE" prefix to name and move to Archive folder when no longer used, data too old, or replaced by newer version. Don't delete — may break historical reports.
 
 *Next: [First-Party Data](first-party-data.md)*
