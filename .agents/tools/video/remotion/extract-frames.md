@@ -8,11 +8,9 @@ metadata:
 
 # Extracting frames from videos
 
-Use Mediabunny to extract frames from videos at specific timestamps. This is useful for generating thumbnails, filmstrips, or processing individual frames.
+Use Mediabunny to extract frames from videos at specific timestamps — useful for thumbnails, filmstrips, or per-frame processing.
 
-## The `extractFrames()` function
-
-This function can be copy-pasted into any project.
+## `extractFrames()` — copy-paste into any project
 
 ```tsx
 import {
@@ -57,53 +55,32 @@ export async function extractFrames({
     input.getPrimaryVideoTrack(),
   ]);
 
-  if (!videoTrack) {
-    throw new Error("No video track found in the input");
-  }
-
-  if (signal?.aborted) {
-    throw new Error("Aborted");
-  }
+  if (!videoTrack) throw new Error("No video track found in the input");
+  if (signal?.aborted) throw new Error("Aborted");
 
   const timestamps =
     typeof timestampsInSeconds === "function"
       ? await timestampsInSeconds({
-          track: {
-            width: videoTrack.displayWidth,
-            height: videoTrack.displayHeight,
-          },
+          track: { width: videoTrack.displayWidth, height: videoTrack.displayHeight },
           container: format.name,
           durationInSeconds,
         })
       : timestampsInSeconds;
 
-  if (timestamps.length === 0) {
-    return;
-  }
-
-  if (signal?.aborted) {
-    throw new Error("Aborted");
-  }
+  if (timestamps.length === 0) return;
+  if (signal?.aborted) throw new Error("Aborted");
 
   const sink = new VideoSampleSink(videoTrack);
 
   for await (using videoSample of sink.samplesAtTimestamps(timestamps)) {
-    if (signal?.aborted) {
-      break;
-    }
-
-    if (!videoSample) {
-      continue;
-    }
-
+    if (signal?.aborted) break;
+    if (!videoSample) continue;
     onVideoSample(videoSample);
   }
 }
 ```
 
 ## Basic usage
-
-Extract frames at specific timestamps:
 
 ```tsx
 await extractFrames({
@@ -113,15 +90,12 @@ await extractFrames({
     const canvas = document.createElement("canvas");
     canvas.width = sample.displayWidth;
     canvas.height = sample.displayHeight;
-    const ctx = canvas.getContext("2d");
-    sample.draw(ctx!, 0, 0);
+    sample.draw(canvas.getContext("2d")!, 0, 0);
   },
 });
 ```
 
-## Creating a filmstrip
-
-Use a callback function to dynamically calculate timestamps based on video metadata:
+## Filmstrip (dynamic timestamps via callback)
 
 ```tsx
 const canvasWidth = 500;
@@ -133,40 +107,29 @@ await extractFrames({
   src: "https://remotion.media/video.mp4",
   timestampsInSeconds: async ({ track, durationInSeconds }) => {
     const aspectRatio = track.width / track.height;
-    const amountOfFramesFit = Math.ceil(
-      canvasWidth / (canvasHeight * aspectRatio)
-    );
+    const amountOfFramesFit = Math.ceil(canvasWidth / (canvasHeight * aspectRatio));
     const segmentDuration = toSeconds - fromSeconds;
-    const timestamps: number[] = [];
-
-    for (let i = 0; i < amountOfFramesFit; i++) {
-      timestamps.push(
-        fromSeconds + (segmentDuration / amountOfFramesFit) * (i + 0.5)
-      );
-    }
-
-    return timestamps;
+    return Array.from({ length: amountOfFramesFit }, (_, i) =>
+      fromSeconds + (segmentDuration / amountOfFramesFit) * (i + 0.5)
+    );
   },
   onVideoSample: (sample) => {
     console.log(`Frame at ${sample.timestamp}s`);
-
-    const canvas = document.createElement("canvas");
-    canvas.width = sample.displayWidth;
-    canvas.height = sample.displayHeight;
-    const ctx = canvas.getContext("2d");
-    sample.draw(ctx!, 0, 0);
+    // draw to canvas as above
   },
 });
 ```
 
 ## Cancellation with AbortSignal
 
-Cancel frame extraction after a timeout:
+Pass `signal` to abort mid-extraction. For a hard timeout, combine with `Promise.race` and clear the timeout on abort to avoid leaks:
 
 ```tsx
 const controller = new AbortController();
 
-setTimeout(() => controller.abort(), 5000);
+// Simple timeout abort
+const timeoutId = setTimeout(() => controller.abort(), 5000);
+controller.signal.addEventListener("abort", () => clearTimeout(timeoutId), { once: true });
 
 try {
   await extractFrames({
@@ -174,57 +137,11 @@ try {
     timestampsInSeconds: [0, 1, 2, 3, 4],
     onVideoSample: (sample) => {
       using frame = sample;
-      const canvas = document.createElement("canvas");
-      canvas.width = frame.displayWidth;
-      canvas.height = frame.displayHeight;
-      const ctx = canvas.getContext("2d");
-      frame.draw(ctx!, 0, 0);
+      frame.draw(document.createElement("canvas").getContext("2d")!, 0, 0);
     },
     signal: controller.signal,
   });
-
-  console.log("Frame extraction complete!");
 } catch (error) {
-  console.error("Frame extraction was aborted or failed:", error);
-}
-```
-
-## Timeout with Promise.race
-
-```tsx
-const controller = new AbortController();
-
-const timeoutPromise = new Promise<never>((_, reject) => {
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-    reject(new Error("Frame extraction timed out after 10 seconds"));
-  }, 10000);
-
-  controller.signal.addEventListener("abort", () => clearTimeout(timeoutId), {
-    once: true,
-  });
-});
-
-try {
-  await Promise.race([
-    extractFrames({
-      src: "https://remotion.media/video.mp4",
-      timestampsInSeconds: [0, 1, 2, 3, 4],
-      onVideoSample: (sample) => {
-        using frame = sample;
-        const canvas = document.createElement("canvas");
-        canvas.width = frame.displayWidth;
-        canvas.height = frame.displayHeight;
-        const ctx = canvas.getContext("2d");
-        frame.draw(ctx!, 0, 0);
-      },
-      signal: controller.signal,
-    }),
-    timeoutPromise,
-  ]);
-
-  console.log("Frame extraction complete!");
-} catch (error) {
-  console.error("Frame extraction was aborted or failed:", error);
+  console.error("Frame extraction aborted or failed:", error);
 }
 ```
