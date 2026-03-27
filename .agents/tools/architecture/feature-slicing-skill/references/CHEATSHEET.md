@@ -1,6 +1,7 @@
 # FSD Quick Reference
 
 > **Sources:** [Tutorial](https://feature-sliced.design/docs/get-started/tutorial) | [Layers](https://feature-sliced.design/docs/reference/layers) | [Slices & Segments](https://feature-sliced.design/docs/reference/slices-segments)
+> **Deep dives:** [LAYERS.md](LAYERS.md) | [PUBLIC-API.md](PUBLIC-API.md) | [IMPLEMENTATION.md](IMPLEMENTATION.md) | [NEXTJS.md](NEXTJS.md) | [MIGRATION.md](MIGRATION.md)
 
 ## Layer Hierarchy
 
@@ -21,20 +22,18 @@ shared/   → Project-agnostic infrastructure         [NO slices, REQUIRED]
 
 |  | app | pages | widgets | features | entities | shared |
 |--|-----|-------|---------|----------|----------|--------|
-| **app** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **pages** | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| **widgets** | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
-| **features** | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ |
-| **entities** | ❌ | ❌ | ❌ | ❌ | @x* | ✅ |
-| **shared** | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| **app** | - | yes | yes | yes | yes | yes |
+| **pages** | no | no | yes | yes | yes | yes |
+| **widgets** | no | no | no | yes | yes | yes |
+| **features** | no | no | no | no | yes | yes |
+| **entities** | no | no | no | no | @x* | yes |
+| **shared** | no | no | no | no | no | yes |
 
-*Use @x notation for cross-entity references
+*Cross-entity refs use `@x` notation — see [LAYERS.md](LAYERS.md) "entities" section.
 
 ---
 
-## Quick Decision Trees
-
-### "Where does this code go?"
+## "Where does this code go?"
 
 ```
 ├─ App-wide config, providers, routing    → app/
@@ -45,7 +44,7 @@ shared/   → Project-agnostic infrastructure         [NO slices, REQUIRED]
 └─ Reusable, domain-agnostic code         → shared/
 ```
 
-### "Feature or Entity?"
+### Feature or Entity?
 
 | Entity (noun) | Feature (verb) |
 |---------------|----------------|
@@ -54,8 +53,8 @@ shared/   → Project-agnostic infrastructure         [NO slices, REQUIRED]
 | `comment` | `write-comment` |
 | `order` | `checkout` |
 
-**Entities:** THINGS with identity, displayed in lists
-**Features:** ACTIONS with side effects, triggered by user
+**Entities:** THINGS with identity, displayed in lists.
+**Features:** ACTIONS with side effects, triggered by user.
 
 ---
 
@@ -73,124 +72,28 @@ shared/   → Project-agnostic infrastructure         [NO slices, REQUIRED]
 
 ---
 
-## File Structure Templates
+## File Structure & Public API
 
-### Entity
+Full structure templates for every layer: [LAYERS.md](LAYERS.md).
+Complete entity/feature implementation patterns: [IMPLEMENTATION.md](IMPLEMENTATION.md).
+Public API barrel file rules and anti-patterns: [PUBLIC-API.md](PUBLIC-API.md).
 
-```
-entities/{name}/
-├── ui/
-│   ├── {Name}Card.tsx
-│   └── index.ts
-├── api/
-│   ├── {name}Api.ts
-│   ├── queries.ts
-│   └── index.ts
-├── model/
-│   ├── types.ts
-│   ├── schema.ts
-│   ├── mapper.ts
-│   └── index.ts
-└── index.ts
-```
-
-### Feature
-
-```
-features/{name}/
-├── ui/
-│   ├── {Name}Form.tsx
-│   ├── {Name}Button.tsx
-│   └── index.ts
-├── api/
-│   ├── {name}Api.ts
-│   └── index.ts
-├── model/
-│   ├── types.ts
-│   ├── schema.ts
-│   ├── store.ts
-│   └── index.ts
-└── index.ts
-```
-
-### Page
-
-```
-pages/{name}/
-├── ui/
-│   ├── {Name}Page.tsx
-│   └── index.ts
-├── api/
-│   └── loader.ts
-├── model/
-│   └── schema.ts
-└── index.ts
-```
-
----
-
-## Public API Pattern
+**Key rule — import from public API only:**
 
 ```typescript
-// entities/user/index.ts
-export { UserCard } from './ui/UserCard';
-export { UserAvatar } from './ui/UserAvatar';
-export { getUser, updateUser } from './api/userApi';
-export { useUser, useUsers } from './api/queries';
-export type { User, UserRole } from './model/types';
-export { userSchema } from './model/schema';
-export { mapUserDTO } from './model/mapper';
-```
-
-**Import from public API only:**
-
-```typescript
-// ✅
+// Good
 import { UserCard, type User } from '@/entities/user';
 
-// ❌
+// Bad — bypasses public API
 import { UserCard } from '@/entities/user/ui/UserCard';
-```
-
----
-
-## Cross-Entity References (@x)
-
-When entities must reference each other:
-
-```
-entities/product/@x/order.ts  → API for order to import
-```
-
-```typescript
-// entities/product/@x/order.ts
-export type { ProductId } from '../model/types';
-
-// entities/order/model/types.ts
-import type { ProductId } from '@/entities/product/@x/order';
-```
-
----
-
-## TypeScript Path Aliases
-
-```json
-{
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    }
-  }
-}
 ```
 
 ---
 
 ## Anti-Patterns
 
-| ❌ Don't | ✅ Do |
-|----------|-------|
+| Don't | Do |
+|-------|-----|
 | Import from higher layer | Import from lower layers only |
 | Cross-slice import (same layer) | Use lower layer or @x |
 | Generic segments: `components/`, `hooks/` | Purpose segments: `ui/`, `lib/` |
