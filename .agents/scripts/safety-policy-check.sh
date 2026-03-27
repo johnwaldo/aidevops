@@ -81,7 +81,8 @@ check_policy_markers() {
 	local secret_handling_ref="${SCRIPT_DIR}/../reference/secret-handling.md"
 
 	# build.txt must reference transcript exposure policy (inline or via pointer)
-	if ! pattern_exists "transcript exposure" "$build_prompt"; then
+	# Note: build.txt uses "Transcript exposure" (capital T) in the compressed pointer form
+	if ! pattern_exists "Transcript exposure" "$build_prompt"; then
 		echo "FAIL: transcript exposure policy missing from build prompt" >&2
 		return 1
 	fi
