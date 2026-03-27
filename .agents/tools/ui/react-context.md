@@ -23,106 +23,36 @@ tools:
 - **Use Case**: Theme, auth, sidebar state, user preferences
 - **Docs**: Use Context7 MCP for current React documentation
 
-**Common Hazards** (from real sessions):
+**Hazards** (from real sessions):
 
-| Hazard | Problem | Solution |
-|--------|---------|----------|
-| Adding state to existing context | Forgot to update interface, provider, and hook | Update ALL: interface, default value, provider state, hook return |
-| Context outside provider | Hook returns undefined | Add fallback in hook or ensure provider wraps usage |
-| Stale closures | Event handlers capture old state | Use `useCallback` with proper dependencies |
-| Re-renders | Entire tree re-renders on any context change | Split contexts by update frequency |
+| Hazard | Solution |
+|--------|----------|
+| Adding state — forgot to update interface/provider/hook | Update ALL: interface, default value, provider state, hook return |
+| Context outside provider — hook returns undefined | Add fallback in hook or ensure provider wraps usage |
+| Stale closures / missing dependency arrays | Use `useCallback` with ALL dependencies |
+| Re-renders on any context change | Split contexts by update frequency; memoize setters |
+| Forgetting `"use client"` | Context requires client-side React — add at top of file |
+| Mutating state directly | Always use setter functions — React won't detect direct mutation |
 
-**Context Pattern Template**:
-
-```tsx
-// 1. Define interface with ALL state
-interface SidebarContextProps {
-  open: boolean;
-  setOpen: (open: boolean) => void;
-  toggleSidebar: () => void;
-  width: number;           // Don't forget new state!
-  setWidth: (width: number) => void;
-}
-
-// 2. Create context with null (forces provider usage)
-const SidebarContext = createContext<SidebarContextProps | null>(null);
-
-// 3. Hook with fallback for optional usage
-export function useSidebar() {
-  const context = useContext(SidebarContext);
-  if (!context) {
-    // Return safe defaults when used outside provider
-    return {
-      open: false,
-      setOpen: () => {},
-      toggleSidebar: () => {},
-      width: 384,
-      setWidth: () => {},
-    };
-  }
-  return context;
-}
-
-// 4. Optional hook that returns null (for conditional rendering)
-export function useSidebarOptional() {
-  return useContext(SidebarContext);
-}
-```
-
-**Adding New State Checklist**:
-
-1. [ ] Update interface with new property
-2. [ ] Update default/fallback values in hook
-3. [ ] Add state in provider (`useState`)
-4. [ ] Add setter in provider (`useCallback`)
-5. [ ] Add to provider value object
-6. [ ] Update any CSS variables if needed
-
-**Persisting to Cookies**:
-
-```tsx
-const COOKIE_NAME = "sidebar_state";
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
-
-const setOpen = useCallback((value: boolean) => {
-  setOpenState(value);
-  document.cookie = `${COOKIE_NAME}=${value}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Lax`;
-}, []);
-```
-
-**CSS Variables from Context**:
-
-```tsx
-// In provider
-<SidebarContext.Provider value={contextValue}>
-  <style>{`:root { --sidebar-width: ${width}px; }`}</style>
-  {children}
-</SidebarContext.Provider>
-
-// In component
-<aside className="w-[var(--sidebar-width)]">
-```
+**Adding New State Checklist**: Update interface -> Update hook defaults -> Add `useState` in provider -> Add `useCallback` setter -> Add to provider value object -> Update CSS variables if needed.
 
 <!-- AI-CONTEXT-END -->
 
-## Detailed Patterns
+## Full Provider Example
 
-### Full Provider Example
+Authoritative reference — interface, context, hooks (with fallback + optional), cookie persistence, CSS variables, clamped setters.
 
 ```tsx
 "use client";
-
 import { createContext, useCallback, useContext, useState } from "react";
 import type { ReactNode } from "react";
 
-// Constants
 const COOKIE_NAME = "sidebar_state";
 const WIDTH_COOKIE_NAME = "sidebar_width";
 export const DEFAULT_WIDTH = 384;
 export const MIN_WIDTH = 320;
 export const MAX_WIDTH = 640;
 
-// Interface
 interface SidebarContextProps {
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -131,53 +61,42 @@ interface SidebarContextProps {
   setWidth: (width: number) => void;
 }
 
-// Context
 const SidebarContext = createContext<SidebarContextProps | null>(null);
 
-// Hooks
+// Hook with safe defaults when used outside provider
 export function useSidebar() {
   const context = useContext(SidebarContext);
   if (!context) {
-    return {
-      open: false,
-      setOpen: () => {},
-      toggleSidebar: () => {},
-      width: DEFAULT_WIDTH,
-      setWidth: () => {},
-    };
+    return { open: false, setOpen: () => {}, toggleSidebar: () => {}, width: DEFAULT_WIDTH, setWidth: () => {} };
   }
   return context;
 }
 
+// Optional hook — returns null (use for conditional rendering)
 export function useSidebarOptional() {
   return useContext(SidebarContext);
 }
 
-// Provider Props
 interface SidebarProviderProps {
   readonly children: ReactNode;
   readonly defaultOpen?: boolean;
   readonly defaultWidth?: number;
 }
 
-// Provider
-export function SidebarProvider({
-  children,
-  defaultOpen = false,
-  defaultWidth = DEFAULT_WIDTH,
-}: SidebarProviderProps) {
+export function SidebarProvider({ children, defaultOpen = false, defaultWidth = DEFAULT_WIDTH }: SidebarProviderProps) {
   const [open, setOpenState] = useState(defaultOpen);
   const [width, setWidthState] = useState(defaultWidth);
+  const COOKIE_MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
   const setOpen = useCallback((value: boolean) => {
     setOpenState(value);
-    document.cookie = `${COOKIE_NAME}=${value}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
+    document.cookie = `${COOKIE_NAME}=${value}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Lax`;
   }, []);
 
   const toggleSidebar = useCallback(() => {
     setOpenState((prev) => {
       const newValue = !prev;
-      document.cookie = `${COOKIE_NAME}=${newValue}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
+      document.cookie = `${COOKIE_NAME}=${newValue}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Lax`;
       return newValue;
     });
   }, []);
@@ -185,13 +104,11 @@ export function SidebarProvider({
   const setWidth = useCallback((value: number) => {
     const clamped = Math.min(Math.max(value, MIN_WIDTH), MAX_WIDTH);
     setWidthState(clamped);
-    document.cookie = `${WIDTH_COOKIE_NAME}=${clamped}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
+    document.cookie = `${WIDTH_COOKIE_NAME}=${clamped}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Lax`;
   }, []);
 
   return (
-    <SidebarContext.Provider
-      value={{ open, setOpen, toggleSidebar, width, setWidth }}
-    >
+    <SidebarContext.Provider value={{ open, setOpen, toggleSidebar, width, setWidth }}>
       <style>{`:root { --sidebar-width: ${width}px; }`}</style>
       {children}
     </SidebarContext.Provider>
@@ -199,81 +116,41 @@ export function SidebarProvider({
 }
 ```
 
-### Conditional Rendering Based on Context
+## Usage Patterns
+
+**Conditional rendering** — use `useSidebarOptional()` to skip rendering when no provider exists:
 
 ```tsx
 const AISidebarToggle = () => {
   const sidebar = useSidebarOptional();
-
-  // Don't render if no provider (e.g., on pages without sidebar)
-  if (!sidebar) return null;
-
-  const { open, toggleSidebar } = sidebar;
-
-  // Don't render when open (close button is in sidebar)
-  if (open) return null;
-
-  return (
-    <Button onClick={toggleSidebar}>
-      <Icons.Sparkles />
-    </Button>
-  );
+  if (!sidebar || sidebar.open) return null;
+  return <Button onClick={sidebar.toggleSidebar}><Icons.Sparkles /></Button>;
 };
 ```
 
-### Reading Initial State from Cookies (Server Component)
+**Server-side cookie hydration** — read initial state in a server component:
 
 ```tsx
-// In layout.tsx (server component)
 import { cookies } from "next/headers";
-
 export default async function Layout({ children }) {
   const cookieStore = await cookies();
   const defaultOpen = cookieStore.get("sidebar_state")?.value === "true";
-
-  return (
-    <SidebarProvider defaultOpen={defaultOpen}>
-      {children}
-    </SidebarProvider>
-  );
+  return <SidebarProvider defaultOpen={defaultOpen}>{children}</SidebarProvider>;
 }
 ```
 
-### Performance: Split Contexts
+**Split contexts by update frequency** to avoid unnecessary re-renders:
 
 ```tsx
-// BAD: One context for everything
-const AppContext = createContext({
-  user: null,
-  theme: "light",
-  sidebarOpen: false,
-  notifications: [],
-});
+// BAD: one context — any change re-renders all consumers
+const AppContext = createContext({ user: null, theme: "light", sidebarOpen: false, notifications: [] });
 
-// GOOD: Split by update frequency
+// GOOD: split by update frequency
 const UserContext = createContext(null);      // Rarely changes
 const ThemeContext = createContext("light");  // Rarely changes
 const SidebarContext = createContext(false);  // Changes on interaction
 const NotificationContext = createContext([]); // Changes frequently
 ```
-
-## Common Mistakes
-
-1. **Forgetting "use client"**
-   - Context requires client-side React
-   - Add `"use client"` at top of context file
-
-2. **Not memoizing setters**
-   - Causes unnecessary re-renders
-   - Wrap setters in `useCallback`
-
-3. **Mutating state directly**
-   - React won't detect changes
-   - Always use setter functions
-
-4. **Missing dependency arrays**
-   - Stale closures in callbacks
-   - Include all dependencies in `useCallback`
 
 ## Related
 
