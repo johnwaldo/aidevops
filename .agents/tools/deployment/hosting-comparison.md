@@ -204,3 +204,49 @@ Edge Functions: ~$0.60/million invocations. Serverless Functions: ~$0.18/GB-hour
 | Data sovereignty required | Coolify | Cloudron | Fly.io, Daytona, Vercel |
 
 **Self-hosted vs managed rule of thumb**: Coolify/Cloudron wins on cost and control for single-region, always-on workloads. Fly.io/Vercel wins on global distribution, auto-scaling, and zero-ops.
+
+---
+
+## AI Model Inference Hosting
+
+For AI model inference, fine-tuning, and custom model hosting, see the dedicated infrastructure agents. All platforms below are OpenAI SDK compatible (change `base_url` only).
+
+### Platform Comparison
+
+| Platform | Type | Models | Fine-tuning | Custom uploads | Dedicated GPUs | CLI | Docs |
+|----------|------|--------|-------------|----------------|----------------|-----|------|
+| **Fireworks AI** | Managed inference + training | 100+ open-source | SFT, DPO, RFT, Training SDK | Yes (HF, S3, Azure) | A100/H100/H200/B200 | `firectl` | `tools/infrastructure/fireworks.md` |
+| **Together AI** | Managed inference + training | 100+ open-source | SFT, DPO, RL | Yes | H100/H200/B200/GB200 | REST API | `tools/infrastructure/together.md` |
+| **Cloudflare Workers AI** | Edge serverless inference | ~30 open-source | No | No (custom via form) | No (serverless GPUs) | `wrangler` | `tools/infrastructure/cloudflare-ai.md` |
+| **NVIDIA Cloud** | Cloud API + self-host runtime | 100+ (build.nvidia.com) | NeMo (separate) | Self-host any NIM container | Self-host or DGX Cloud | REST API | `tools/infrastructure/nvidia-cloud.md` |
+| **NEAR AI Cloud** | TEE-backed private inference | ~10 (open + closed proxy) | No | No | No | REST API only | `tools/infrastructure/nearai.md` |
+| **Cloud GPU** | Raw GPU providers | Any (self-managed) | Any (self-managed) | N/A | RunPod/Vast.ai/Lambda | Provider CLIs | `tools/infrastructure/cloud-gpu.md` |
+
+### Pricing Comparison (common models, $/M tokens, March 2026)
+
+| Model | Fireworks | Together AI | Cloudflare | NEAR AI | Notes |
+|-------|-----------|-------------|------------|---------|-------|
+| GPT-OSS 120B (in/out) | $0.15 / $0.60 | $0.15 / $0.60 | $0.35 / $0.75 | $0.15 / $0.55 | CF ~2x more expensive |
+| DeepSeek V3 (in/out) | $0.56 / $1.68 | $0.60 / $1.70 | N/A | $1.05 / $3.10 | NEAR ~2x (TEE premium) |
+| Llama 3.3 70B (in/out) | $0.90 / $0.90 | $0.88 / $0.88 | $0.29 / $2.25 | N/A | CF cheap input, expensive output |
+| Qwen3 30B A3B (in/out) | $0.15 / $0.60 | $0.15 / $1.50 | $0.05 / $0.34 | $0.15 / $0.55 | CF cheapest for this model |
+| GLM-5 (in/out) | $1.00 / $3.20 | $1.00 / $3.20 | N/A | $0.85 / $3.30 | Parity across platforms |
+| Kimi K2.5 (in/out) | $0.60 / $3.00 | $0.50 / $2.80 | $0.60 / $3.00 | N/A | Together slightly cheaper |
+| Batch discount | 50% off | 50% off | N/A | N/A | Fireworks and Together both offer batch |
+
+NVIDIA Cloud (build.nvidia.com): Free cloud endpoints for prototyping (1000 API credits). Production via self-hosted NIM containers (free with NVIDIA AI Enterprise license or DGX). No published per-token serverless pricing — the cloud API is for prototyping, production runs on your own GPUs via NIM.
+
+### Decision Guide
+
+| Requirement | Recommended | Alternative |
+|-------------|-------------|-------------|
+| Production inference, lowest cost | Fireworks or Together AI | Cloudflare (small models) |
+| Fine-tuning (SFT/DPO/RFT) | Fireworks | Together AI |
+| Custom model training loops | Fireworks (Training SDK) | Cloud GPU (full control) |
+| Edge/global inference, Cloudflare stack | Cloudflare Workers AI | Fireworks (multi-region) |
+| Privacy-critical (TEE, regulated data) | NEAR AI Cloud | Self-hosted NIM in TEE |
+| Self-hosted optimized inference | NVIDIA Cloud (NIM) | vLLM/TGI on Cloud GPU |
+| Anonymized closed-model access | NEAR AI Cloud | Direct provider APIs |
+| Batch processing at scale | Fireworks or Together AI (50% off) | Cloud GPU |
+| GPU clusters for training | Together AI (GPU Clusters) | Cloud GPU providers |
+| Cheapest experimentation | Cloudflare (10K free neurons/day) | NVIDIA Cloud (free credits) |

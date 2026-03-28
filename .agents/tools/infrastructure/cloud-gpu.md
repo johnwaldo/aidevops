@@ -140,6 +140,8 @@ Never expose model APIs without auth -- use SSH tunnels or VPN. Store keys: `aid
 
 ## See Also
 
+- `tools/infrastructure/fireworks.md` -- managed inference, fine-tuning, and model hosting (Fireworks AI)
+- `tools/infrastructure/nearai.md` -- TEE-backed private inference (NEAR AI Cloud)
 - `tools/voice/speech-to-speech.md` -- voice pipeline with cloud GPU
 - `services/hosting/hetzner.md` -- dedicated servers (CPU-only alternative)
 - `tools/ai-orchestration/overview.md` -- AI orchestration for model serving
