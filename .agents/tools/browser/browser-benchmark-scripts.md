@@ -1,6 +1,6 @@
 # Browser Benchmark Scripts
 
-Reference scripts for `browser-benchmark.md`. Each follows the same pattern: navigate, formFill, extract, multiStep — 3 runs each, median reported.
+Reference scripts for `browser-benchmark.md`. Pattern: navigate, formFill, extract, multiStep — 3 runs each, median reported.
 
 ## Playwright
 
@@ -116,56 +116,23 @@ run();
 # bench-agent-browser.sh
 set -euo pipefail
 
-bench_navigate() {
+time_bench() {
   local start end
   start=$(python3 -c 'import time; print(time.time())')
-  agent-browser open "https://the-internet.herokuapp.com/"
-  agent-browser screenshot /tmp/bench-ab-nav.png
+  "$@"
   end=$(python3 -c 'import time; print(time.time())')
   python3 -c "print(f'{$end - $start:.2f}')"
-  agent-browser close
 }
 
-bench_formFill() {
-  local start end
-  start=$(python3 -c 'import time; print(time.time())')
-  agent-browser open "https://the-internet.herokuapp.com/login"
-  agent-browser snapshot -i
-  agent-browser fill '@username' 'tomsmith'
-  agent-browser fill '@password' 'SuperSecretPassword!'
-  agent-browser click '@submit'
-  agent-browser wait --url '**/secure'
-  end=$(python3 -c 'import time; print(time.time())')
-  python3 -c "print(f'{$end - $start:.2f}')"
-  agent-browser close
-}
-
-bench_extract() {
-  local start end
-  start=$(python3 -c 'import time; print(time.time())')
-  agent-browser open "https://the-internet.herokuapp.com/challenging_dom"
-  agent-browser eval "JSON.stringify([...document.querySelectorAll('table tbody tr')].slice(0,5).map(r=>r.textContent.trim()))"
-  end=$(python3 -c 'import time; print(time.time())')
-  python3 -c "print(f'{$end - $start:.2f}')"
-  agent-browser close
-}
-
-bench_multiStep() {
-  local start end
-  start=$(python3 -c 'import time; print(time.time())')
-  agent-browser open "https://the-internet.herokuapp.com/"
-  agent-browser click 'a[href="/abtest"]'
-  agent-browser wait --url '**/abtest'
-  agent-browser get url
-  end=$(python3 -c 'import time; print(time.time())')
-  python3 -c "print(f'{$end - $start:.2f}')"
-  agent-browser close
-}
+do_navigate()  { agent-browser open "https://the-internet.herokuapp.com/"; agent-browser screenshot /tmp/bench-ab-nav.png; agent-browser close; }
+do_formFill()  { agent-browser open "https://the-internet.herokuapp.com/login"; agent-browser snapshot -i; agent-browser fill '@username' 'tomsmith'; agent-browser fill '@password' 'SuperSecretPassword!'; agent-browser click '@submit'; agent-browser wait --url '**/secure'; agent-browser close; }
+do_extract()   { agent-browser open "https://the-internet.herokuapp.com/challenging_dom"; agent-browser eval "JSON.stringify([...document.querySelectorAll('table tbody tr')].slice(0,5).map(r=>r.textContent.trim()))"; agent-browser close; }
+do_multiStep() { agent-browser open "https://the-internet.herokuapp.com/"; agent-browser click 'a[href="/abtest"]'; agent-browser wait --url '**/abtest'; agent-browser get url; agent-browser close; }
 
 echo "=== agent-browser Benchmark ==="
 for test in navigate formFill extract multiStep; do
   echo -n "$test: "
-  for i in 1 2 3; do echo -n "$(bench_"$test")s "; done
+  for i in 1 2 3; do echo -n "$(time_bench "do_$test")s "; done
   echo ""
 done
 ```
@@ -276,7 +243,7 @@ import { chromium } from 'playwright';
 async function benchParallel() {
   const results = {};
 
-  // Multiple contexts (same browser, cookie-isolated)
+  // 5 cookie-isolated contexts, same browser
   let start = performance.now();
   const browser = await chromium.launch({ headless: true });
   const contexts = await Promise.all(Array.from({ length: 5 }, () => browser.newContext()));
@@ -287,7 +254,7 @@ async function benchParallel() {
   results.multiContext = `${((performance.now() - start) / 1000).toFixed(2)}s (5 contexts)`;
   await browser.close();
 
-  // Multiple browsers (full OS-level isolation)
+  // 3 fully isolated browser processes
   start = performance.now();
   const browsers = await Promise.all(Array.from({ length: 3 }, () => chromium.launch({ headless: true })));
   await Promise.all(browsers.map(async b => {
@@ -297,7 +264,7 @@ async function benchParallel() {
   results.multiBrowser = `${((performance.now() - start) / 1000).toFixed(2)}s (3 browsers)`;
   await Promise.all(browsers.map(b => b.close()));
 
-  // 10 parallel pages (shared context)
+  // 10 parallel pages, shared context
   start = performance.now();
   const b2 = await chromium.launch({ headless: true });
   const ctx = await b2.newContext();
@@ -316,7 +283,7 @@ benchParallel();
 ### agent-browser — parallel sessions
 
 ```bash
-# bench-parallel-ab.sh — agent-browser parallel sessions
+# bench-parallel-ab.sh
 set -euo pipefail
 start=$(python3 -c 'import time; print(time.time())')
 agent-browser --session s1 open "https://the-internet.herokuapp.com/login" &
@@ -365,7 +332,7 @@ asyncio.run(run())
 ## Visual Verification Benchmark
 
 ```javascript
-// bench-visual.mjs — Screenshot + AI analysis workflow timing
+// bench-visual.mjs
 import { chromium } from 'playwright';
 import fs from 'fs';
 
@@ -403,6 +370,6 @@ async function benchVisual() {
 benchVisual();
 ```
 
-**Visual verification workflow**: Navigate → viewport screenshot (no `fullPage: true`) → ARIA snapshot → AI analyses both → decide next action.
+**Workflow**: Navigate → viewport screenshot (no `fullPage: true`) → ARIA snapshot → AI analyses both → decide next action.
 
 **Key metrics**: screenshot file size (token cost), ARIA node count, time to screenshot-ready, whether ARIA alone suffices vs needing vision.
