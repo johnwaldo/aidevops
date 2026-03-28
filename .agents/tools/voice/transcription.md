@@ -62,7 +62,7 @@ pip install openai-whisper faster-whisper assemblyai deepgram-sdk
 
 ## Whisper (Local — OpenAI Original)
 
-Runs locally via Python. `faster-whisper` is 4x faster with identical accuracy (CTranslate2-based).
+Runs locally via Python. `faster-whisper` (CTranslate2-based) is significantly faster (2–4x typical speedup depending on hardware and model) with comparable accuracy.
 
 ```bash
 whisper audio.mp3                                          # Basic (auto-detects language)
@@ -258,7 +258,7 @@ python3 -c "
 import assemblyai as aai, os
 aai.settings.api_key = os.environ['ASSEMBLYAI_API_KEY']
 t = aai.Transcriber().transcribe('meeting.mp4', aai.TranscriptionConfig(speaker_labels=True, auto_chapters=True))
-[print(f'[Speaker {u.speaker}] {u.text}') for u in t.utterances]
+for u in t.utterances: print(f'[Speaker {u.speaker}] {u.text}')
 "
 
 # Local Whisper (no speaker labels, but private)
@@ -349,8 +349,8 @@ Deepgram Nova-3: 36 languages — `PrerecordedOptions(model="nova-3", language="
 
 ## Related
 
-- `tools/voice/buzz.md` — Buzz GUI/CLI for offline Whisper transcription
-- `tools/voice/speech-to-speech.md` — Full voice pipeline (VAD + STT + LLM + TTS)
-- `tools/voice/voice-models.md` — TTS models for speech generation
-- `tools/video/yt-dlp.md` — YouTube download helper
-- `transcription-helper.sh` — CLI wrapper for all transcription workflows
+- `./buzz.md` — Buzz GUI/CLI for offline Whisper transcription
+- `./speech-to-speech.md` — Full voice pipeline (VAD + STT + LLM + TTS)
+- `./voice-models.md` — TTS models for speech generation
+- `../video/yt-dlp.md` — YouTube download helper
+- `../../scripts/transcription-helper.sh` — CLI wrapper for all transcription workflows
