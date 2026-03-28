@@ -1,6 +1,6 @@
 # Browser Benchmark Scripts
 
-Reference scripts for `browser-benchmark.md`. Each follows the same pattern: navigate, formFill, extract, multiStep — 3 runs each, median reported.
+Reference scripts for `browser-benchmark.md`. Pattern: navigate, formFill, extract, multiStep — 3 runs each, median reported.
 
 ## Playwright
 
@@ -267,10 +267,8 @@ run();
 
 ## Parallel Instance Benchmarks
 
-### Playwright — multi-context, multi-browser, multi-page
-
 ```javascript
-// bench-parallel.mjs
+// bench-parallel.mjs — Playwright: multi-context, multi-browser, multi-page
 import { chromium } from 'playwright';
 
 async function benchParallel() {
@@ -313,8 +311,6 @@ async function benchParallel() {
 benchParallel();
 ```
 
-### agent-browser — parallel sessions
-
 ```bash
 # bench-parallel-ab.sh — agent-browser parallel sessions
 set -euo pipefail
@@ -331,10 +327,8 @@ echo "s3: $(agent-browser --session s3 get url)"
 agent-browser --session s1 close; agent-browser --session s2 close; agent-browser --session s3 close
 ```
 
-### Crawl4AI — sequential vs parallel
-
 ```python
-# bench-parallel-crawl4ai.py
+# bench-parallel-crawl4ai.py — sequential vs parallel
 import asyncio, time
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 
