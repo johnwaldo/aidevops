@@ -29,7 +29,11 @@ YOUR PRICE TODAY: $XXX
 GUARANTEE: [Risk Reversal]
 ```
 
-**Rules:** Bonuses must be relevant to core offer success. Values must be believable. Anchor with total value before revealing price. Make bonuses tangible (specific deliverables, not vague promises).
+**Rules:**
+1. **Relevance** — Bonuses must be relevant to core offer success
+2. **Believability** — Values must be believable (not inflated)
+3. **Anchor first** — Show total value before revealing price
+4. **Tangible** — Make bonuses specific deliverables, not vague promises
 
 ### Example (SaaS)
 
