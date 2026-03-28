@@ -2,9 +2,7 @@
 
 A complete Video Sales Letter script framework.
 
----
-
-## Quick Reference: VSL Structure
+## Structure
 
 | Section | Duration | Purpose |
 |---------|----------|---------|
@@ -18,17 +16,17 @@ A complete Video Sales Letter script framework.
 | Guarantee | 14:00-15:00 | Remove risk |
 | Close | 15:00-16:00 | Final CTA |
 
-**Total:** 15-20 minutes for mid-ticket ($500-2000)
+**Total:** 15-20 min for mid-ticket ($500-2000)
 
 ---
 
-## Full VSL Script Template
+## Script Template
 
-### [SECTION 1: HOOK — 0:00-0:30]
+### HOOK — 0:00-0:30
 
 **Text on screen:** "[Big Promise or Intriguing Statement]"
 
-```
+```text
 "If you [specific situation they're in]...
 
 And you've tried [common solutions] without getting [desired result]...
@@ -39,19 +37,11 @@ My name is [Your Name], and in the next [X] minutes,
 I'm going to show you [specific promise].
 
 But first, let me ask you something..."
-```
+```text
 
-**Notes:**
-- First 5 seconds must hook
-- Call out your specific audience
-- Promise specific value
-- Create curiosity
+### PROBLEM — 0:30-2:00
 
----
-
-### [SECTION 2: PROBLEM — 0:30-2:00]
-
-```
+```text
 "Do you ever feel like [emotional description of problem]?
 
 You know that frustration when you [specific scenario]...
@@ -68,19 +58,11 @@ Maybe you've been told [bad advice they've received].
 Or maybe you've bought [products/courses that failed them].
 
 If that sounds familiar, you're not alone."
-```
+```text
 
-**Notes:**
-- Get them nodding "yes, that's me"
-- Be specific about their experience
-- Acknowledge what they've already tried
-- Build empathy
+### AGITATE — 2:00-3:30
 
----
-
-### [SECTION 3: AGITATE — 2:00-3:30]
-
-```
+```text
 "Here's the thing most people don't realize:
 
 Every day you don't solve this problem, [negative consequence #1].
@@ -94,19 +76,11 @@ And the worst part?
 [The escalating consequence if they don't act].
 
 I know this because I was in the exact same spot."
-```
+```text
 
-**Notes:**
-- Make them feel the cost of inaction
-- Be specific about consequences
-- Create urgency without being manipulative
-- Transition to your story
+### STORY — 3:30-7:00
 
----
-
-### [SECTION 4: STORY — 3:30-7:00]
-
-```
+```text
 "[Timeframe] ago, I was [in their painful situation].
 
 I remember [specific vivid memory of the pain].
@@ -136,19 +110,11 @@ Since then, I've [credibility builder]:
 - [Achievement #3]
 
 And I've helped [number] people do the same thing."
-```
+```text
 
-**Notes:**
-- Make your story relatable
-- Include specific details
-- Show the turning point clearly
-- Build credibility naturally
+### MECHANISM — 7:00-9:00
 
----
-
-### [SECTION 5: MECHANISM — 7:00-9:00]
-
-```
+```text
 "Here's why this works when other approaches fail:
 
 Most people think [common misconception].
@@ -168,19 +134,11 @@ And instead of [bad outcome], you get [good outcome].
 It's not magic. It's [methodology/framework/system].
 
 I call it [Name of Your Method/System]."
-```
+```text
 
-**Notes:**
-- Explain WHY your solution works
-- Challenge conventional wisdom
-- Make them feel smart for understanding
-- Name your unique approach
+### SOCIAL PROOF — 9:00-11:00
 
----
-
-### [SECTION 6: SOCIAL PROOF — 9:00-11:00]
-
-```
+```text
 "But don't just take my word for it.
 
 Here's what happened when [Customer #1] used this:
@@ -203,19 +161,11 @@ And [Customer #3]:
 These aren't special cases. This is what happens when you [follow your method].
 
 And it can happen for you too."
-```
+```text
 
-**Notes:**
-- Use specific results with numbers
-- Show transformation (before/after)
-- Include quotes in their words
-- Variety of customer types
+### OFFER — 11:00-14:00
 
----
-
-### [SECTION 7: OFFER — 11:00-14:00]
-
-```
+```text
 "That's why I created [Product Name].
 
 [Product Name] is [brief description] that shows you exactly how to [achieve outcome].
@@ -260,19 +210,11 @@ It's not even $[Medium Number].
 Your total investment for everything you see here is just $[Actual Price].
 
 Or [X] payments of $[Y] if that works better for you."
-```
+```text
 
-**Notes:**
-- Present each component clearly
-- Assign value to everything
-- Build the stack dramatically
-- Make the price feel small
+### GUARANTEE — 14:00-15:00
 
----
-
-### [SECTION 8: GUARANTEE — 14:00-15:00]
-
-```
+```text
 "And here's the thing:
 
 You're completely protected.
@@ -294,19 +236,11 @@ That means you literally have nothing to lose.
 Either [Product Name] works for you, or you get your money back.
 
 It's that simple."
-```
+```text
 
-**Notes:**
-- Name your guarantee
-- Explain exactly how it works
-- Remove all perceived risk
-- Make it feel fair
+### CLOSE — 15:00-16:00
 
----
-
-### [SECTION 9: CLOSE — 15:00-16:00]
-
-```
+```text
 "So here's where we are:
 
 You have a choice to make.
@@ -340,49 +274,29 @@ And get instant access.
 I can't wait to see you inside.
 
 [Your Name]"
-```
-
-**Notes:**
-- Present clear contrast
-- Remind them of consequences
-- Clear instructions for next step
-- End with confidence
+```text
 
 ---
 
-## VSL Best Practices
+## Best Practices
 
-### Delivery
-- Speak conversationally, not "salesy"
-- Vary your pace and energy
-- Pause for emphasis on key points
-- Sound like you're talking to one person
+**Delivery:** Speak conversationally; vary pace and energy; pause for emphasis; talk to one person.
 
-### Visuals
-- Simple slides > talking head for most of VSL
-- Text on screen reinforces key points
-- Show proof (screenshots, testimonials)
-- Progress indicator keeps viewers engaged
+**Visuals:** Simple slides > talking head; text on screen reinforces key points; show proof (screenshots, testimonials); progress indicator keeps viewers engaged.
 
-### Length Guidelines
-- Lead magnet VSL: 5-10 minutes
-- Low ticket ($100-500): 10-20 minutes
-- Mid ticket ($500-2000): 20-35 minutes
-- High ticket ($2000+): 30-60 minutes
+**Length by price point:**
+- Lead magnet: 5-10 min
+- Low ticket ($100-500): 10-20 min
+- Mid ticket ($500-2000): 20-35 min
+- High ticket ($2000+): 30-60 min
 
-### What to Test
-1. The hook (first 30 seconds = most important)
-2. Different story angles
-3. Offer presentation order
-4. CTA placement and language
+**What to test:** Hook (first 30 sec = highest leverage) → story angle → offer order → CTA placement.
 
 ---
 
 ## Slide-by-Slide Outline
 
-For VSLs using slides instead of talking head:
-
-```
+```text
 Slide 1: "[Big Intriguing Headline]"
 Slide 2: "If you [situation]..."
 Slide 3: "You've probably tried..."
@@ -408,4 +322,4 @@ Slide 43: "You have two choices..."
 Slide 44: "[Option 1 - status quo]"
 Slide 45: "[Option 2 - take action]"
 Slide 46: "[Final CTA with urgency]"
-```
+```text
