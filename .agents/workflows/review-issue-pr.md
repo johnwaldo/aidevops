@@ -18,15 +18,10 @@ tools:
 
 ## Quick Reference
 
-- **Purpose**: Triage and review issues/PRs submitted by external contributors
-- **Focus**: Validate the problem exists, evaluate if the solution is optimal
+- **Purpose**: Triage and review issues/PRs from external contributors
 - **When**: Before approving/merging external contributions
 
-**Core Questions**:
-
-1. **Is the issue real?** — Can we reproduce? Bug or expected behavior?
-2. **Is this the best solution?** — Simpler alternatives? Fits architecture?
-3. **Is the scope appropriate?** — Does the PR do exactly what's needed, no more?
+**Core Questions**: (1) Is the issue real — reproducible, not duplicate, actual bug? (2) Is this the best solution — simpler alternatives, fits architecture? (3) Is the scope appropriate — exactly what's needed, no more?
 
 ```bash
 gh issue view 123 --json title,body,labels,author
@@ -35,175 +30,89 @@ gh pr view 456 --json title,body,files,additions,deletions
 
 <!-- AI-CONTEXT-END -->
 
-## Issue Review Checklist
+## Issue Review
 
-### 1. Problem Validation
+### Problem Validation
 
-| Check | Question | How to Verify |
-|-------|----------|---------------|
-| **Reproducible** | Can we reproduce? | Follow steps, test locally |
-| **Version confirmed** | Occurs on latest? | Check reporter's version vs current |
-| **Not duplicate** | Already reported? | Search closed/open issues |
-| **Actual bug** | Bug or expected behavior? | Check docs, design decisions |
-| **In scope** | Within project scope? | Check project goals, roadmap |
+| Check | How to Verify |
+|-------|---------------|
+| **Reproducible** | Follow steps, test locally |
+| **Version confirmed** | Reporter's version vs current |
+| **Not duplicate** | `gh issue list --search "keyword" --state all` |
+| **Actual bug** | Check docs, design decisions — may be expected behavior |
+| **In scope** | Check project goals, roadmap |
 
-```bash
-gh issue view 123 --json title,body,labels,state
-gh issue list --search "keyword" --state all
-gh issue view 123 --json body | jq -r '.body' | grep -i "version\|environment"
-```
+### Root Cause Analysis
 
-### 2. Root Cause Analysis
-
-| Question | Why It Matters |
-|----------|----------------|
-| What's the actual root cause? | Surface symptoms may hide deeper issues |
-| Is this a symptom of a larger problem? | Fixing symptoms creates tech debt |
-| Why wasn't this caught earlier? | May indicate missing tests or docs |
-| Are there related issues? | Batch fixes may be more efficient |
+Before fixing, determine: What's the actual root cause? Is this a symptom of a larger problem? Why wasn't it caught earlier? Are there related issues worth batching?
 
 ```bash
 rg "relevant_function" --type js --type ts --type py --type sh
 git log --oneline -20 -- path/to/affected/file
-gh issue list --search "related keyword" --json number,title
 ```
 
-## PR Review Checklist
+## PR Review
 
-### 3. Solution Evaluation
+### Solution Evaluation
 
-| Criterion | Questions to Ask |
-|-----------|------------------|
-| **Simplicity** | Is there a simpler way? Could this be a one-liner? |
-| **Correctness** | Fixes root cause, not just symptom? |
-| **Completeness** | Handles edge cases and error conditions? |
-| **Consistency** | Follows existing codebase patterns? |
+| Criterion | Key Question |
+|-----------|-------------|
+| **Simplicity** | Simpler way? One-liner? Existing utility? Standard library? |
+| **Correctness** | Fixes root cause, not symptom? Handles edge cases? |
+| **Consistency** | Follows codebase patterns? Right abstraction level? |
 | **Performance** | Introduces regressions? |
-| **Maintainability** | Easy to maintain, understand, debug? |
+| **Maintainability** | Easy to understand, debug, extend? |
 
-Before approving, consider:
-- [ ] Could this use existing utilities/functions?
-- [ ] Is there a standard library solution?
-- [ ] Would a different approach be more maintainable?
-- [ ] Does the codebase already have a pattern for this?
-- [ ] Is the fix at the right abstraction level?
+### Scope Assessment
 
-### 4. Scope Assessment
-
-| Red Flag | What It Indicates |
-|----------|-------------------|
-| Unrelated file changes | Scope creep — should be separate PR |
-| Refactoring mixed with fixes | Hard to review, may hide issues |
-| "While I was here" changes | Increases risk, harder to revert |
-| Missing from PR description | Undocumented changes are suspicious |
+Red flags: unrelated file changes (scope creep), refactoring mixed with fixes, "while I was here" changes, changes missing from PR description.
 
 ```bash
-gh pr view 456 --json files | jq -r '.files[].path'
-gh pr view 456 --json body,files
 gh pr diff 456 --stat
+gh pr view 456 --json files | jq -r '.files[].path'
 ```
 
-### 5. Architecture Alignment
+### Architecture Alignment
 
-| Check | Question |
-|-------|----------|
-| **Patterns** | Follows existing code patterns? |
-| **Dependencies** | New deps added? Are they justified? |
-| **API surface** | Changes public APIs intentionally? |
-| **Breaking changes** | Breaks backward compatibility? |
-| **Test coverage** | Adequate tests for the right things? |
+Check: follows existing patterns, new deps justified, public API changes intentional, no unintended breaking changes, adequate test coverage.
 
 ## Review Output Format
 
 ```markdown
-## Issue/PR Review: #123 - [Title]
-
+## Issue/PR Review: #NNN - [Title]
 ### Issue Validation
-
 | Check | Status | Notes |
 |-------|--------|-------|
 | Reproducible | Yes/No | [details] |
-| Not duplicate | Yes/No | [related issues if any] |
+| Not duplicate | Yes/No | [related issues] |
 | Actual bug | Yes/No | [or expected behavior?] |
-| In scope | Yes/No | [alignment with project goals] |
-
+| In scope | Yes/No | [alignment] |
 **Root Cause**: [Brief description]
-
 ### Solution Evaluation
-
 | Criterion | Assessment | Notes |
 |-----------|------------|-------|
-| Simplicity | Good/Needs Work | [simpler alternatives?] |
-| Correctness | Good/Needs Work | [fixes root cause?] |
-| Completeness | Good/Needs Work | [edge cases covered?] |
-| Consistency | Good/Needs Work | [follows patterns?] |
-
-**Alternative Approaches Considered**:
-1. [Alternative 1] - [why not chosen]
-
-### Scope Assessment
-
-- [ ] All changes documented in PR description
-- [ ] No unrelated changes
-- [ ] Minimal diff for the fix
-- [ ] No "while I was here" additions
-
-**Undocumented Changes**: [list any, or "None"]
-
+| Simplicity | Good/Needs Work | [alternatives?] |
+| Correctness | Good/Needs Work | [root cause?] |
+| Completeness | Good/Needs Work | [edge cases?] |
+| Consistency | Good/Needs Work | [patterns?] |
+**Alternatives Considered**: [list or "None"]
+### Scope: [ ] All changes documented [ ] No unrelated changes [ ] Minimal diff
+**Undocumented Changes**: [list or "None"]
 ### Recommendation
-
 **Decision**: APPROVE / REQUEST CHANGES / CLOSE
-
-**Required Changes** (if any):
-1. [Change 1]
-
-**Suggestions** (optional):
-1. [Suggestion 1]
+**Required Changes**: [list or "None"]
+**Suggestions**: [list or "None"]
 ```
 
-## Common Scenarios
+## Common Response Templates
 
-### Issue is Not a Bug
+**Not a bug**: "Thanks for reporting! After investigation, this is expected behavior: [explanation]. [Link to docs]. If you believe it should work differently, please open a feature request. Closing as not-a-bug — feel free to reopen with additional context."
 
-```markdown
-Thanks for reporting this! After investigation, this appears to be expected behavior:
-- [Explanation of why this is by design]
-- [Link to relevant documentation]
+**Fixes symptom, not cause**: "Thanks for the PR! The fix works for the reported case, but the root cause is [X]. Suggested approach: [Y]. Would you be open to updating? Happy to discuss."
 
-If you believe this should work differently, please open a feature request.
-Closing as "not a bug" — feel free to reopen with additional context.
-```
+**Scope creep**: "Core fix looks good, but some changes should be separate PRs: In scope (keep): [A]. Out of scope (separate PR): [B] — [reason]. Could you split this?"
 
-### PR Fixes Symptom, Not Cause
-
-```markdown
-Thanks for the PR! The fix works for the reported case, but we should address the root cause:
-- **Current approach**: [what the PR does]
-- **Root cause**: [actual underlying issue]
-- **Suggested approach**: [better solution]
-
-Would you be open to updating the PR? Happy to discuss.
-```
-
-### PR Has Scope Creep
-
-```markdown
-The core fix looks good, but some changes should be in separate PRs:
-- **In scope** (keep): [change 1], [change 2]
-- **Out of scope** (separate PR): [change 3] — [reason]
-
-Could you split this into focused PRs?
-```
-
-### Better Alternative Exists
-
-```markdown
-Thanks for tackling this! There's a simpler approach to consider:
-- **Your approach**: [summary]
-- **Alternative**: [simpler solution] — preferable because [reason]
-
-Would you be open to updating the PR? Or I can make the change — just let me know.
-```
+**Better alternative exists**: "Thanks for tackling this! Simpler approach: [alternative] — preferable because [reason]. Would you be open to updating, or I can make the change?"
 
 ## CLI Commands
 
