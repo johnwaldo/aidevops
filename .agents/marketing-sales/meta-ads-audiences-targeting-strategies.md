@@ -2,119 +2,68 @@
 
 > In 2026, targeting is less about finding people and more about giving Meta's AI the right signals.
 
----
+## Targeting Hierarchy (Descending Effectiveness)
 
-## The Targeting Hierarchy
-
-**Most Effective (Descending Order):**
-
-1. **Broad + Great Creative** — Let AI find buyers
-2. **Lookalike (1-3%)** — Similar to best customers  
-3. **Custom Audiences** — Your first-party data
-4. **Interest/Behavior Layering** — Manual targeting
-5. **Detailed Interest Only** — Most restricted
+1. **Broad + Great Creative** — let AI find buyers
+2. **Lookalike (1-3%)** — similar to best customers
+3. **Custom Audiences** — first-party data
+4. **Interest/Behavior Layering** — manual targeting
+5. **Detailed Interest Only** — most restricted
 
 ---
 
 ## Broad Targeting
 
-### What Is Broad Targeting?
-
-Minimal restrictions, letting Meta's algorithm find buyers.
-
-**Setup:**
 ```
-Location: [Your target countries]
+Location: [Target countries]
 Age: 18-65+ (or product minimum)
 Gender: All
 Detailed Targeting: None
 Advantage+ Audience: ON
 ```
 
-### Why Broad Works in 2026
+**Use when:** 50+ conversions/week, creative clearly signals audience, want to scale.
 
-**Meta's Algorithm Has:**
-- Billions of data points per user
-- Real-time optimization across placements
-- Learning from your conversion data
-- Cross-advertiser insights
-
-**Your Manual Targeting Has:**
-- Hypotheses about your customer
-- Limited data points
-- Static assumptions
-
-**Result:** Broad + good creative often beats detailed targeting.
-
-### When Broad Works
-
-✅ You have 50+ conversions/week
-✅ Your creative clearly signals who it's for
-✅ You want to scale
-✅ You trust the algorithm
-
-### When Broad Doesn't Work
-
-❌ Brand new account (no data)
-❌ Very niche B2B product
-❌ Compliance/legal restrictions
-❌ Very small total addressable market
+**Avoid when:** Brand new account, very niche B2B, compliance restrictions, tiny TAM.
 
 ---
 
 ## Lookalike Audiences
 
-### Source Audience Quality Matters
+### Source Quality
 
-| Source Audience | Quality |
-|-----------------|---------|
+| Source | Quality |
+|--------|---------|
 | Closed-won customers (high LTV) | Best |
 | All paying customers | Great |
 | Sales-qualified leads | Good |
 | Marketing-qualified leads | OK |
-| All leads | Fair |
-| Website visitors | Fair |
+| All leads / Website visitors | Fair |
 | Engagers | Poor |
 
-### Building High-Quality Lookalikes
+### Build Steps
 
-**Step 1: Prepare Your Source**
 ```
-Best: Top 500-1000 customers by LTV
-Include: Email, phone, name, country
-Format: CSV with clear headers
-```
-
-**Step 2: Create Custom Audience**
-```
-1. Audiences → Create Audience → Custom Audience
-2. Customer List → Upload
-3. Name: "Customers - High LTV - 2026"
+1. Prepare source: top 500-1000 customers by LTV (email, phone, name, country)
+2. Audiences → Create → Custom Audience → Customer List → Upload
+3. Audiences → Create → Lookalike → Source: custom audience → 1% to start
 ```
 
-**Step 3: Create Lookalike**
-```
-1. Audiences → Create Audience → Lookalike
-2. Source: Your custom audience
-3. Location: Target country
-4. Size: 1% to start
-```
+### Lookalike Sizes (US)
 
-### Lookalike Percentages
-
-| Percentage | Audience Size (US) | Quality |
-|------------|-------------------|---------|
+| % | Size | Quality |
+|---|------|---------|
 | 1% | ~2.3M | Highest |
 | 2% | ~4.6M | High |
 | 3% | ~6.9M | Good |
 | 5% | ~11.5M | Medium |
 | 10% | ~23M | Lower |
 
-**Start at 1%, expand when you need reach.**
+Start at 1%, expand when reach is needed.
 
 ### Stacked Lookalikes
 
-Test different sources in separate ad sets:
+Test sources in separate ad sets, let them compete:
 
 ```
 Ad Set 1: LAL 1% - Customers (High LTV)
@@ -122,14 +71,7 @@ Ad Set 2: LAL 1% - All Customers
 Ad Set 3: LAL 1% - Demo Completers
 ```
 
-Let them compete, see which source produces best results.
-
-### When Lookalikes Beat Broad
-
-- Account has limited conversion history
-- Very specific customer profile
-- Source audience is high quality and unique
-- Broad isn't performing
+**Use lookalikes over broad when:** limited conversion history, specific customer profile, high-quality source, broad underperforming.
 
 ---
 
@@ -137,51 +79,31 @@ Let them compete, see which source produces best results.
 
 ### B2B Interest Layering
 
-**Strategy: Stack Related Interests**
-
 ```
-Example for Marketing SaaS:
+Example (Marketing SaaS):
 Interest: HubSpot OR Salesforce OR Marketo
-AND
-Interest: Digital Marketing OR Content Marketing
-AND
-Behavior: Small Business Owners
+AND Interest: Digital Marketing OR Content Marketing
+AND Behavior: Small Business Owners
 ```
 
 ### B2C Interest Selection
 
-**Start with:**
-- Competitor brands
-- Related products they'd buy
-- Lifestyle indicators
-- Media they consume
+Start with competitor brands, related products, lifestyle indicators, media consumed.
 
-**Example for Fitness Product:**
 ```
+Example (Fitness):
 Interest: CrossFit OR Orange Theory OR Peloton
-AND
-Interest: Health & Wellness
+AND Interest: Health & Wellness
 ```
 
-### Interest Research Methods
+### Interest Research
 
-**1. Audience Insights (In Ads Manager)**
-- Check what interests your converters have
-- Find adjacent interests
+- **Audience Insights** — check what interests converters have, find adjacent interests
+- **Facebook Ad Library** — see competitor targeting patterns
+- **Customer surveys** — brands followed, publications read
+- **Competitor lookalike** — target interest in competitor brand
 
-**2. Facebook Ad Library**
-- See what competitors target
-- Identify patterns
-
-**3. Customer Surveys**
-- Ask what brands they follow
-- What publications they read
-
-**4. Competitor Lookalike**
-- Target interest in competitor brand
-- If they like competitor, they might like you
-
-### Behavior Targeting Options
+### Behavior Options
 
 | Behavior | Good For |
 |----------|----------|
@@ -193,55 +115,42 @@ Interest: Health & Wellness
 
 ### Interest Testing Framework
 
-**Week 1: Broad vs Interest Test**
+**Week 1:**
+
 ```
-Ad Set 1: Broad (no interests)
+Ad Set 1: Broad (control)
 Ad Set 2: Interest Stack A
 Ad Set 3: Interest Stack B
 ```
 
-**Evaluate:** Does interest targeting beat broad?
-
-**Week 2: If Interest Wins, Optimize**
-```
-Test different interest combinations
-Find best performing stack
-```
+**Week 2 (if interest wins):** Test combinations, find best stack.
 
 ---
 
-## First-Party Data Strategy
+## First-Party Data
 
-### Data Types You Can Upload
+### Upload Match Rates
 
-| Data Type | Match Rate | Best Use |
-|-----------|------------|----------|
+| Data Type | Match Rate | Notes |
+|-----------|------------|-------|
 | Email | 50-70% | Primary identifier |
 | Phone | 30-50% | Secondary identifier |
 | First/Last Name | Improves match | Always include |
 | City/State | Improves match | Include if available |
 | Country | Required | Always include |
 
-### Segmentation Ideas
+### Segmentation
 
-**By Value:**
-- High LTV customers (top 20%)
-- All customers
-- High-spenders (by AOV)
+**By value:** High LTV (top 20%), all customers, high-spenders (by AOV)
 
-**By Behavior:**
-- Recent purchasers (90 days)
-- Repeat purchasers (2+ orders)
-- Lapsed customers (no purchase 6+ months)
+**By behavior:** Recent purchasers (90d), repeat purchasers (2+ orders), lapsed (6+ months)
 
-**By Stage:**
-- Leads not yet customers
-- Trial users
-- Churned customers
+**By stage:** Leads not yet customers, trial users, churned customers
 
-### Creating Valuable Custom Audiences
+### Custom Audience Templates
 
-**High-Intent Website Audiences:**
+**High-intent website:**
+
 ```
 Pricing Page Visitors (7 days)
 Demo Page Visitors (14 days)
@@ -249,7 +158,8 @@ Add to Cart (14 days)
 Checkout Started (7 days)
 ```
 
-**Engagement Audiences:**
+**Engagement:**
+
 ```
 Video Views 50%+ (30 days)
 Video Views 95% (60 days)
@@ -261,25 +171,15 @@ Ad Engagers (30 days)
 
 ## Exclusion Strategy
 
-### Who to Exclude
+**Exclude from prospecting:** recent purchasers (7-30d), current customers, employees.
 
-**Always Exclude from Prospecting:**
-- Recent purchasers (7-30 days)
-- Current customers (if using CRM list)
-- Employees (if significant number)
-
-**Exclude from Retargeting:**
-- Already converted on this offer
-- Higher-intent audiences (in lower-intent campaigns)
-
-### Setting Up Exclusions
+**Exclude from retargeting:** already converted on this offer, higher-intent audiences in lower-intent campaigns.
 
 ```
-Ad Set → Audience → Exclude People
-→ Custom Audiences → Select audience to exclude
+Ad Set → Audience → Exclude People → Custom Audiences
 ```
 
-### Exclusion Waterfall for Retargeting
+### Retargeting Exclusion Waterfall
 
 ```
 Campaign: Retargeting
@@ -293,11 +193,10 @@ Campaign: Retargeting
 
 ---
 
-## Testing Audiences
+## Audience Testing
 
 ### A/B Test Setup
 
-**Test Broad vs Targeted:**
 ```
 Campaign: Audience Test
 ├── Ad Set: Broad (control)
@@ -305,22 +204,17 @@ Campaign: Audience Test
 ├── Ad Set: Lookalike 1%
 └── Ad Set: Lookalike 3%
 
-Same creative, same budget, same duration
-Winner = best CPA
+Same creative, same budget, same duration — winner = best CPA
 ```
 
-### Audience Test Duration
-
-- Minimum: 7 days
-- Ideal: 14 days  
-- Need: 100+ conversions per ad set
+**Duration:** 7 days minimum, 14 days ideal. Need 100+ conversions per ad set.
 
 ### Reading Results
 
 | If Broad Wins | If Targeted Wins |
 |---------------|------------------|
 | Scale with broad | Layer targeting for efficiency |
-| Creative is strong | Consider audience more specific |
+| Creative is strong | Consider more specific audience |
 | Algorithm has good data | May need more conversion data |
 
 ---
