@@ -15,25 +15,23 @@ tools:
 
 # YouTube Topic Research
 
-Find video topics that have proven demand but low competition. Combines YouTube search data, competitor content analysis, keyword research, and trend detection to surface opportunities.
+Find video topics with proven demand but low competition. Combines YouTube search data, competitor analysis, keyword research, and trend detection.
 
 ## When to Use
 
-Read this subagent when the user wants to:
-
-- Find video topic ideas for their niche
+- Find video topic ideas for a niche
 - Identify content gaps (topics competitors haven't covered)
 - Detect rising trends before they peak
 - Cluster keywords into video topic groups
 - Generate unique angles on proven topics
-- Validate whether a topic idea has enough search demand
+- Validate search demand for a topic idea
 
 ## Data Sources
 
 | Source | What It Provides | Tool |
 |--------|-----------------|------|
 | YouTube Data API | Search results, video counts per topic | `youtube-helper.sh search` |
-| Competitor videos | What topics are already covered | `youtube-helper.sh videos` |
+| Competitor videos | Topics already covered | `youtube-helper.sh videos` |
 | yt-dlp transcripts | Deep topic extraction from video content | `youtube-helper.sh transcript` |
 | DataForSEO | YouTube SERP data, keyword volume, competition | `keyword-research-helper.sh` |
 | Serper | Google Trends signals, web search context | `seo/serper.md` |
@@ -41,50 +39,33 @@ Read this subagent when the user wants to:
 
 ## Workflow: Content Gap Analysis
 
-The most reliable way to find topics: compare what competitors cover vs what's missing.
+Compare what competitors cover vs what's missing.
 
-### Step 1: Extract Competitor Topic Maps
-
-For each competitor, get their video titles and cluster by topic:
+**Step 1: Extract competitor topic maps.** For each of 3-5 competitors:
 
 ```bash
-# Get all video titles from a competitor
 youtube-helper.sh videos @competitor 200 json | node -e "
 process.stdin.on('data', d => {
     JSON.parse(d).forEach(v => console.log(v.snippet?.title));
-});
-" > /tmp/competitor_titles.txt
+});" > /tmp/competitor_titles.txt
 ```
 
-Repeat for 3-5 competitors. Then use the AI to cluster titles into topic groups:
-
-**Prompt pattern**:
+Cluster titles into topic groups with AI:
 > Here are [N] video titles from [competitor]. Group them into topic clusters.
-> For each cluster, note: topic name, video count, and whether views trend up or down.
+> For each cluster: topic name, video count, view trend (up/down).
 
-### Step 2: Map Your Own Coverage
+**Step 2: Map your own coverage** using the same command with `@yourchannel`.
 
-```bash
-youtube-helper.sh videos @yourchannel 200 json | node -e "
-process.stdin.on('data', d => {
-    JSON.parse(d).forEach(v => console.log(v.snippet?.title));
-});
-" > /tmp/my_titles.txt
-```
+**Step 3: Identify gaps** — topics where:
+1. 2+ competitors have videos (proven demand)
+2. You have zero coverage
+3. At least one competitor video is an outlier (3x+ their median views)
 
-### Step 3: Identify Gaps
+> Compare topic clusters from my channel vs competitors. Identify topics where:
+> (a) 2+ competitors have videos, (b) I have zero coverage,
+> (c) at least one competitor video is an outlier (3x+ median views).
 
-Compare the topic maps. Gaps are topics that:
-1. Multiple competitors cover (proven demand)
-2. You haven't covered yet
-3. Have outlier videos in competitor channels (high engagement)
-
-**Prompt pattern**:
-> Compare these topic clusters from my channel vs competitors.
-> Identify topics where: (a) 2+ competitors have videos, (b) I have zero coverage,
-> (c) at least one competitor video is an outlier (3x+ their median views).
-
-### Step 4: Store Findings
+**Step 4: Store findings:**
 
 ```bash
 memory-helper.sh store --type WORKING_SOLUTION --namespace youtube-topics \
@@ -94,106 +75,58 @@ memory-helper.sh store --type WORKING_SOLUTION --namespace youtube-topics \
 
 ## Workflow: Trend Detection
 
-Find topics gaining momentum before they saturate.
-
-### Method 1: YouTube Search Volume Signals
+**Method 1: YouTube publish date signals**
 
 ```bash
-# Search for your niche topic — look at publish dates
 youtube-helper.sh search "your niche topic 2026" video 20
-
-# If most results are recent (last 30 days), the topic is trending
-# If results are old, the topic may be saturated
+# Most results recent (last 30 days) = trending. Old results = saturated.
 ```
 
-### Method 2: DataForSEO YouTube SERP
-
-If DataForSEO is configured, use the YouTube SERP endpoint:
+**Method 2: DataForSEO YouTube SERP** — returns rankings, estimated search volume, competition, related keywords:
 
 ```bash
-# Check keyword-research-helper for YouTube-specific data
 keyword-research-helper.sh volume "topic keyword" --engine youtube
 ```
 
-DataForSEO's `serp/youtube/organic/live` endpoint returns:
-- Video rankings for a keyword on YouTube search
-- Estimated search volume
-- Competition level
-- Related keywords
-
-### Method 3: Competitor Upload Velocity
-
-If multiple competitors suddenly start covering a topic, it's trending:
+**Method 3: Competitor upload velocity** — same topic across multiple channels in a 2-week window signals trending:
 
 ```bash
-# Get recent videos from multiple competitors
 for ch in @comp1 @comp2 @comp3; do
-    echo "=== $ch ==="
-    youtube-helper.sh videos "$ch" 20 | head -15
-    echo ""
+    echo "=== $ch ===" && youtube-helper.sh videos "$ch" 20 | head -15
 done
 ```
 
-Look for the same topic appearing across multiple channels within the same 2-week window.
+**Method 4: Google Trends via Serper** (requires `seo/serper.md` configuration):
+> Search Google Trends for "[topic]" — is interest rising, stable, or declining over the past 12 months?
 
-### Method 4: Google Trends via Serper
+## Workflow: Keyword Clustering
 
-```bash
-# Use Serper to check Google Trends signals
-# (requires serper.md configuration)
-```
+One video should target one keyword cluster.
 
-**Prompt pattern**:
-> Search Google Trends for "[topic]" and tell me if interest is rising,
-> stable, or declining over the past 12 months.
-
-## Workflow: Keyword Clustering for YouTube
-
-Group related keywords into video topics. One video should target one keyword cluster.
-
-### Step 1: Seed Keywords
-
-Start with 5-10 broad keywords in your niche:
+**Step 1: Seed search** — for 5-10 broad niche keywords:
 
 ```bash
-# Search YouTube for each seed keyword
 for kw in "keyword1" "keyword2" "keyword3"; do
-    echo "=== $kw ==="
-    youtube-helper.sh search "$kw" video 10
-    echo ""
+    echo "=== $kw ===" && youtube-helper.sh search "$kw" video 10
 done
 ```
 
-### Step 2: Extract Related Terms
-
-From search results, extract:
-- Video titles (contain natural keyword variations)
-- Tags from top-performing videos
-- Description keywords
+**Step 2: Extract tags** from top-performing videos:
 
 ```bash
-# Get tags from top videos
 youtube-helper.sh video VIDEO_ID json | node -e "
 process.stdin.on('data', d => {
     const tags = JSON.parse(d).items?.[0]?.snippet?.tags || [];
     tags.forEach(t => console.log(t));
-});
-"
+});"
 ```
 
-### Step 3: Cluster with AI
+**Step 3: Cluster with AI:**
+> Here are [N] keywords related to [niche]. Group into clusters (one cluster = one video topic).
+> For each cluster: primary keyword (highest volume), supporting keywords (2-5),
+> suggested title, estimated competition (low/medium/high based on video count).
 
-**Prompt pattern**:
-> Here are [N] keywords related to [niche]. Group them into clusters where
-> each cluster represents one video topic. For each cluster:
-> 1. Primary keyword (highest volume)
-> 2. Supporting keywords (2-5)
-> 3. Suggested video title
-> 4. Estimated competition (low/medium/high based on existing video count)
-
-### Step 4: Validate with Search Volume
-
-If DataForSEO is available:
+**Step 4: Validate volume** (if DataForSEO available):
 
 ```bash
 keyword-research-helper.sh volume "primary keyword" --engine youtube
@@ -201,26 +134,19 @@ keyword-research-helper.sh volume "primary keyword" --engine youtube
 
 ## Workflow: Angle Generation
 
-The same topic can be covered from many angles. Find the unique take that hasn't been done.
-
-### Step 1: Analyze Existing Coverage
+**Step 1: Analyze existing coverage:**
 
 ```bash
-# Search for the topic
 youtube-helper.sh search "topic" video 20
-
-# Get transcripts of top 3 videos to understand their angle
 youtube-helper.sh transcript VIDEO_ID_1
 youtube-helper.sh transcript VIDEO_ID_2
 youtube-helper.sh transcript VIDEO_ID_3
 ```
 
-### Step 2: Identify Angle Patterns
+**Step 2: Angle types:**
 
-Common YouTube angle types:
-
-| Angle Type | Example | When It Works |
-|-----------|---------|---------------|
+| Angle | Example | When It Works |
+|-------|---------|---------------|
 | **Contrarian** | "Why [popular opinion] is wrong" | Established topics with consensus |
 | **Personal experience** | "I tried [thing] for 30 days" | Lifestyle, health, tech |
 | **Comparison** | "[A] vs [B] — which is actually better?" | Products, tools, methods |
@@ -232,23 +158,13 @@ Common YouTube angle types:
 | **Hidden/secret** | "[Topic] features nobody talks about" | Tech, tools, platforms |
 | **Cost breakdown** | "The real cost of [thing]" | Finance, lifestyle, business |
 
-### Step 3: Generate Unique Angles
-
-**Prompt pattern**:
-> Topic: [topic]
-> Existing angles found in top 10 videos: [list angles]
-> My channel's voice: [description from memory]
-> My audience: [description from memory]
->
-> Generate 5 unique angles for this topic that:
-> 1. Haven't been covered by the top 10 videos
-> 2. Match my channel voice
-> 3. Would appeal to my specific audience
-> 4. Have a clear hook for the first 30 seconds
+**Step 3: Generate unique angles:**
+> Topic: [topic]. Existing angles in top 10 videos: [list].
+> My channel voice: [from memory]. My audience: [from memory].
+> Generate 5 unique angles that: (1) aren't in the top 10, (2) match my voice,
+> (3) appeal to my audience, (4) have a clear hook for the first 30 seconds.
 
 ## Output Format
-
-When reporting topic research, use this structure:
 
 ```markdown
 ## Topic Opportunity: [Topic Name]
@@ -275,7 +191,7 @@ When reporting topic research, use this structure:
 ## Memory Integration
 
 ```bash
-# Store a validated topic opportunity
+# Store validated opportunity
 memory-helper.sh store --type WORKING_SOLUTION --namespace youtube-topics \
   "Topic: [name]. Demand: [signal]. Competition: [level]. \
    Best angle: [type] — [description]. Keywords: [list]."
@@ -283,7 +199,7 @@ memory-helper.sh store --type WORKING_SOLUTION --namespace youtube-topics \
 # Recall previous research
 memory-helper.sh recall --namespace youtube-topics "content gap"
 
-# Store a failed topic idea (so we don't revisit it)
+# Store rejected topic (avoid revisiting)
 memory-helper.sh store --type FAILED_APPROACH --namespace youtube-topics \
   "Topic [name] rejected: [reason — e.g., too saturated, no search volume]"
 ```
