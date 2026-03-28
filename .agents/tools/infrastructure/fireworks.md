@@ -139,18 +139,18 @@ curl https://api.fireworks.ai/inference/v1/chat/completions \
 # Upload from local files
 firectl model create <MODEL_ID> /path/to/files/
 
-# Upload from S3 — prefer IAM roles or environment variables over inline credentials
-# Option 1: Use an IAM role (recommended for EC2/ECS/Lambda — no credentials needed)
+# Upload from S3 — use IAM roles/profiles in production; env vars for local/dev only
+# Option 1: Use an IAM role (preferred for EC2/ECS/Lambda — no credentials needed)
 firectl model create <MODEL_ID> s3://<BUCKET>/<PATH>/
 
-# Option 2: Use environment variables (never pass secrets as CLI args)
+# Option 2: Use a named AWS profile (preferred for local dev)
+# AWS_PROFILE=my-profile firectl model create <MODEL_ID> s3://<BUCKET>/<PATH>/
+
+# Option 3: Environment variables (fallback for local/dev — never use in production)
 # export AWS_ACCESS_KEY_ID=<KEY>
 # export AWS_SECRET_ACCESS_KEY=<SECRET>
 # export AWS_DEFAULT_REGION=us-east-1
 firectl model create <MODEL_ID> s3://<BUCKET>/<PATH>/
-
-# Option 3: Use a named AWS profile
-# AWS_PROFILE=my-profile firectl model create <MODEL_ID> s3://<BUCKET>/<PATH>/
 
 # Upload LoRA adapter
 firectl model create <MODEL_ID> /path/to/adapter/ \
@@ -282,7 +282,7 @@ firectl quota get <QUOTA_ID>
 
 ## See Also
 
-- `tools/infrastructure/cloud-gpu.md` — raw GPU providers (RunPod, Vast.ai, Lambda)
-- `tools/infrastructure/nearai.md` — TEE-backed private inference
-- `tools/local-models/local-models.md` — local model serving
-- `tools/deployment/hosting-comparison.md` — app hosting platforms
+- [Cloud GPU providers](tools/infrastructure/cloud-gpu.md) — raw GPU providers (RunPod, Vast.ai, Lambda)
+- [Near AI](tools/infrastructure/nearai.md) — TEE-backed private inference
+- [Local model serving](tools/local-models/local-models.md) — local model serving
+- [Hosting comparison](tools/deployment/hosting-comparison.md) — app hosting platforms
