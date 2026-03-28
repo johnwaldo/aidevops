@@ -19,10 +19,11 @@ tools:
 ## Quick Reference
 
 - **Purpose**: Unified API for multimodal AI generation (image, video, audio, VFX, music, lipsync, specialized apps, storyboarding, workflows, agents)
-- **API**: REST API at `https://api.muapi.ai/api/v1`
+- **API**: REST at `https://api.muapi.ai/api/v1` — all requests require `x-api-key: $MUAPI_API_KEY`
 - **Auth**: API key via `x-api-key` header, stored as `MUAPI_API_KEY` env var
 - **CLI**: `muapi-helper.sh [flux|video-effects|vfx|motion|music|lipsync|face-swap|upscale|bg-remove|dress-change|stylize|product-shot|storyboard|agent-*|balance|usage|status|help]`
-- **Pattern**: Async submit + poll (same as WaveSpeed/Runway)
+- **Pattern**: Async submit → receive `request_id` → poll `/api/v1/predictions/{id}/result` (statuses: `processing` → `completed` | `failed`)
+- **Webhooks**: Add `?webhook=https://your.endpoint` to any generation endpoint for push notification instead of polling
 - **Docs**: [muapi.ai/docs](https://muapi.ai/docs/introduction)
 
 **When to use**:
@@ -45,68 +46,18 @@ tools:
 
 ## Setup
 
-### 1. Get API Key
-
-1. Sign up at [muapi.ai/signup](https://muapi.ai/signup)
-2. Go to [muapi.ai/access-keys](https://muapi.ai/access-keys)
-3. Generate a new API key
-4. Copy and store securely (shown only once)
-
-### 2. Store Credentials
-
 ```bash
+# 1. Get API key: muapi.ai/signup → muapi.ai/access-keys → generate key (shown once)
+
+# 2. Store credentials
 aidevops secret set MUAPI_API_KEY
 # Or plaintext fallback:
 echo 'export MUAPI_API_KEY="your-key-here"' >> ~/.config/aidevops/credentials.sh
 chmod 600 ~/.config/aidevops/credentials.sh
-```
 
-### 3. Test Connection
-
-```bash
+# 3. Test
 muapi-helper.sh flux "A test image" --sync
 ```
-
-## API Reference
-
-### Base URL
-
-```text
-https://api.muapi.ai/api/v1
-```
-
-All requests require `x-api-key: $MUAPI_API_KEY` header.
-
-### Authentication
-
-```bash
-curl -X POST "https://api.muapi.ai/api/v1/endpoint" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: ${MUAPI_API_KEY}" \
-  -d '{"param1": "value1"}'
-```
-
-### Async Pattern (Submit + Poll)
-
-All generation endpoints return a `request_id`. Poll for results:
-
-```bash
-# Submit task
-curl -X POST "https://api.muapi.ai/api/v1/{endpoint}" \
-  -H "x-api-key: ${MUAPI_API_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "...", ...}'
-
-# Poll for result
-curl -X GET "https://api.muapi.ai/api/v1/predictions/${request_id}/result" \
-  -H "x-api-key: ${MUAPI_API_KEY}"
-```
-
-Statuses: `processing` -> `completed` | `failed`
-
-### Webhooks
-
-Add `?webhook=https://your.endpoint` as query parameter to any generation endpoint to receive a POST notification on completion instead of polling.
 
 ## Endpoints
 
@@ -118,17 +69,19 @@ POST /api/v1/flux-dev-image
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `prompt` | string | Yes | - | Text prompt for image generation |
+| `prompt` | string | Yes | - | Text prompt |
 | `image` | string | No | - | Reference image URL (img2img) |
 | `mask_image` | string | No | - | Mask for inpainting (white=generate, black=preserve) |
-| `strength` | number | No | 0.8 | Transform strength for reference image (0.0-1.0) |
+| `strength` | number | No | 0.8 | Transform strength (0.0-1.0) |
 | `size` | string | No | 1024*1024 | Output size (512-1536 per dimension) |
 | `num_inference_steps` | integer | No | 28 | Inference steps (1-50) |
-| `seed` | integer | No | -1 | Reproducibility seed (-1 for random) |
+| `seed` | integer | No | -1 | Reproducibility seed (-1=random) |
 | `guidance_scale` | number | No | 3.5 | CFG scale (1.0-20.0) |
 | `num_images` | integer | No | 1 | Number of images (1-4) |
 
-### AI Video Effects
+### AI Video Effects / VFX / Motion Controls
+
+All three use the same endpoint:
 
 ```bash
 POST /api/v1/generate_wan_ai_effects
@@ -138,24 +91,16 @@ POST /api/v1/generate_wan_ai_effects
 |-----------|------|----------|---------|-------------|
 | `prompt` | string | Yes | - | Effect description |
 | `image_url` | string | Yes | - | Source image URL |
-| `name` | string | Yes | - | Effect name (e.g., "Cakeify", "Film Noir", "VHS Footage") |
+| `name` | string | Yes | - | Effect name (case-sensitive — use exact name from playground) |
 | `aspect_ratio` | string | No | 16:9 | 1:1, 9:16, 16:9 |
 | `resolution` | string | No | 480p | 480p, 720p |
 | `quality` | string | No | medium | medium, high |
 | `duration` | number | No | 5 | 5-10 seconds |
 
-### VFX (Visual Effects)
-
-Same endpoint as AI Video Effects (`POST /api/v1/generate_wan_ai_effects`) with VFX-specific effect names:
-
-- Building Explosion, Car Explosion, Disintegration, Levitation
-- Lightning, Tornado, Fire, Ice, and more
-
-### Motion Controls
-
-Same endpoint as AI Video Effects (`POST /api/v1/generate_wan_ai_effects`) with motion-specific effect names:
-
-- 360 Orbit, Zoom In/Out, Spin, Shake, Bounce, Pan Left/Right
+**Effect names by category:**
+- **AI Effects**: Cakeify, Film Noir, VHS Footage, Samurai, and more
+- **VFX**: Building Explosion, Car Explosion, Disintegration, Levitation, Lightning, Tornado, Fire, Ice, and more
+- **Motion**: 360 Orbit, Zoom In/Out, Spin, Shake, Bounce, Pan Left/Right
 
 ### Music Generation (Suno)
 
@@ -178,7 +123,7 @@ POST /api/v1/veed-lipsync         # Veed
 
 ```bash
 POST /api/v1/mmaudio-v2/text-to-audio     # Text to audio/Foley/SFX
-POST /api/v1/mmaudio-v2/video-to-video     # Sync audio with video
+POST /api/v1/mmaudio-v2/video-to-video    # Sync audio with video
 ```
 
 ### Workflows
@@ -187,7 +132,7 @@ POST /api/v1/mmaudio-v2/video-to-video     # Sync audio with video
 POST /api/workflow/{workflow_id}/run    # Execute a workflow
 ```
 
-Workflows are multi-node execution graphs combining text, image, video, audio, and utility nodes. Build via the web UI or the Agentic Workflow Architect (natural language).
+Node-based execution graphs combining text, image, video, audio, and utility nodes. Build via web UI or the Agentic Workflow Architect (natural language).
 
 ### Agents
 
@@ -207,14 +152,14 @@ Agents are persistent AI personas with skills, memory (via `conversation_id`), a
 
 ### Specialized Apps
 
-All specialized apps follow the standard async submit + poll pattern. Submit with input data, receive `request_id`, poll at `/api/v1/predictions/{id}/result`.
+All follow the standard async pattern. Submit with input data → receive `request_id` → poll at `/api/v1/predictions/{id}/result`.
 
 #### Portrait & Identity
 
 ```bash
 POST /api/v1/ai-image-face-swap         # Face swap on images
 POST /api/v1/ai-video-face-swap         # Face swap on videos
-POST /api/v1/ai-skin-enhancer           # Skin retouching and blemish removal
+POST /api/v1/ai-skin-enhancer           # Skin retouching
 ```
 
 | Parameter | Type | Required | Description |
@@ -233,7 +178,7 @@ POST /api/v1/ai-anime-generator         # Anime style transformation
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `image_url` | string | Yes | Source image URL |
-| `prompt` | string | No | Description of desired outfit/style |
+| `prompt` | string | No | Desired outfit/style description |
 
 #### Image Processing & Utilities
 
@@ -270,18 +215,11 @@ Cinematic production system with character persistence across scenes and episode
 POST /api/storyboard/projects           # Create storyboard project
 ```
 
-**Process**:
+**Process**: (1) Define `StoryboardCharacter` with static features (age, hair) and dynamic features (outfit, mood) → (2) Create project with characters and creative brief → (3) Generate episodes → (4) Define scenes/shots linked to characters and backgrounds for visual consistency.
 
-1. **Character Creation** — Define `StoryboardCharacter` with static features (age, hair) and dynamic features (outfit, mood)
-2. **Project Setup** — Create project housing characters and creative brief
-3. **Episode Generation** — Generate or manually create episodes within the project
-4. **Scene & Shot Definition** — Link shots to characters and backgrounds for visual consistency
-
-Asset generation uses models like Flux and Runway. Storyboard assets can feed into workflows for post-processing (VFX, color grading).
+Asset generation uses Flux and Runway. Storyboard assets can feed into workflows for post-processing (VFX, color grading).
 
 ### Payments & Credits
-
-Credit-based consumption system with Stripe integration.
 
 ```bash
 POST /api/v1/payments/create_credits_checkout_session   # Purchase credits via Stripe
@@ -289,34 +227,18 @@ GET  /api/v1/payments/credits                           # Check credit balance
 GET  /api/v1/payments/usage                             # Check usage history
 ```
 
-- **Credit Wallet** — Every user has a `CreditWallet`; generations deduct credits based on model cost and duration
-- **Usage Log** — Complete history of API calls with cost, status, input/output data
-- **Enterprise** — Custom credit limits, private deployment billing, multi-key project tracking
+Credit-based consumption: every user has a `CreditWallet`; generations deduct credits based on model cost and duration. Enterprise: custom credit limits, private deployment billing, multi-key project tracking.
 
 ## CLI Helper
 
 ```bash
-# Image generation (Flux Dev)
 muapi-helper.sh flux "A cyberpunk city at night"
 muapi-helper.sh flux "A portrait" --size 1024*1536 --steps 40
-
-# AI Video Effects
-muapi-helper.sh video-effects "a cute kitten" --image https://example.com/cat.jpg --effect "Cakeify"
 muapi-helper.sh video-effects "dramatic scene" --image https://example.com/scene.jpg --effect "Film Noir"
-
-# VFX
 muapi-helper.sh vfx "a car" --image https://example.com/car.jpg --effect "Car Explosion"
-
-# Motion Controls
 muapi-helper.sh motion "a person" --image https://example.com/person.jpg --effect "360 Orbit"
-
-# Music
 muapi-helper.sh music "upbeat electronic track with synths"
-
-# Lip-sync
 muapi-helper.sh lipsync --video https://example.com/video.mp4 --audio https://example.com/audio.mp3
-
-# Specialized apps
 muapi-helper.sh face-swap --image https://example.com/photo.jpg --face https://example.com/face.jpg
 muapi-helper.sh face-swap --video https://example.com/video.mp4 --face https://example.com/face.jpg --mode video
 muapi-helper.sh upscale --image https://example.com/lowres.jpg
@@ -327,46 +249,13 @@ muapi-helper.sh product-shot --image https://example.com/product.jpg "minimalist
 muapi-helper.sh object-erase --image https://example.com/scene.jpg --mask https://example.com/mask.png
 muapi-helper.sh image-extend --image https://example.com/photo.jpg "extend the landscape"
 muapi-helper.sh skin-enhance --image https://example.com/portrait.jpg
-
-# Credits
 muapi-helper.sh balance
 muapi-helper.sh usage
-
-# Check task status
 muapi-helper.sh status <request-id>
-
-# Agent operations
 muapi-helper.sh agent-create "I want an agent that creates brand assets"
 muapi-helper.sh agent-chat <agent-id> "Design a logo for Vapor"
 muapi-helper.sh agent-list
 ```
-
-## Available Models
-
-### Image
-
-| Model | Notes |
-|-------|-------|
-| Flux Dev/Schnell/Pro/Max | Professional text-to-image |
-| Midjourney v7 | Aesthetic quality, reference support |
-| HiDream | Speed-optimized, stylized |
-
-### Video
-
-| Model | Notes |
-|-------|-------|
-| Wan 2.1/2.2 | Speech-to-video, LoRA support |
-| Runway Gen-3/Act-Two | Cinematic motion |
-| Kling v2.1 | Exceptional realism |
-| Luma Dream Machine | Video reframing |
-
-### Audio
-
-| Model | Notes |
-|-------|-------|
-| Suno | Music create/remix/extend |
-| MMAudio-v2 | Text-to-audio, video-to-audio sync |
-| Sync-Lipsync/LatentSync | Lip synchronization |
 
 ## MuAPI vs WaveSpeed vs Runway
 
@@ -385,19 +274,11 @@ muapi-helper.sh agent-list
 
 ## Troubleshooting
 
-### "Unauthorized" or 401
+**"Unauthorized" / 401**: Verify key is set (`echo "${MUAPI_API_KEY:+set}"`), check key was copied correctly, verify account has credits.
 
-1. Verify key is set: `echo "${MUAPI_API_KEY:+set}"`
-2. Check key was copied correctly from dashboard
-3. Verify account has credits
+**Task stuck in "processing"**: Video/effects tasks take 1-2 minutes. Helper polls with configurable interval. For long tasks: `--timeout 600`.
 
-### Task stuck in "processing"
-
-Video and effects tasks can take 1-2 minutes. The helper polls with configurable interval and timeout. For long tasks, use `--timeout 600`.
-
-### Effect not found
-
-Effect names are case-sensitive. Use the exact name from the MuAPI playground (e.g., "Cakeify", "Film Noir", "Car Explosion", "360 Orbit").
+**Effect not found**: Effect names are case-sensitive. Use exact name from MuAPI playground (e.g., "Cakeify", "Film Noir", "Car Explosion", "360 Orbit").
 
 ## Related
 
