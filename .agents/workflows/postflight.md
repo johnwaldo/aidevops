@@ -14,24 +14,11 @@ tools:
 
 # Postflight Verification Workflow
 
-<!-- AI-CONTEXT-START -->
+Catches issues that pre-release checks miss: CI/CD failures triggered by the release tag, delayed code review analysis (CodeRabbit, Codacy, SonarCloud), security vulnerabilities detected post-merge, and integration issues only visible in production-like environments.
 
-## Quick Reference
+**Trigger**: After tag creation and GitHub release publication. **Timeouts**: CI/CD 10 min, code review tools 5 min.
 
-- **Purpose**: Verify release health after `release.md` completes
-- **Trigger**: After tag creation and GitHub release publication
-- **Timeouts**: CI/CD 10 min, code review tools 5 min
-- **Commands**:
-  - `gh run list --workflow=code-quality.yml --limit=5`
-  - `gh api repos/{owner}/{repo}/commits/{sha}/check-runs`
-  - `.agents/scripts/linters-local.sh`
-- **Rollback**: See [Rollback Procedures](#rollback-procedures)
-
-<!-- AI-CONTEXT-END -->
-
-Postflight catches issues that pre-release checks miss: CI/CD failures triggered by the release tag, delayed code review analysis (CodeRabbit, Codacy, SonarCloud), security vulnerabilities detected post-merge, and integration issues only visible in production-like environments.
-
-## Critical: Avoiding Circular Dependencies
+## Critical: Avoid Circular Dependencies
 
 Always exclude the postflight workflow itself when checking CI/CD status:
 
@@ -41,19 +28,15 @@ gh api repos/{owner}/{repo}/commits/{sha}/check-runs \
   --jq "[.check_runs[] | select(.status != \"completed\" and .name != \"$SELF_NAME\")] | length"
 ```
 
-## Checking Both Main and Tag Workflows
+## Postflight Checklist
 
-After a release, workflows run on two refs:
+### 1. CI/CD Pipeline Status
 
 ```bash
 gh run list --branch=main --limit=5          # Main branch workflows
 gh run list --branch=v{VERSION} --limit=5    # Tag-triggered workflows
-gh run list --limit=10 --json name,status,conclusion,headBranch  # All recent
+gh run list --limit=10 --json name,status,conclusion,headBranch
 ```
-
-## Postflight Checklist
-
-### 1. CI/CD Pipeline Status
 
 | Check | Command | Expected |
 |-------|---------|----------|
@@ -82,28 +65,23 @@ gh run list --limit=10 --json name,status,conclusion,headBranch  # All recent
 ## Verification Commands
 
 ```bash
-# GitHub Actions status
+# GitHub Actions
 gh run list --limit=10
 gh run list --workflow=code-quality.yml --limit=5
-gh run list --workflow=postflight.yml --limit=1  # Verify postflight.yml itself passed
 gh run watch $(gh run list --limit=1 --json databaseId -q '.[0].databaseId') --exit-status
 
 # SonarCloud
 curl -s "https://sonarcloud.io/api/qualitygates/project_status?projectKey=marcusquinn_aidevops" | jq '.projectStatus.status'
 curl -s "https://sonarcloud.io/api/issues/search?componentKeys=marcusquinn_aidevops&resolved=false&ps=1" | jq '.total'
 
-# Codacy
+# Codacy / Security
 ./.agents/scripts/codacy-cli.sh status
-
-# Security
 ./.agents/scripts/snyk-helper.sh test
 secretlint "**/*" --format compact
 npm audit --audit-level=high
 ```
 
-**Important**: When running postflight locally after a release:
-1. Wait for the GH Actions `postflight.yml` workflow to complete first
-2. Only declare success if ALL workflows (including `postflight.yml`) passed
+Wait for `postflight.yml` to complete before declaring success — only pass if ALL workflows (including `postflight.yml`) passed.
 
 ## Postflight Script
 
@@ -215,16 +193,12 @@ jobs:
 
 ## Rollback Procedures
 
-### Severity Assessment
-
 | Severity | Indicators | Action |
 |----------|------------|--------|
 | **Critical** | Security vulnerability, data loss, service outage | Immediate rollback |
 | **High** | Broken functionality, failed tests, quality gate failure | Rollback within 1 hour |
 | **Medium** | Minor regressions, code smell increase | Hotfix in next release |
 | **Low** | Style issues, documentation gaps | Fix in next release |
-
-### Rollback Commands
 
 ```bash
 # Option A: Revert the release commit
@@ -241,7 +215,7 @@ git commit -m "fix: resolve critical issue from v{VERSION}"
 ./.agents/scripts/version-manager.sh release patch
 ```
 
-### Post-Rollback Verification
+Post-rollback verification:
 
 ```bash
 gh run list --limit=5
@@ -249,9 +223,9 @@ gh run list --limit=5
 curl -s "https://sonarcloud.io/api/qualitygates/project_status?projectKey=marcusquinn_aidevops" | jq '.projectStatus.status'
 ```
 
-## Handling SonarCloud Quality Gate Failures
+## SonarCloud Quality Gate Failures
 
-### Security Hotspots (Most Common)
+### Security Hotspots
 
 Security hotspots require **individual human review**, not blanket dismissal:
 
@@ -262,15 +236,15 @@ curl -s "https://sonarcloud.io/api/hotspots/search?projectKey=marcusquinn_aidevo
 
 For each hotspot: open SonarCloud Security Hotspots page, review individually, mark as **Safe** (with comment), **Fixed** (code change), or **Acknowledged** (accepted risk with justification).
 
-**Common patterns in aidevops:**
+**Why NOT to blanket-dismiss**: Real vulnerabilities hide among false positives; audit trails require documented decisions.
+
+Common patterns in aidevops:
 
 | Rule | Typical Resolution |
 |------|--------------------|
 | `shell:S5332` | Mark Safe: "Localhost HTTP is intentional for local dev servers" |
 | `shell:S6505` | Mark Safe: "Postinstall scripts required for package setup" |
 | `shell:S6506` | Mark Safe: "Installing from trusted npm registry" |
-
-**Why NOT to blanket-dismiss**: Real vulnerabilities hide among false positives; audit trails require documented decisions.
 
 ### Bugs, Vulnerabilities, or Code Smells
 
@@ -288,9 +262,9 @@ Fix in code, not dismissed, unless clear false positives.
 ~/.aidevops/agents/scripts/worktree-helper.sh clean  # Auto-detects squash merges
 ```
 
-## Related Workflows
+## Related
 
-- `release.md` - Pre-release and release process
-- `code-review.md` - Code review guidelines
-- `version-bump.md` - Version management
-- `worktree.md` - Parallel branch development
+- `release.md` — Pre-release and release process
+- `code-review.md` — Code review guidelines
+- `version-bump.md` — Version management
+- `worktree.md` — Parallel branch development
