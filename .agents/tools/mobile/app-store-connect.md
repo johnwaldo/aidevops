@@ -25,7 +25,7 @@ tools:
 - **GitHub**: https://github.com/tddworks/asc-cli (MIT, Swift, 130+ commands)
 - **Website**: https://asccli.app | **Web apps**: [Command Center](https://asccli.app/command-center), [Console](https://asccli.app/console), [Screenshot Studio](https://asccli.app/editor)
 - **Skills**: [Official](https://github.com/tddworks/asc-cli-skills) (27 skills) | [Community](https://github.com/rudrankriyam/app-store-connect-cli-skills) (22 workflow skills)
-- **Requirements**: macOS 13+, App Store Connect API key
+- **Requirements**: macOS 13+, App Store Connect API key, `jq` (workflow scripts use `jq -r`)
 
 **Dependency check**: Before any `asc` command: `command -v asc >/dev/null || brew install tddworks/tap/asccli`
 
@@ -46,7 +46,7 @@ asc auth check && asc apps list    # verify, then find app ID
 asc init --app-id <id>             # pin app for future commands
 ```
 
-**Context resolution**: explicit `--app-id` > `.asc/project.json` > prompt user to `asc init`.
+**Context resolution**: explicit `--app-id` > `.asc/project.json` > prompt user to `asc init` (interactive — CI must use `--app-id` or pre-run `asc init`).
 
 ## Command Groups
 
