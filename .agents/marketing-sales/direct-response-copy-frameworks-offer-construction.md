@@ -38,15 +38,16 @@ GUARANTEE: [Risk Reversal]
 ### Example (SaaS)
 
 ```text
-CORE: Full Dashboard Access .......................... $149/mo market value
+CORE VALUE: Full Dashboard Access .................... $149/mo (market rate for comparable tools)
   • Unlimited tracking, monitoring, competitor analysis, review management
-BONUS 1: Done-For-You Setup .......................... $500 one-time (~$42/mo over 12 mo)
-BONUS 2: Training Academy ............................ $297 one-time (~$25/mo over 12 mo)
-BONUS 3: Priority Support ............................ $50/mo
+BONUS 1 VALUE: Done-For-You Setup ................... $500 one-time (~$42/mo amortized over 12 mo)
+BONUS 2 VALUE: Training Academy ..................... $297 one-time (~$25/mo amortized over 12 mo)
+BONUS 3 VALUE: Priority Support ..................... $50/mo
 ─────────────────────────────────────────────────
-COMPARABLE MONTHLY VALUE: ~$266/mo
-  ($149 + $50 recurring = $199/mo + ~$67/mo amortized one-time bonuses)
-PRO PLAN: $79/mo ($69/mo annual)
+TOTAL COMPARABLE VALUE: ~$266/mo
+  ($149 core + $50 recurring + ~$67/mo amortized one-time bonuses)
+─────────────────────────────────────────────────
+YOUR PRICE: $79/mo (or $69/mo billed annually)
 GUARANTEE: 30-Day Money Back. No long-term contracts.
 ─────────────────────────────────────────────────
 ```
@@ -116,7 +117,7 @@ Driven by **loss aversion** — people fear missing out more than they desire ga
 ### Urgency Copy Template
 
 ```text
-THIS OFFER EXPIRES IN: [Countdown Timer — real deadline, no resets]
+THIS OFFER EXPIRES: [Day, Date at Time Zone] — e.g., "Friday, April 4 at 11:59 PM ET"
 After [deadline]:
 - [What they lose — bonus/price/access]
 - [Price increase / doors close]
@@ -124,7 +125,7 @@ This is the lowest price [Product] will ever be.
 [CTA Button →]
 ```
 
-**Never fake urgency.** Resetting timers, unlimited "limited spots", and perpetual "sale ends today" destroy trust.
+**Never fake urgency.** Resetting timers, unlimited "limited spots", and perpetual "sale ends today" destroy trust. Use a static deadline (specific date/time) — not a looping or resetting countdown timer.
 
 ---
 
@@ -156,6 +157,6 @@ A/B test one variable at a time. Run until statistical significance. Document re
 
 ## Further Reading
 
-- [Landing Page Structure](direct-response-copy-frameworks-landing-page-structure.md) — where to place your offer
-- [Objection Handling](direct-response-copy-frameworks-objection-handling.md) — addressing price concerns
-- [Email Sequences](direct-response-copy-frameworks-email-sequences.md) — launch sequence offers
+- [Landing Page Structure](./direct-response-copy-frameworks-landing-page-structure.md) — where to place your offer
+- [Objection Handling](./direct-response-copy-frameworks-objection-handling.md) — addressing price concerns
+- [Email Sequences](./direct-response-copy-frameworks-email-sequences.md) — launch sequence offers
