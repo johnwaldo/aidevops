@@ -1,15 +1,7 @@
 ---
 description: Discord bot integration — discord.js (TypeScript), bot setup (Developer Portal, intents, OAuth2), DM/guild/thread messaging, slash commands, interactive components v2, role-based routing, access control, privacy/security assessment, aidevops runner dispatch, Matterbridge bridging
 mode: subagent
-tools:
-  read: true
-  write: false
-  edit: false
-  bash: true
-  glob: false
-  grep: false
-  webfetch: false
-  task: false
+tools: { read: true, write: false, edit: false, bash: true, glob: false, grep: false, webfetch: false, task: false }
 ---
 
 # Discord Bot Integration
