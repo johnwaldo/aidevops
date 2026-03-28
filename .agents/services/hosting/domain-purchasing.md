@@ -17,55 +17,45 @@ tools:
 
 ## Quick Reference
 
-**Supported Registrars with API Purchasing**:
+**Supported Registrars**:
 - **Spaceship**: 500+ TLDs, bulk ops, auto-renewal
 - **101domains**: 1000+ TLDs, premium domains, reseller support
 
-**Commands** (spaceship-helper.sh):
-- `check-availability <account> <domain>` - Check single domain
-- `bulk-check <account> <domains...>` - Check multiple domains
-- `purchase <account> <domain> <years> <auto_renew>` - Buy domain (requires confirmation)
-- `domains <account>` - List registered domains
-- `monitor-expiration <account> <days>` - Check expiring domains
+**Commands** (`spaceship-helper.sh`):
+- `check-availability <account> <domain>` — check single domain
+- `bulk-check <account> <domains...>` — check multiple domains
+- `purchase <account> <domain> <years> <auto_renew>` — buy domain (requires confirmation)
+- `domains <account>` — list registered domains
+- `domain-details <account> <domain>` — expiration and config
+- `monitor-expiration <account> <days>` — check expiring domains
+- `audit <account> <domain>` — audit domain configuration
 
-**Security**: Confirmation required, spending limits configurable, audit trails
+**Security**: confirmation required, spending limits configurable, audit trails
 
 **TLD Recommendations**:
-- Web apps: .com, .app, .io
-- Tech: .dev, .tech, .ai
-- E-commerce: .shop, .store
+- Web apps: `.com`, `.app`, `.io`
+- Tech: `.dev`, `.tech`, `.ai`
+- E-commerce: `.shop`, `.store`
+- Orgs: `.org`, `.foundation`
+- Local: country-specific TLDs
+
 <!-- AI-CONTEXT-END -->
 
-Comprehensive domain purchasing, availability checking, and management across multiple registrars with AI assistant automation.
+## Registrars
 
-## 🏢 **Domain Registrars with API Purchasing**
+### Spaceship
 
-### **Supported Registrars:**
+- Full API purchasing, real-time availability, 500+ TLDs
+- Instant registration, bulk operations, auto-renewal
 
-#### **Spaceship**
+### 101domains
 
-- **API Purchasing**: ✅ Full API support for domain purchasing
-- **Availability Check**: Real-time domain availability checking
-- **Pricing**: Transparent API pricing information
-- **TLD Support**: 500+ TLDs available
-- **Features**: Instant registration, bulk operations, auto-renewal
+- Comprehensive purchasing API, bulk availability checking
+- 1000+ TLDs including new gTLDs, premium domains, reseller support
 
-#### **101domains**
+**Future**: Namecheap API support in development.
 
-- **API Purchasing**: ✅ Comprehensive domain purchasing API
-- **Availability Check**: Bulk availability checking
-- **Pricing**: Competitive pricing across 1000+ TLDs
-- **TLD Support**: Extensive TLD portfolio including new gTLDs
-- **Features**: Premium domains, bulk registration, reseller support
-
-#### **Future Support:**
-
-- **Namecheap**: API purchasing capabilities being developed
-- **Other registrars**: Additional registrars with API support
-
-## 🔧 **Configuration**
-
-### **Enhanced Registrar Configuration:**
+## Configuration
 
 ```json
 {
@@ -73,7 +63,6 @@ Comprehensive domain purchasing, availability checking, and management across mu
     "personal": {
       "api_token": "YOUR_SPACESHIP_API_TOKEN_HERE",
       "email": "your-email@domain.com",
-      "description": "Personal Spaceship account",
       "auto_renew_default": true,
       "default_years": 1,
       "purchasing_enabled": true
@@ -82,263 +71,104 @@ Comprehensive domain purchasing, availability checking, and management across mu
   "purchasing_settings": {
     "confirmation_required": true,
     "max_purchase_amount": 500,
+    "daily_purchase_limit": 10,
+    "require_approval_over": 100,
     "auto_configure_dns": true,
-    "default_nameservers": [
-      "ns1.spaceship.com",
-      "ns2.spaceship.com"
-    ]
+    "default_nameservers": ["ns1.spaceship.com", "ns2.spaceship.com"]
   }
 }
 ```
 
-## 🚀 **Domain Purchasing Usage**
-
-### **Domain Availability Checking:**
+## Availability Checking
 
 ```bash
-# Check single domain availability
+# Single domain
 ./.agents/scripts/spaceship-helper.sh check-availability personal example.com
 
-# Bulk check multiple domains
-./.agents/scripts/spaceship-helper.sh bulk-check personal example.com example.net example.org
-
-# Check with pricing information
-./.agents/scripts/spaceship-helper.sh check-availability personal premium-domain.com
+# Bulk check
+./.agents/scripts/spaceship-helper.sh bulk-check personal \
+  myproject.com myproject.net myproject.org myproject.io myproject.app myproject.dev
 ```
 
-### **Domain Purchasing:**
+## Purchasing
 
 ```bash
-# Purchase domain (with confirmation prompt)
+# Purchase with confirmation (1 year, auto-renew)
 ./.agents/scripts/spaceship-helper.sh purchase personal mynewdomain.com 1 true
 
-# Purchase domain for multiple years
+# Multi-year
 ./.agents/scripts/spaceship-helper.sh purchase personal longterm-project.com 3 true
 
-# Purchase without auto-renewal
+# No auto-renewal
 ./.agents/scripts/spaceship-helper.sh purchase personal temporary-project.com 1 false
 ```
 
-### **Domain Portfolio Management:**
+**Purchase flow:**
 
-```bash
-# List all registered domains
-./.agents/scripts/spaceship-helper.sh domains personal
-
-# Get domain details including expiration
-./.agents/scripts/spaceship-helper.sh domain-details personal mydomain.com
-
-# Monitor domains expiring soon
-./.agents/scripts/spaceship-helper.sh monitor-expiration personal 30
-```
-
-## 🛡️ **Purchasing Security & Best Practices**
-
-### **Purchase Confirmation:**
-
-```bash
-# Example purchase flow with confirmation:
-$ ./.agents/scripts/spaceship-helper.sh purchase personal newproject.com 1 true
-
+```text
 [INFO] Checking availability before purchase...
-[SUCCESS] Domain newproject.com is available for registration
-Price: $12.99
-[WARNING] Domain newproject.com will be purchased for $12.99 for 1 year(s)
+[SUCCESS] Domain newproject.com is available — $12.99
 [WARNING] This action will charge your account. Continue? (y/N)
 y
-[INFO] Purchasing domain: newproject.com
 [SUCCESS] Domain purchased successfully
 ```
 
-### **Security Measures:**
-
-- **Confirmation prompts**: All purchases require explicit confirmation
-- **Spending limits**: Configure maximum purchase amounts
-- **Account verification**: Verify account balance before purchases
-- **Audit trails**: All purchases are logged and auditable
-- **Access control**: Restrict purchasing to authorized users
-
-### **Financial Controls:**
+## Portfolio Management
 
 ```bash
-# Set spending limits in configuration
-{
-  "purchasing_settings": {
-    "confirmation_required": true,
-    "max_purchase_amount": 500,
-    "daily_purchase_limit": 10,
-    "require_approval_over": 100
-  }
-}
-```
-
-## 🔍 **Domain Research & Analysis**
-
-### **Availability Analysis:**
-
-```bash
-# Comprehensive domain research
-./.agents/scripts/spaceship-helper.sh bulk-check personal \
-  myproject.com myproject.net myproject.org \
-  myproject.io myproject.app myproject.dev
-
-# Check premium domain pricing
-./.agents/scripts/spaceship-helper.sh check-availability personal premium-name.com
-```
-
-### **TLD Recommendations:**
-
-```bash
-# AI assistant can recommend TLDs based on project type:
-# Web applications: .com, .app, .io
-# Technology projects: .dev, .tech, .ai
-# Organizations: .org, .foundation
-# Local businesses: .local, country-specific TLDs
-# E-commerce: .shop, .store, .buy
-```
-
-## 🤖 **AI Assistant Domain Purchasing**
-
-### **Intelligent Domain Selection:**
-
-The AI assistant can help with:
-
-- **Name generation**: Generate domain name suggestions based on project description
-- **Availability checking**: Check availability across multiple TLDs
-- **Price comparison**: Compare prices across different registrars
-- **TLD recommendations**: Suggest appropriate TLDs for specific use cases
-- **Bulk operations**: Handle multiple domain purchases efficiently
-
-### **Automated Purchase Workflows:**
-
-```bash
-# AI assistant workflow example:
-1. Project analysis: "I need a domain for my e-commerce project selling handmade crafts"
-2. Name suggestions: Generate relevant domain names
-3. Availability check: Check availability across recommended TLDs
-4. Price analysis: Compare pricing and renewal costs
-5. Purchase recommendation: Recommend best options
-6. Automated purchase: Execute purchase with user confirmation
-7. DNS setup: Configure initial DNS settings
-8. Integration: Add domain to project configuration
-```
-
-### **Project-Based Domain Management:**
-
-```bash
-# AI can manage domains by project:
-./.agents/scripts/setup-wizard-helper.sh assess
-# Based on project type, AI recommends and can purchase:
-# - Primary domain (.com)
-# - Development domain (.dev)
-# - Staging domain (.staging.yourdomain.com)
-# - API domain (api.yourdomain.com)
-```
-
-## 📊 **Domain Portfolio Analytics**
-
-### **Portfolio Overview:**
-
-```bash
-# Get comprehensive portfolio overview
+# List all domains
 ./.agents/scripts/spaceship-helper.sh domains personal
 
-# Monitor expiration dates
-./.agents/scripts/spaceship-helper.sh monitor-expiration personal 60
+# Domain details and expiration
+./.agents/scripts/spaceship-helper.sh domain-details personal mydomain.com
 
-# Audit domain configuration
+# Expiring within 30 days
+./.agents/scripts/spaceship-helper.sh monitor-expiration personal 30
+
+# Audit configuration
 ./.agents/scripts/spaceship-helper.sh audit personal mydomain.com
-```
 
-### **Cost Analysis:**
-
-```bash
-# Calculate total domain costs
+# Cost analysis
 for domain in $(./.agents/scripts/spaceship-helper.sh domains personal | awk '{print $1}'); do
-    echo "Analyzing costs for: $domain"
-    ./.agents/scripts/spaceship-helper.sh domain-details personal $domain | grep -E "(price|renewal|expiration)"
+    ./.agents/scripts/spaceship-helper.sh domain-details personal "$domain" | grep -E "(price|renewal|expiration)"
 done
 ```
 
-## 🔄 **Integration with Development Workflow**
-
-### **Project Initialization with Domain:**
+## Integration with Development Workflow
 
 ```bash
-# Complete project setup with domain
-1. Domain research and purchase:
-   ./.agents/scripts/spaceship-helper.sh bulk-check personal myproject.com myproject.dev
-   ./.agents/scripts/spaceship-helper.sh purchase personal myproject.com 1 true
+# 1. Research and purchase
+./.agents/scripts/spaceship-helper.sh bulk-check personal myproject.com myproject.dev
+./.agents/scripts/spaceship-helper.sh purchase personal myproject.com 1 true
 
-2. DNS configuration:
-   ./.agents/scripts/dns-helper.sh add cloudflare personal myproject.com @ A 192.168.1.100
-   ./.agents/scripts/dns-helper.sh add cloudflare personal myproject.com www CNAME myproject.com
-
-3. SSL certificate setup:
-   # Automatic with Cloudflare or manual certificate installation
-
-4. Project deployment:
-   ./.agents/scripts/coolify-helper.sh deploy production myproject myproject.com
-```
-
-### **Multi-Environment Domain Strategy:**
-
-```bash
-# Purchase domains for different environments
-./.agents/scripts/spaceship-helper.sh purchase personal myproject.com 1 true      # Production
-./.agents/scripts/spaceship-helper.sh purchase personal myproject.dev 1 true     # Development
-./.agents/scripts/spaceship-helper.sh purchase personal myproject.app 1 true     # Mobile app
-
-# Configure DNS for each environment
+# 2. DNS configuration
 ./.agents/scripts/dns-helper.sh add cloudflare personal myproject.com @ A 192.168.1.100
-./.agents/scripts/dns-helper.sh add cloudflare personal myproject.dev @ A 192.168.1.101
-./.agents/scripts/dns-helper.sh add cloudflare personal myproject.app @ A 192.168.1.102
+./.agents/scripts/dns-helper.sh add cloudflare personal myproject.com www CNAME myproject.com
+
+# 3. SSL — automatic with Cloudflare or manual certificate installation
+
+# 4. Deploy
+./.agents/scripts/coolify-helper.sh deploy production myproject myproject.com
 ```
 
-## 📚 **Best Practices**
+**Multi-environment:**
 
-### **Domain Selection:**
+```bash
+./.agents/scripts/spaceship-helper.sh purchase personal myproject.com 1 true   # Production
+./.agents/scripts/spaceship-helper.sh purchase personal myproject.dev 1 true   # Development
+./.agents/scripts/spaceship-helper.sh purchase personal myproject.app 1 true   # Mobile app
+```
 
-1. **Brand consistency**: Choose domains that align with your brand
-2. **TLD strategy**: Select appropriate TLDs for your use case
-3. **Future planning**: Consider future expansion and additional domains
-4. **SEO considerations**: Choose SEO-friendly domain names
-5. **Legal protection**: Consider trademark implications
+## Best Practices
 
-### **Portfolio Management:**
+**Domain selection**: brand consistency, appropriate TLD, SEO-friendly names, trademark check.
 
-- **Renewal monitoring**: Monitor expiration dates and set up auto-renewal
-- **DNS management**: Keep DNS records organized and documented
-- **Security**: Enable domain locking and two-factor authentication
-- **Backup**: Maintain backup DNS configurations
-- **Documentation**: Document domain purposes and configurations
+**Portfolio management**:
+- Enable auto-renewal; monitor expiration dates
+- Lock domains and enable 2FA
+- Keep DNS records documented with backup configs
 
-### **Cost Optimization:**
-
-- **Bulk purchases**: Take advantage of bulk pricing when available
-- **Long-term registration**: Consider multi-year registrations for discounts
-- **Renewal planning**: Plan renewals to avoid premium pricing
-- **Portfolio review**: Regularly review and optimize domain portfolio
-- **Transfer opportunities**: Consider transferring domains for better pricing
-
-## 🎯 **AI Assistant Capabilities**
-
-### **Automated Domain Management:**
-
-- **Intelligent suggestions**: AI can suggest domain names based on project requirements
-- **Availability monitoring**: AI can monitor and alert on domain availability
-- **Purchase automation**: AI can execute domain purchases with proper safeguards
-- **Portfolio optimization**: AI can analyze and optimize domain portfolios
-- **Renewal management**: AI can manage domain renewals and notifications
-
-### **Integration with DevOps:**
-
-- **Project setup**: AI can purchase domains as part of project initialization
-- **Environment management**: AI can manage domains across development environments
-- **DNS automation**: AI can configure DNS settings automatically
-- **SSL management**: AI can coordinate SSL certificate setup
-- **Deployment integration**: AI can integrate domain setup with deployment workflows
-
----
-
-**The domain purchasing framework provides comprehensive domain management capabilities with AI assistant automation for seamless project setup and portfolio management.** 🚀
+**Cost optimization**:
+- Bulk and multi-year registrations for discounts
+- Regular portfolio review to drop unused domains
+- Compare transfer pricing vs renewal pricing
