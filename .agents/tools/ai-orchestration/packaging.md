@@ -1,27 +1,12 @@
 ---
 description: Packaging AI orchestration automations into deployable services
 mode: subagent
-tools:
-  read: true
-  write: true
-  edit: true
-  bash: true
-  glob: true
-  grep: true
-  webfetch: true
+tools: { read: true, write: true, edit: true, bash: true, glob: true, grep: true, webfetch: true }
 ---
 
 # Packaging AI Automations for Deployment
 
-<!-- AI-CONTEXT-START -->
-
-## Quick Reference
-
-- **Purpose**: Turn AI orchestration workflows into deployable services
-- **Targets**: Web/SaaS, Desktop apps, Mobile backends, APIs
-- **Principle**: Zero lock-in, standard Python dependencies, exportable
-
-**Deployment Options**:
+**Purpose**: Turn AI orchestration workflows into deployable services. Zero lock-in, standard Python deps, exportable.
 
 | Target | Technology | Best For |
 |--------|------------|----------|
@@ -30,15 +15,11 @@ tools:
 | Mobile Backend | FastAPI + Cloud | App backends |
 | Serverless | Vercel/AWS Lambda | Event-driven |
 
-**Quick Commands**:
-
 ```bash
 docker build -t my-agent-api .
 pyinstaller --onefile main.py
 vercel deploy
 ```
-
-<!-- AI-CONTEXT-END -->
 
 ## Web/SaaS Deployment
 
@@ -60,20 +41,17 @@ class AgentResponse(BaseModel):
     result: str
     status: str
 
-# CrewAI endpoint
 @app.post("/crew/run", response_model=AgentResponse)
 async def run_crew(request: AgentRequest):
     from crewai import Crew, Agent, Task
     try:
         agent = Agent(role="Assistant", goal="Complete the requested task", backstory="Helpful AI assistant.")
         task = Task(description=request.task, expected_output="Task completion result", agent=agent)
-        crew = Crew(agents=[agent], tasks=[task])
-        result = crew.kickoff()
+        result = Crew(agents=[agent], tasks=[task]).kickoff()
         return AgentResponse(result=str(result), status="success")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# AutoGen endpoint
 @app.post("/autogen/chat", response_model=AgentResponse)
 async def autogen_chat(request: AgentRequest):
     from autogen_agentchat.agents import AssistantAgent
@@ -104,16 +82,7 @@ EXPOSE 8000
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-**requirements.txt**:
-
-```text
-fastapi>=0.100.0
-uvicorn>=0.23.0
-crewai>=0.1.0
-autogen-agentchat>=0.4.0
-autogen-ext[openai]>=0.4.0
-python-dotenv>=1.0.0
-```
+`requirements.txt`: `fastapi>=0.100.0 uvicorn>=0.23.0 crewai>=0.1.0 autogen-agentchat>=0.4.0 autogen-ext[openai]>=0.4.0 python-dotenv>=1.0.0`
 
 ```yaml
 # docker-compose.yml
@@ -135,8 +104,6 @@ services:
 ```
 
 ## Desktop Application
-
-### PyInstaller Executable
 
 ```python
 # desktop/main.py
@@ -173,8 +140,7 @@ class AgentApp:
         try:
             from crewai import Crew, Agent, Task
             agent = Agent(role="Assistant", goal="Help with tasks", backstory="Helpful AI assistant")
-            crew_task = Task(description=task, expected_output="Result", agent=agent)
-            result = Crew(agents=[agent], tasks=[crew_task]).kickoff()
+            result = Crew(agents=[agent], tasks=[Task(description=task, expected_output="Result", agent=agent)]).kickoff()
             self.root.after(0, lambda: self._show_result(str(result)))
         except Exception as e:
             self.root.after(0, lambda: self._show_result(f"Error: {e}"))
@@ -196,8 +162,6 @@ pyinstaller --onefile --windowed desktop/main.py
 ```
 
 ## Mobile Backend
-
-### Async Task API
 
 ```python
 # mobile_api/main.py
@@ -236,10 +200,8 @@ async def process_task(task_id: str, task: str):
 
 ## Serverless Deployment
 
-### Vercel Functions
-
 ```python
-# api/agent.py
+# api/agent.py (Vercel)
 from http.server import BaseHTTPRequestHandler
 import json
 
@@ -254,9 +216,8 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({'result': result}).encode())
 ```
 
-### AWS Lambda
-
 ```python
+# AWS Lambda
 def lambda_handler(event, context):
     body = json.loads(event.get('body', '{}'))
     result = run_agent(body.get('task', ''))
@@ -266,13 +227,8 @@ def lambda_handler(event, context):
 ## Export Patterns
 
 ```bash
-# Langflow to standalone Python
-langflow export --flow-id <id> --output my_flow.py
-python my_flow.py
-
-# CrewAI project export
-crewai create crew my-project
-cd my-project && pip freeze > requirements.txt
+langflow export --flow-id <id> --output my_flow.py && python my_flow.py
+crewai create crew my-project && cd my-project && pip freeze > requirements.txt
 ```
 
 ## CI/CD Integration
