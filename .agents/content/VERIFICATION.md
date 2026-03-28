@@ -18,12 +18,12 @@ All external tool references exist and are correct:
 - `tools/browser/crawl4ai.md` ✓
 - `seo/google-search-console.md` ✓
 - `seo/dataforseo.md` ✓
-- `tools/video/higgsfield.md` ✓
+- `video/higgsfield.md` ✓
 - `tools/video/video-prompt-design.md` ✓
 - `tools/voice/speech-to-speech.md` ✓
-- `tools/social-media/bird.md` ✓
-- `tools/social-media/linkedin.md` ✓
-- `tools/social-media/reddit.md` ✓
+- `social-media/bird.md` ✓
+- `social-media/linkedin.md` ✓
+- `social-media/reddit.md` ✓
 - `marketing.md` ✓
 
 ### ✅ Verified - Helper Scripts

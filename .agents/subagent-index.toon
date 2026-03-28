@@ -30,10 +30,9 @@ aidevops/,Framework internals - extending aidevops and architecture and plugins,
 business/,Company orchestration - runner configs for company functions,company-runners
 memory/,Cross-session memory - SQLite FTS5 storage,README
 seo/,Search optimization - keywords and rankings and UX/CRO,dataforseo|serper|semrush|neuronwriter|google-search-console|gsc-sitemaps|site-crawler|eeat-score|analytics-tracking|bing-webmaster-tools|screaming-frog|rich-results|debug-opengraph|debug-favicon|contentking|programmatic-seo|schema-validator|content-analyzer|seo-optimizer|keyword-mapper|mom-test-ux
-content/,Multi-media multi-channel content production - research to distribution,research|story|production/writing|production/image|production/video|production/audio|production/characters|distribution/youtube|distribution/short-form|distribution/social|distribution/blog|distribution/email|distribution/podcast|optimization|guidelines|platform-personas|humanise|seo-writer|meta-creator|editor|internal-linker|context-templates
-tools/content/,Content tools - calendar planning summarization and extraction,content-calendar|summarize
-tools/marketing/,Paid advertising and CRO - Meta Ads campaigns ad creative direct response copywriting and conversion optimization,meta-ads|ad-creative|direct-response-copy|cro
-tools/social-media/,Social media tools - X/Twitter LinkedIn and Reddit,bird|linkedin|reddit
+content/,Multi-media multi-channel content production - research to distribution with calendar planning and summarization,research|story|production/writing|production/image|production/video|production/audio|production/characters|distribution/youtube|distribution/short-form|distribution/social|distribution/blog|distribution/email|distribution/podcast|optimization|guidelines|platform-personas|humanise|seo-writer|meta-creator|editor|internal-linker|context-templates|content-calendar|summarize
+marketing/,Paid advertising and CRO - Meta Ads campaigns ad creative direct response copywriting and conversion optimization,meta-ads|ad-creative|direct-response-copy|cro
+social-media/,Social media tools - X/Twitter LinkedIn and Reddit,bird|linkedin|reddit
 tools/api/,API integrations - authentication ORM framework and Cloudflare MCP,better-auth|cloudflare-mcp|drizzle|hono|vercel-ai-sdk
 tools/build-agent/,Agent design - composing efficient agents,build-agent|agent-review|agent-testing
 tools/build-mcp/,MCP development - creating MCP servers and plugins,build-mcp|server-patterns|api-wrapper|transports|deployment|aidevops-plugin
@@ -53,9 +52,10 @@ tools/context/,Context optimization - semantic search and indexing,augment-conte
 tools/conversion/,Format conversion - document transformation,pandoc
 tools/document/,Document extraction - conversion structured data extraction schemas and workflow orchestration,document-extraction|extraction-schemas|extraction-workflow|docstrange
 tools/ocr/,OCR and text extraction - scene text screenshots documents and local processing,overview|paddleocr|glm-ocr|ocr-research
-tools/accounts/,Accounting tools - receipt OCR subscription audit,receipt-ocr|subscription-audit
+accounts/,Accounting tools - receipt OCR subscription audit,receipt-ocr|subscription-audit
 tools/ai-generation/,AI generation management - ComfyUI install nodes models workflows via comfy-cli,comfy-cli
-tools/video/,Video creation and generation - programmatic editing and AI generation APIs,remotion|higgsfield|runway|wavespeed|yt-dlp|video-prompt-design|real-video-enhancer
+video/,AI video generation services - HeyGen Higgsfield Runway WaveSpeed enhancers and video direction,heygen-skill|higgsfield|runway|wavespeed|enhancor|real-video-enhancer|muapi|video-director
+tools/video/,Video creation tools - programmatic editing download and prompt design (cross-domain),remotion|yt-dlp|video-prompt-design
 tools/vision/,Vision AI - image generation understanding and editing with local and cloud models,overview|image-generation|image-understanding|image-editing
 tools/voice/,Voice AI - TTS/STT/S2S model catalog voice bridge Pipecat pipeline cloud voice agents and audio transcription (Whisper Buzz AssemblyAI Deepgram),voice-models|voice-ai-models|speech-to-speech|cloud-voice-agents|voice-bridge|hyprwhspr|pipecat-opencode|transcription|buzz|qwen3-tts
 tools/research/,Website research - tech stack detection and analysis providers,providers/crft-lookup
@@ -71,10 +71,10 @@ tools/wordpress/,WordPress ecosystem - local dev and fleet,wp-dev|wp-admin|local
 tools/containers/,Container runtimes - Docker and Linux VMs on macOS and remote dispatch via SSH/Tailscale,orbstack|remote-dispatch
 tools/infrastructure/,Infrastructure - cloud GPU deployment and compute,cloud-gpu
 tools/local-models/,Local AI model inference - llama.cpp setup GGUF models usage tracking disk cleanup,local-models|huggingface
-services/accessibility/,Unified web and email accessibility auditing - WCAG compliance remediation and monitoring,accessibility-audit
+tools/accessibility/,Unified web and email accessibility auditing - WCAG compliance remediation and monitoring,accessibility-audit
 services/hosting/,Hosting providers - DNS and cloud servers and local dev,local-hosting|localhost|hostinger|hetzner|cloudflare|cloudflare-platform|cloudron|closte
 services/networking/,Networking - mesh VPN and secure device connectivity,tailscale|netbird
-services/email/,Email services - mailbox operations provider setup security intelligence and autonomous mission communication,ses|email-agent|email-mailbox|email-actions|email-intelligence|email-providers|email-security|email-health-check|email-testing|email-delivery-test|email-design-test|email-delivery-testing|email-design-testing|email-composition|email-inbound-commands|thunderbird
+services/email/,Email services - mailbox operations provider setup security intelligence and autonomous mission communication,ses|email-agent|email-mailbox|email-actions|email-intelligence|email-providers|email-security|email-health-check|email-testing|email-delivery-test|email-design-test|email-composition|email-inbound-commands|thunderbird
 services/outreach/,Cold outreach and deliverability tooling - warmup strategy compliance platform selection mailbox scaling and WarmForge orchestration,cold-outreach|warmforge|smartlead|instantly|manyreach
 services/communications/,Communications - SMS voice Discord bot Matrix bot multi-platform chat bridging encrypted messaging Bluetooth mesh and Web3 messaging,bitchat|convos|discord|google-chat|imessage|matrix-bot|matterbridge|msteams|nextcloud-talk|nostr|signal|simplex|slack|telegram|telfon|twilio|urbit|whatsapp|xmtp
 services/crm/,CRM integration - contact management,fluentcrm

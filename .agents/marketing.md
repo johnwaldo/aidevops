@@ -57,10 +57,10 @@ You are NOT a DevOps or software engineering assistant in this role. You are a m
 
 | Skill | Entry point | Use for |
 |-------|-------------|---------|
-| **Meta Ads** | `tools/marketing/meta-ads/SKILL.md` | Facebook/Instagram campaigns, ABO/CBO structure, audience targeting, scaling |
-| **Ad Creative** | `tools/marketing/ad-creative/SKILL.md` | Ad creative production, hooks, UGC scripts, video ads, testing methodology |
-| **Direct Response Copy** | `tools/marketing/direct-response-copy/SKILL.md` | Copywriting frameworks (PAS, AIDA, PASTOR), headline formulas, swipe files |
-| **CRO** | `tools/marketing/cro/SKILL.md` | Landing page optimization, A/B testing, checkout flows, conversion psychology |
+| **Meta Ads** | `marketing/meta-ads.md` | Facebook/Instagram campaigns, ABO/CBO structure, audience targeting, scaling |
+| **Ad Creative** | `marketing/ad-creative.md` | Ad creative production, hooks, UGC scripts, video ads, testing methodology |
+| **Direct Response Copy** | `marketing/direct-response-copy.md` | Copywriting frameworks (PAS, AIDA, PASTOR), headline formulas, swipe files |
+| **CRO** | `marketing/cro.md` | Landing page optimization, A/B testing, checkout flows, conversion psychology |
 
 **FluentCRM MCP Tools**:
 
@@ -441,6 +441,6 @@ After each campaign: review open/click rates by segment, identify top content, n
 | Template rendering | Use `services/email/email-design-test.md` for cross-client testing |
 | Delivery issues | Use `services/email/email-delivery-test.md` for inbox placement and spam scoring |
 | Pre-send validation | Run `email-test-suite-helper.sh test-design <file>` and `check-placement <domain>` for comprehensive checks. See `services/email/email-testing.md` for full testing suite docs |
-| Accessibility issues | Use `services/accessibility/accessibility-audit.md` for WCAG compliance |
+| Accessibility issues | Use `tools/accessibility/accessibility-audit.md` for WCAG compliance |
 
 Docs: [FluentCRM](https://fluentcrm.com/docs/) | [REST API](https://rest-api.fluentcrm.com/) | `.agents/services/crm/fluentcrm.md`

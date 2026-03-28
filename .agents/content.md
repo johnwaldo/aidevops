@@ -198,7 +198,7 @@ Long-form scripts (scene-by-scene with B-roll directions), short-form scripts (h
 - **Content Type Presets** — UGC 9:16 1-3s cuts, Commercial 2-5s, Cinematic 4-10s, Documentary 5-15s
 - **Post-Production** — Topaz upscale 1.25-1.75x max, add film grain, 60fps for action only
 
-References: `tools/video/higgsfield.md`, `tools/video/video-prompt-design.md`, t200 Veo Meta Framework
+References: `video/higgsfield.md`, `tools/video/video-prompt-design.md`, t200 Veo Meta Framework
 
 ### Audio (`content/production/audio.md`)
 
@@ -237,7 +237,7 @@ TikTok, Reels, Shorts. Format: 9:16, 1-3s cuts, hook-first, 60s max, fast cuts, 
 - **LinkedIn** — professional, thought leadership
 - **Reddit** — community-native, anti-promotional
 
-References: `tools/social-media/bird.md`, `tools/social-media/linkedin.md`, `tools/social-media/reddit.md`
+References: `social-media/bird.md`, `social-media/linkedin.md`, `social-media/reddit.md`
 
 ### Blog (`content/distribution/blog.md`)
 
