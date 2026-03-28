@@ -15,17 +15,7 @@ tools:
 
 # Higgsfield AI API
 
-Higgsfield provides unified access to 100+ generative media models through a single API. Generate images, videos, voice, and audio with automatic infrastructure scaling.
-
-## When to Use
-
-Read this skill when working with:
-
-- AI image generation (text-to-image)
-- AI video generation (image-to-video)
-- Character consistency across generations
-- Multi-model comparison (FLUX, Kling, Seedance, etc.)
-- Webhook-based async generation pipelines
+Unified access to 100+ generative media models. Generate images, videos, voice, and audio with automatic infrastructure scaling.
 
 ## Quick Reference
 
@@ -43,16 +33,16 @@ Read this skill when working with:
 
 ## Authentication
 
-Higgsfield supports two authentication formats depending on the endpoint:
+Two formats depending on endpoint:
 
-**Format 1: Header-based** (v1 endpoints like `/v1/text2image/soul`, `/v1/image2video/dop`):
+**Format 1: Header-based** (v1 endpoints):
 
 ```bash
 hf-api-key: {api-key}
 hf-secret: {secret}
 ```
 
-**Format 2: Authorization header** (simplified endpoints like `/higgsfield-ai/dop/standard`):
+**Format 2: Authorization header** (simplified endpoints):
 
 ```bash
 Authorization: Key {api-key}:{secret}
@@ -66,10 +56,6 @@ export HIGGSFIELD_SECRET="your-api-secret"
 ```
 
 ## Text-to-Image (Soul Model)
-
-Generate images from text prompts with optional character consistency.
-
-### Basic Request
 
 ```bash
 curl -X POST 'https://platform.higgsfield.ai/v1/text2image/soul' \
@@ -91,51 +77,23 @@ curl -X POST 'https://platform.higgsfield.ai/v1/text2image/soul' \
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `prompt` | string | Yes | Text description of image |
-| `width_and_height` | string | Yes | Dimensions (see supported sizes) |
-| `enhance_prompt` | boolean | No | Auto-enhance prompt (default: false) |
+| `prompt` | string | Yes | Text description |
+| `width_and_height` | string | Yes | Dimensions (see below) |
+| `enhance_prompt` | boolean | No | Auto-enhance (default: false) |
 | `quality` | string | No | `720p` or `1080p` (default: 1080p) |
 | `batch_size` | integer | No | 1 or 4 (default: 1) |
 | `seed` | integer | No | 1-1000000 for reproducibility |
 | `style_id` | uuid | No | Preset style ID |
 | `style_strength` | number | No | 0-1 (default: 1) |
-| `custom_reference_id` | string | No | Character ID for consistency (UUID format) |
+| `custom_reference_id` | string | No | Character ID (UUID) |
 | `custom_reference_strength` | number | No | 0-1 (default: 1) |
 | `image_reference` | object | No | Reference image for guidance |
 
-### Supported Dimensions
+**Supported dimensions**: `1152x2048`, `2048x1152`, `2048x1536`, `1536x2048`, `1344x2016`, `2016x1344`, `960x1696`, `1536x1536`, `1536x1152`, `1696x960`, `1152x1536`, `1088x1632`, `1632x1088`
 
-```text
-1152x2048, 2048x1152, 2048x1536, 1536x2048,
-1344x2016, 2016x1344, 960x1696, 1536x1536,
-1536x1152, 1696x960, 1152x1536, 1088x1632, 1632x1088
-```
-
-### Response
-
-```json
-{
-  "id": "3c90c3cc-0d44-4b50-8888-8dd25736052a",
-  "type": "text2image_soul",
-  "created_at": "2023-11-07T05:31:56Z",
-  "jobs": [
-    {
-      "id": "job-123",
-      "status": "queued",
-      "results": {
-        "min": { "type": "image/png", "url": "https://..." },
-        "raw": { "type": "image/png", "url": "https://..." }
-      }
-    }
-  ]
-}
-```
+**Response**: Returns `id`, `type`, `created_at`, and `jobs[]` array with `id`, `status` (`queued`/`processing`/`completed`/`failed`), and `results.url`.
 
 ## Image-to-Video (DOP Model)
-
-Transform static images into animated videos.
-
-### Basic Request
 
 ```bash
 curl -X POST 'https://platform.higgsfield.ai/v1/image2video/dop' \
@@ -146,16 +104,11 @@ curl -X POST 'https://platform.higgsfield.ai/v1/image2video/dop' \
     "params": {
       "model": "dop-turbo",
       "prompt": "A cat walking gracefully through a garden",
-      "input_images": [{
-        "type": "image_url",
-        "image_url": "https://example.com/cat.jpg"
-      }],
+      "input_images": [{"type": "image_url", "image_url": "https://example.com/cat.jpg"}],
       "enhance_prompt": true
     }
   }'
 ```
-
-### Parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -169,67 +122,27 @@ curl -X POST 'https://platform.higgsfield.ai/v1/image2video/dop' \
 
 ### Alternative Models
 
-**DOP Standard** (simpler API):
+All use `Authorization: Key {api_key}:{api_secret}` and `Content-Type: application/json`.
 
-```bash
-curl -X POST 'https://platform.higgsfield.ai/higgsfield-ai/dop/standard' \
-  --header 'Authorization: Key {api_key}:{api_secret}' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "image_url": "https://example.com/image.jpg",
-    "prompt": "Woman walks down Tokyo street with neon lights",
-    "duration": 5
-  }'
-```
-
-**Kling v2.1 Pro** (cinematic):
-
-```bash
-curl -X POST 'https://platform.higgsfield.ai/kling-video/v2.1/pro/image-to-video' \
-  --header 'Authorization: Key {api_key}:{api_secret}' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "image_url": "https://example.com/landscape.jpg",
-    "prompt": "Camera slowly pans across landscape as clouds drift"
-  }'
-```
-
-**Seedance v1 Pro** (professional):
-
-```bash
-curl -X POST 'https://platform.higgsfield.ai/bytedance/seedance/v1/pro/image-to-video' \
-  --header 'Authorization: Key {api_key}:{api_secret}' \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "image_url": "https://example.com/portrait.jpg",
-    "prompt": "Subject turns head slightly and smiles"
-  }'
-```
+| Model | Endpoint | Body fields |
+|-------|----------|-------------|
+| DOP Standard | `POST /higgsfield-ai/dop/standard` | `image_url`, `prompt`, `duration` |
+| Kling v2.1 Pro | `POST /kling-video/v2.1/pro/image-to-video` | `image_url`, `prompt` |
+| Seedance v1 Pro | `POST /bytedance/seedance/v1/pro/image-to-video` | `image_url`, `prompt` |
 
 ## Character Consistency
 
-Create reusable characters for consistent image generation.
-
-### Create Character
+Create reusable characters for consistent generation:
 
 ```bash
 curl -X POST 'https://platform.higgsfield.ai/api/characters' \
   --header 'hf-api-key: {api-key}' \
   --header 'hf-secret: {secret}' \
   --form 'photo=@/path/to/photo.jpg'
+# Returns: {"id": "3eb3ad49-...", "photo_url": "...", "created_at": "..."}
 ```
 
-Response:
-
-```json
-{
-  "id": "3eb3ad49-775d-40bd-b5e5-38b105108780",
-  "photo_url": "https://cdn.higgsfield.ai/characters/photo_123.jpg",
-  "created_at": "2023-12-07T10:30:00Z"
-}
-```
-
-### Use Character in Generation
+Use in generation params:
 
 ```json
 {
@@ -243,23 +156,14 @@ Response:
 
 ## Webhook Integration
 
-Receive notifications when jobs complete.
-
 ```json
 {
-  "webhook": {
-    "url": "https://your-server.com/webhook",
-    "secret": "your-webhook-secret"
-  },
-  "params": {
-    "prompt": "..."
-  }
+  "webhook": {"url": "https://your-server.com/webhook", "secret": "your-webhook-secret"},
+  "params": {"prompt": "..."}
 }
 ```
 
 ## Job Status Polling
-
-Check generation status and retrieve results.
 
 ```bash
 curl -X GET 'https://platform.higgsfield.ai/api/generation-results?id=job_789012' \
@@ -267,127 +171,60 @@ curl -X GET 'https://platform.higgsfield.ai/api/generation-results?id=job_789012
   --header 'hf-secret: {secret}'
 ```
 
-Response:
-
-```json
-{
-  "id": "job_789012",
-  "status": "completed",
-  "results": [{
-    "type": "image",
-    "url": "https://cdn.higgsfield.ai/generations/img_123.jpg"
-  }],
-  "retention_expires_at": "2023-12-14T10:30:00Z"
-}
-```
-
-**Status values**: `pending`, `processing`, `completed`, `failed`
-
-**Note**: Results are retained for 7 days.
+Returns `status` (`pending`/`processing`/`completed`/`failed`), `results[].url`. Results retained 7 days.
 
 ## Python SDK
-
-Install:
 
 ```bash
 pip install higgsfield-client
 ```
 
-The SDK provides a simplified interface that abstracts the REST API. It supports multiple models with unified parameters.
-
-### Synchronous
-
 ```python
 import higgsfield_client
 
-# Using Seedream model (SDK-specific simplified interface)
+# Synchronous
 result = higgsfield_client.subscribe(
     'bytedance/seedream/v4/text-to-image',
-    arguments={
-        'prompt': 'A serene lake at sunset with mountains',
-        'resolution': '2K',
-        'aspect_ratio': '16:9'
-    }
+    arguments={'prompt': 'A serene lake at sunset', 'resolution': '2K', 'aspect_ratio': '16:9'}
 )
-
 print(result['images'][0]['url'])
-```
 
-### Asynchronous
-
-```python
+# Asynchronous
 import asyncio
-import higgsfield_client
-
 async def main():
     result = await higgsfield_client.subscribe_async(
         'bytedance/seedream/v4/text-to-image',
-        arguments={
-            'prompt': 'A serene lake at sunset with mountains',
-            'resolution': '2K',
-            'aspect_ratio': '16:9'
-        }
+        arguments={'prompt': 'A serene lake at sunset', 'resolution': '2K', 'aspect_ratio': '16:9'}
     )
     print(result['images'][0]['url'])
-
 asyncio.run(main())
 ```
 
-**Note**: The SDK uses simplified parameters (`resolution`, `aspect_ratio`) that differ from the REST API (`width_and_height`, `quality`). The SDK handles the translation internally.
+SDK uses `resolution`/`aspect_ratio` (not `width_and_height`/`quality`) — translated internally.
 
 ## Error Handling
 
-### Validation Error (422)
+- **422**: Validation error — `detail[].msg` describes the field issue
+- **401**: Invalid or missing credentials
+- **Rate limiting**: Platform auto-scales; implement exponential backoff for resilience
 
-```json
-{
-  "detail": [
-    {
-      "loc": ["body", "params", "prompt"],
-      "msg": "Prompt cannot be empty",
-      "type": "value_error"
-    }
-  ]
-}
-```
-
-### Authentication Error (401)
-
-Invalid or missing API credentials.
-
-### Rate Limiting
-
-The platform auto-scales, but implement exponential backoff for resilience.
-
-## Context7 Integration
-
-For up-to-date API documentation:
+## Context7
 
 ```text
-resolve-library-id("higgsfield")
-# Returns: /websites/higgsfield_ai
-
 query-docs("/websites/higgsfield_ai", "text-to-image parameters")
 query-docs("/websites/higgsfield_ai", "image-to-video models")
 query-docs("/websites/higgsfield_ai", "character consistency")
 ```
-
-## Related
-
-- **`tools/video/higgsfield-ui.md`** - UI automation subagent (uses subscription credits via browser, no API key needed)
-- [Higgsfield Docs](https://docs.higgsfield.ai/)
-- [Higgsfield Dashboard](https://cloud.higgsfield.ai)
-- `tools/video/remotion.md` - Programmatic video editing
 
 ## API vs UI
 
 | Feature | API (`higgsfield.md`) | UI (`higgsfield-ui.md`) |
 |---------|----------------------|------------------------|
 | Auth | API key + secret | Email/password login |
-| Credits | Pay-per-use API credits (separate pool) | Subscription credits (included in plan) |
-| Models | Soul, Popcorn, Reve, Seedream v4, DOP, Kling 2.1/2.6/3.0, Seedance | All API models + Nano Banana Pro, GPT Image, Flux Kontext, Wan, Sora, Veo, MiniMax, Grok + 86 apps |
-| Speed | Direct API calls (~5-30s) | Browser automation (~60s per generation) |
-| Best for | Programmatic pipelines, batch processing | Using subscription credits, accessing UI-only features |
+| Credits | Pay-per-use API credits | Subscription credits |
+| Models | Soul, DOP, Kling 2.1/2.6/3.0, Seedance, Seedream v4, Reve, Popcorn | All API models + Nano Banana Pro, GPT Image, Flux Kontext, Wan, Sora, Veo, MiniMax, Grok + 86 apps |
+| Speed | Direct API (~5-30s) | Browser automation (~60s) |
+| Best for | Programmatic pipelines, batch processing | Subscription credits, UI-only features |
 
 ### Verified API Models (2026-02-10)
 
@@ -398,3 +235,9 @@ query-docs("/websites/higgsfield_ai", "character consistency")
 **Image edit**: `seedream-edit`
 
 **NOT on API** (web UI only): Nano Banana Pro, GPT Image, Flux Kontext, Seedream 4.5, Wan, Sora, Veo, MiniMax Hailuo, Grok Video
+
+## Related
+
+- **`tools/video/higgsfield-ui.md`** — UI automation subagent (subscription credits, no API key)
+- **`tools/video/remotion.md`** — Programmatic video editing
+- [Higgsfield Docs](https://docs.higgsfield.ai/) | [Dashboard](https://cloud.higgsfield.ai)
