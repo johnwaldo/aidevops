@@ -1,5 +1,5 @@
 ---
-description: "NVIDIA Cloud — NIM inference microservices, build.nvidia.com API, DGX Cloud, self-hosted NIM containers"
+description: "NVIDIA Cloud — build.nvidia.com API, NIM containers for self-hosted inference, NeMo for training, DGX Cloud"
 mode: subagent
 tools:
   read: true
@@ -12,57 +12,78 @@ tools:
   task: false
 ---
 
-# NVIDIA Cloud (NIM / build.nvidia.com)
+# NVIDIA Cloud
 
 <!-- AI-CONTEXT-START -->
 
 ## Quick Reference
 
-- **Cloud API**: `https://integrate.api.nvidia.com/v1` (build.nvidia.com, OpenAI-compat)
-- **Auth**: NVIDIA API key from [build.nvidia.com](https://build.nvidia.com) | `Authorization: Bearer <key>` header
-- **Creds**: `NVIDIA_API_KEY` env var
-- **Self-hosted NIM**: Docker containers from `nvcr.io/nim/` — requires NVIDIA AI Enterprise license or NGC account
-- **Docs**: [NIM overview](https://docs.nvidia.com/nim/) | [build.nvidia.com](https://build.nvidia.com) | [NIM containers](https://catalog.ngc.nvidia.com/orgs/nim/teams/meta)
-- **Dashboard**: [build.nvidia.com](https://build.nvidia.com)
+- **Cloud API**: `https://integrate.api.nvidia.com/v1` (OpenAI-compat, prototyping)
+- **Auth**: API key from [build.nvidia.com](https://build.nvidia.com/) (free, 1000 credits)
+- **Creds**: `NVIDIA_API_KEY` env var | `Authorization: Bearer <key>` header
+- **Self-host**: NIM containers via `docker pull nvcr.io/nim/<model>` (requires NGC API key)
+- **Docs**: [docs.api.nvidia.com](https://docs.api.nvidia.com/) | [NIM docs](https://docs.nvidia.com/nim/) | [build.nvidia.com](https://build.nvidia.com/explore/discover)
+- **Licensing**: Cloud API free (credit-based). NIM self-host free with AI Enterprise license or DGX.
 
 <!-- AI-CONTEXT-END -->
 
-NVIDIA's inference platform: cloud API for prototyping (build.nvidia.com) and self-hosted NIM containers for production. NIM (NVIDIA Inference Microservices) are optimized Docker containers for running models on NVIDIA GPUs with TensorRT-LLM acceleration.
+NVIDIA's AI inference platform with two modes: (1) free cloud API for prototyping at build.nvidia.com, (2) self-hosted NIM containers for production on your own GPUs. OpenAI SDK compatible.
 
-**Best for**: self-hosted optimized inference on NVIDIA GPUs (NIM containers), prototyping with frontier models (build.nvidia.com free credits), organizations with NVIDIA AI Enterprise licenses.
-**Not for**: managed serverless inference at scale (use Fireworks/Together), fine-tuning (use NeMo separately), privacy-critical TEE workloads (see `nearai.md`).
+**Best for**: prototyping with free credits, self-hosted production inference (NIM containers are highly optimized), NVIDIA GPU owners (DGX, HGX), healthcare/biology/simulation models, enterprise with AI Enterprise licenses.
+**Not for**: pay-per-token production serverless (no published pricing), fine-tuning via API (use NeMo separately), budget-conscious serverless (use Fireworks/Together), edge inference (use Cloudflare).
 
-## Pricing (March 2026)
+## Pricing Model
 
-- **build.nvidia.com (cloud API)**: Free tier — 1,000 API credits for prototyping. No published per-token serverless pricing for production; cloud API is intended for evaluation only.
-- **Self-hosted NIM**: Free with NVIDIA AI Enterprise license (included with DGX systems, available separately). NGC personal accounts get limited free access.
-- **DGX Cloud**: Enterprise GPU clusters — contact NVIDIA for pricing.
+NVIDIA Cloud has a fundamentally different pricing model from Fireworks/Together/Cloudflare:
 
-## Models
+| Mode | Cost | Use case |
+|------|------|----------|
+| **Cloud API** (build.nvidia.com) | Free (1000 API credits, replenishable) | Prototyping, evaluation, development |
+| **Self-hosted NIM** | Free with AI Enterprise license or DGX purchase | Production inference on your GPUs |
+| **DGX Cloud** | GPU rental (contact sales) | Production without owning hardware |
 
-100+ models on build.nvidia.com: Llama, Mistral, Gemma, Phi, DeepSeek, Qwen, Nemotron, multimodal (vision, speech), and NVIDIA-optimized variants. Full catalog: https://build.nvidia.com/explore/discover
+No published per-token serverless pricing. The cloud API is explicitly for prototyping -- production workloads run on self-hosted NIM or DGX Cloud.
 
-## Cloud API (build.nvidia.com)
+## Models (100+)
+
+### LLMs
+
+DeepSeek V3.1/V3.2, Llama 2/3/3.1/3.2/3.3/4, Mistral/Mixtral family, Qwen 2/2.5/3/3.5, GPT-OSS 20B/120B, Nemotron family (NVIDIA's own), Kimi K2, MiniMax M2.5, GLM-4.7/5, Phi-3/4, Gemma 2/3/3n, Granite, and many more.
+
+### Specialized
+
+- **Retrieval**: Embeddings (NV-Embed, BGE, Arctic), reranking (NV-Rerank, BGE)
+- **Vision**: FLUX image gen, Stable Diffusion, object detection, document parsing
+- **Healthcare**: AlphaFold2, ESMFold, protein design (RFDiffusion, ProteinMPNN), molecular docking
+- **Simulation**: Weather prediction (FourCastNet), climate (CorrDiff)
+- **Safety**: NemoGuard (jailbreak detection, content safety, topic control), Llama Guard
+- **Code**: StarCoder2, Codestral, CodeGemma
+
+## Usage
+
+### Cloud API (prototyping)
 
 ```bash
-# OpenAI-compatible REST
 curl https://integrate.api.nvidia.com/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $NVIDIA_API_KEY" \
   -d '{"model": "meta/llama-3.3-70b-instruct", "messages": [{"role": "user", "content": "Hello"}]}'
-
-# OpenAI SDK (Python)
-from openai import OpenAI
-client = OpenAI(api_key=os.environ["NVIDIA_API_KEY"], base_url="https://integrate.api.nvidia.com/v1")
-response = client.chat.completions.create(model="meta/llama-3.3-70b-instruct", messages=[...])
 ```
 
-## Self-Hosted NIM Containers
+```python
+# OpenAI SDK (change base_url only)
+from openai import OpenAI
+client = OpenAI(api_key=os.environ["NVIDIA_API_KEY"], base_url="https://integrate.api.nvidia.com/v1")
+response = client.chat.completions.create(
+    model="meta/llama-3.3-70b-instruct",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
 
-NIM containers package model weights + TensorRT-LLM optimizations + OpenAI-compatible API server into a single Docker image.
+### Self-hosted NIM (production)
 
 ```bash
-# Pull and run a NIM container (requires NGC API key and NVIDIA GPU)
+# Pull and run NIM container (requires NGC API key and NVIDIA GPU)
 export NGC_API_KEY="<your-ngc-api-key>"
 docker login nvcr.io --username '$oauthtoken' --password "$NGC_API_KEY"
 
@@ -71,23 +92,86 @@ docker run --gpus all \
   -p 8000:8000 \
   nvcr.io/nim/meta/llama-3.3-70b-instruct:latest
 
-# Query the local NIM (OpenAI-compatible)
+# Query (same OpenAI-compatible API)
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "meta/llama-3.3-70b-instruct", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-NIM containers expose an OpenAI-compatible API at `/v1/chat/completions`. Deploy on any NVIDIA GPU server (cloud or on-prem).
+NIM containers include NVIDIA's inference optimizations (TensorRT-LLM, quantization, batching). Generally faster than vLLM/TGI for NVIDIA GPUs.
+
+## Cloud API vs Self-Hosted NIM
+
+| Dimension | Cloud API | Self-hosted NIM |
+|-----------|-----------|-----------------|
+| Cost | Free (credit-based) | GPU cost only (NIM license free with AI Enterprise) |
+| Rate limits | Credit-based, limited | Unlimited (your hardware) |
+| Latency | Variable (shared infra) | Predictable (dedicated) |
+| Models | 100+ | Any NIM-packaged model |
+| Custom models | No | Yes (custom NIM containers) |
+| Data privacy | NVIDIA sees requests | Full control |
+| Setup | API key only | Docker + NVIDIA GPU + NGC key |
+| Use case | Prototyping, evaluation | Production |
+
+## Capabilities and Limitations
+
+### Available
+
+- 100+ models across LLM, vision, retrieval, healthcare, simulation
+- OpenAI-compatible chat completions API
+- Streaming responses
+- Embeddings and reranking
+- Image generation (FLUX, Stable Diffusion)
+- Specialized models (healthcare, weather, safety) not available elsewhere
+- Self-hosted NIM with TensorRT-LLM optimizations
+- Attestation API (for NIM container verification)
+
+### Not available (via cloud API)
+
+- Fine-tuning -- use NeMo (separate product) or Fireworks/Together
+- Batch inference API -- use Fireworks/Together
+- Dedicated cloud deployments with autoscaling -- use Fireworks/Together or DGX Cloud
+- Published per-token pricing -- credit-based only
+- CLI tool -- REST API and Docker only
+- Audio/speech models -- limited (use Fireworks/Together/Cloudflare)
+
+## When to Use NVIDIA Cloud
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Prototyping with many models | Strong fit -- free credits, 100+ models |
+| Production on own NVIDIA GPUs | Strong fit -- NIM containers are fastest |
+| Healthcare/biology models | Unique -- AlphaFold, ESMFold, molecular docking |
+| Enterprise with AI Enterprise license | Strong fit -- NIM is free |
+| Pay-per-token serverless production | Use Fireworks or Together instead |
+| Fine-tuning via API | Use Fireworks or Together instead |
+| Edge/global inference | Use Cloudflare instead |
+| Privacy-critical with TEE | Use NEAR AI instead |
+| Budget-conscious, no NVIDIA GPUs | Use Fireworks or Together instead |
+
+## NeMo (Training)
+
+NVIDIA NeMo is a separate product for model training and customization:
+
+- **NeMo Customizer**: Fine-tuning (SFT, PEFT, DPO)
+- **NeMo Evaluator**: Model evaluation
+- **NeMo Data Designer**: Synthetic dataset generation
+- **NeMo Guardrails**: Safety and alignment
+
+NeMo is self-hosted or available via DGX Cloud. Not accessible through the build.nvidia.com API.
 
 ## Security
 
-- Store credentials: `aidevops secret set NVIDIA_API_KEY`
+- Store API key: `aidevops secret set NVIDIA_API_KEY`
+- NGC API key (for NIM pulls): `aidevops secret set NGC_API_KEY`
 - Never expose keys in logs or output
-- Self-hosted NIM: run behind a reverse proxy with auth (nginx/caddy) — NIM containers have no built-in auth
+- Self-hosted NIM: full data sovereignty, but run behind reverse proxy with auth (NIM has no built-in auth)
+- Cloud API: NVIDIA processes requests (no TEE guarantees)
 
 ## See Also
 
-- `tools/infrastructure/fireworks.md` — managed inference + fine-tuning (no GPU required)
-- `tools/infrastructure/cloud-gpu.md` — raw GPU providers for running NIM or other inference servers
-- `tools/infrastructure/nearai.md` — TEE-backed private inference
-- `tools/deployment/hosting-comparison.md` — platform comparison including inference hosting
+- `tools/infrastructure/fireworks.md` -- managed serverless inference + fine-tuning
+- `tools/infrastructure/together.md` -- managed inference + GPU clusters
+- `tools/infrastructure/nearai.md` -- TEE-backed private inference
+- `tools/infrastructure/cloud-gpu.md` -- raw GPU providers for self-hosting NIM
+- `tools/deployment/hosting-comparison.md` -- full platform comparison

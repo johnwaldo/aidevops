@@ -1,5 +1,5 @@
 ---
-description: "Cloudflare Workers AI — edge serverless inference, ~30 open-source models, global PoPs, wrangler CLI"
+description: "Cloudflare Workers AI — edge serverless inference on Cloudflare's global GPU network, pay-per-neuron pricing, Wrangler CLI"
 mode: subagent
 tools:
   read: true
@@ -18,68 +18,155 @@ tools:
 
 ## Quick Reference
 
-- **API base**: `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}` (REST) | Workers binding (in-Worker)
-- **Auth**: Cloudflare API token with `Workers AI` permission | `Authorization: Bearer <token>` header
-- **Creds**: `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` env vars
-- **CLI**: `wrangler` — `npm install -g wrangler` | `wrangler ai models list`
-- **Docs**: [Quickstart](https://developers.cloudflare.com/workers-ai/get-started/) | [Models](https://developers.cloudflare.com/workers-ai/models/) | [Pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/)
-- **Dashboard**: [dash.cloudflare.com](https://dash.cloudflare.com) → AI → Workers AI
+- **CLI**: `wrangler` — `npm install -g wrangler` | `wrangler ai models` (list models)
+- **API base**: `https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}`
+- **Auth**: Cloudflare API token or `wrangler login`
+- **Creds**: `CLOUDFLARE_API_TOKEN` env var | `CLOUDFLARE_ACCOUNT_ID`
+- **Docs**: [developers.cloudflare.com/workers-ai](https://developers.cloudflare.com/workers-ai/) | [Pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/) | [Models](https://developers.cloudflare.com/workers-ai/models/)
+- **Dashboard**: [dash.cloudflare.com](https://dash.cloudflare.com/?to=/:account/ai/workers-ai)
+- **Free tier**: 10,000 Neurons/day (both Free and Paid Workers plans)
 
 <!-- AI-CONTEXT-END -->
 
-Edge serverless inference on Cloudflare's global network (300+ PoPs). Models run close to users with no cold starts. OpenAI-compatible REST API available; native Workers binding for in-Worker use.
+Serverless AI inference on Cloudflare's global GPU network. Models run at the edge, close to users. Part of the Cloudflare developer platform (Workers, Pages, KV, D1, R2, Vectorize, AI Gateway).
 
-**Best for**: edge inference integrated with Cloudflare Workers/Pages, low-latency global inference for small-to-mid models, Cloudflare-stack applications.
-**Not for**: fine-tuning, custom model uploads (custom models via waitlist only), large models (>70B), privacy-critical TEE workloads (see `nearai.md`), batch inference.
+**Best for**: edge inference with low latency, Cloudflare-native apps (Workers/Pages), small-to-medium models, free experimentation (10K neurons/day), integrated AI Gateway (caching, rate limiting, fallback).
+**Not for**: fine-tuning, custom model uploads (requires custom form), large model hosting (no DeepSeek V3, no GLM-5), dedicated GPUs, batch inference, self-hosted.
 
 ## Pricing (March 2026)
 
-- **Free tier**: 10,000 neurons/day (shared across all models)
-- **Paid**: $0.011 per 1,000 neurons (neurons = compute units, not tokens — varies by model)
-- No per-token pricing published; see [pricing docs](https://developers.cloudflare.com/workers-ai/platform/pricing/) for neuron costs per model
+Billed in Neurons ($0.011 per 1,000 Neurons). Free allocation: 10,000 Neurons/day on both Free and Paid Workers plans.
 
-## Models
+### LLM Pricing (selected models)
 
-~30 open-source models across text generation, embeddings, image classification, speech recognition, and image generation. Key models: Llama 3.3 70B, Mistral 7B, Qwen 2.5, Gemma, Whisper, FLUX. Full catalog: https://developers.cloudflare.com/workers-ai/models/
+| Model | $/M input | $/M output |
+|-------|-----------|------------|
+| Llama 3.2 1B | $0.027 | $0.201 |
+| Llama 3.2 3B | $0.051 | $0.335 |
+| Llama 3.1 8B FP8 Fast | $0.045 | $0.384 |
+| Llama 3.3 70B FP8 Fast | $0.293 | $2.253 |
+| Llama 4 Scout 17B | $0.270 | $0.850 |
+| DeepSeek R1 Distill Qwen 32B | $0.497 | $4.881 |
+| Qwen3 30B A3B FP8 | $0.051 | $0.335 |
+| GPT-OSS 120B | $0.350 | $0.750 |
+| GPT-OSS 20B | $0.200 | $0.300 |
+| Kimi K2.5 | $0.600 | $3.000 |
+| Nemotron 3 120B A12B | $0.500 | $1.500 |
+| Mistral 7B | $0.110 | $0.190 |
+| Mistral Small 3.1 24B | $0.351 | $0.555 |
+
+### Other Modalities
+
+| Type | Model | Price |
+|------|-------|-------|
+| Embeddings | BGE Small/Base/Large | $0.008-$0.204/M tokens |
+| Image | FLUX.1 Schnell | $0.00035/step |
+| Image | FLUX.2 Klein 4B | $0.000059/input tile |
+| Audio STT | Whisper Large v3 Turbo | $0.0005/min |
+| Audio TTS | MeloTTS | $0.0002/min |
+| Audio TTS | Deepgram Aura 2 | $0.030/1K chars |
+| Reranking | BGE Reranker Base | $0.003/M tokens |
+
+### Price Comparison vs Fireworks/Together
+
+Cloudflare is generally **more expensive for large models** but **competitive or cheaper for small models**:
+
+| Model | Cloudflare | Fireworks | Together |
+|-------|------------|-----------|---------|
+| GPT-OSS 120B (in/out) | $0.35/$0.75 | $0.15/$0.60 | $0.15/$0.60 |
+| Llama 3.3 70B (in/out) | $0.29/$2.25 | $0.90/$0.90 | $0.88/$0.88 |
+| Qwen3 30B A3B (in/out) | $0.05/$0.34 | $0.15/$0.60 | $0.15/$1.50 |
+| Mistral 7B (in/out) | $0.11/$0.19 | $0.20/$0.20 | $0.20/$0.20 |
+
+Pattern: CF has cheap input but expensive output for large models. Best value for small models (<16B).
 
 ## Usage
+
+### From Workers (recommended)
+
+```javascript
+// In a Cloudflare Worker
+export default {
+  async fetch(request, env) {
+    const response = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages: [{ role: "user", content: "Hello" }]
+    });
+    return Response.json(response);
+  }
+};
+```
 
 ### REST API
 
 ```bash
-curl "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast" \
+curl https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-  -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello"}]}'
-```
-
-### Workers Binding (in-Worker)
-
-```javascript
-// wrangler.toml: [ai] binding = "AI"
-export default {
-  async fetch(request, env) {
-    const response = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
-      messages: [{ role: "user", content: "Hello" }],
-    });
-    return Response.json(response);
-  },
-};
 ```
 
 ### OpenAI-Compatible Endpoint
 
-Cloudflare provides an OpenAI-compatible endpoint for supported models. See [OpenAI compat docs](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/) for supported models and limitations — not all Workers AI models support this interface.
+Cloudflare provides an OpenAI-compatible endpoint for supported models. See [OpenAI compat docs](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/) for supported models and limitations.
+
+## Capabilities and Limitations
+
+### Available
+
+- ~30 LLM models (Llama, Qwen, Mistral, DeepSeek distills, GPT-OSS, Gemma)
+- Image generation (FLUX, Leonardo, Stable Diffusion)
+- Speech-to-text (Whisper, Deepgram Nova)
+- Text-to-speech (MeloTTS, Deepgram Aura)
+- Embeddings (BGE family, Qwen3)
+- Reranking (BGE Reranker)
+- Classification, translation, object detection
+- AI Gateway (caching, rate limiting, retries, model fallback, analytics)
+- Vectorize (vector database for RAG)
+- Streaming responses
+
+### Not available
+
+- Fine-tuning -- use Fireworks or Together
+- Custom model uploads -- requires [custom requirements form](https://forms.gle/axnnpGDb6xrmR31T6)
+- Dedicated GPUs -- serverless only
+- Batch inference -- no batch API
+- Large frontier models (DeepSeek V3 full, GLM-5) -- only distilled versions
+- Self-hosted option -- Cloudflare network only
+- Anthropic SDK compatibility -- Cloudflare API or OpenAI-compat only
+
+### Cloudflare Platform Integration
+
+Workers AI is most valuable when combined with the Cloudflare platform:
+
+- **AI Gateway**: Caching (reduce costs), rate limiting, request retries, model fallback, observability
+- **Vectorize**: Vector database for RAG pipelines
+- **Workers**: Serverless compute for pre/post-processing
+- **KV/D1/R2**: Storage for context, conversation history, assets
+- **Pages**: Frontend hosting for AI apps
+
+## When to Use Cloudflare Workers AI
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Cloudflare-native app needing AI | Strong fit -- native integration |
+| Edge inference, low latency globally | Strong fit -- runs on CF network |
+| Small model inference (<16B) | Good value -- competitive pricing |
+| Free experimentation | Good fit -- 10K neurons/day free |
+| Large model production inference | Use Fireworks or Together instead |
+| Fine-tuning or custom models | Use Fireworks or Together instead |
+| Batch processing at scale | Use Fireworks or Together instead |
+| Privacy-critical workloads | Use NEAR AI instead |
 
 ## Security
 
 - Store credentials: `aidevops secret set CLOUDFLARE_API_TOKEN` and `aidevops secret set CLOUDFLARE_ACCOUNT_ID`
 - Never expose tokens in logs or output
-- Use scoped API tokens (Workers AI permission only) for CI/CD
+- Use Workers bindings (`env.AI`) instead of raw API calls when possible
+- AI Gateway provides rate limiting and abuse protection
 
 ## See Also
 
-- `tools/infrastructure/fireworks.md` — managed inference + fine-tuning (more models, fine-tuning support)
-- `tools/infrastructure/nearai.md` — TEE-backed private inference
-- `tools/infrastructure/cloud-gpu.md` — raw GPU providers for self-managed inference
-- `tools/deployment/hosting-comparison.md` — platform comparison including inference hosting
+- `tools/infrastructure/fireworks.md` -- managed inference + fine-tuning (more models, cheaper for large)
+- `tools/infrastructure/together.md` -- managed inference + GPU clusters
+- `tools/infrastructure/nearai.md` -- TEE-backed private inference
+- `tools/deployment/hosting-comparison.md` -- full platform comparison
+- Cloudflare platform skill: load with `/skill cloudflare-platform`
