@@ -33,7 +33,7 @@ tools:
 **MCP quick fixes**:
 
 - Chrome DevTools: Install Chrome Canary, fix permissions
-- Playwright: `bunx playwright install`
+- Playwright: `npx playwright install`
 - API Auth: Verify keys with curl, check env vars
 - Debug: `DEBUG=chrome-devtools-mcp bunx chrome-devtools-mcp@latest`
 - Diagnostics: `bash .agents/scripts/collect-mcp-diagnostics.sh`
@@ -89,9 +89,7 @@ npx playwright-mcp@latest --timeout=60000 --no-sandbox
 **WebKit on Linux — install dependencies:**
 
 ```bash
-sudo apt-get install libwoff1 libopus0 libwebp6 libwebpdemux2 libenchant1c2a \
-  libgudev-1.0-0 libsecret-1-0 libhyphen0 libgdk-pixbuf2.0-0 libegl1 \
-  libnotify4 libxss1 libasound2
+npx playwright install-deps webkit
 ```
 
 **Performance args:**
@@ -174,10 +172,10 @@ curl -I https://api.cloudflare.com
 **4. Check env vars:**
 
 ```bash
-echo $AHREFS_API_KEY
-echo $PERPLEXITY_API_KEY
-echo $CLOUDFLARE_ACCOUNT_ID
-echo $CLOUDFLARE_API_TOKEN
+[ -n "$AHREFS_API_KEY" ] && echo "AHREFS_API_KEY set (${#AHREFS_API_KEY} chars)" || echo "AHREFS_API_KEY not set"
+[ -n "$PERPLEXITY_API_KEY" ] && echo "PERPLEXITY_API_KEY set (${#PERPLEXITY_API_KEY} chars)" || echo "PERPLEXITY_API_KEY not set"
+[ -n "$CLOUDFLARE_ACCOUNT_ID" ] && echo "CLOUDFLARE_ACCOUNT_ID set (${#CLOUDFLARE_ACCOUNT_ID} chars)" || echo "CLOUDFLARE_ACCOUNT_ID not set"
+[ -n "$CLOUDFLARE_API_TOKEN" ] && echo "CLOUDFLARE_API_TOKEN set (${#CLOUDFLARE_API_TOKEN} chars)" || echo "CLOUDFLARE_API_TOKEN not set"
 ```
 
 **5. Test config changes with CLI** (OpenCode TUI requires restart for `opencode.json` changes):
