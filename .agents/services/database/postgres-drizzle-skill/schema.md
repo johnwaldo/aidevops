@@ -1,7 +1,5 @@
 # Drizzle Schema Definition
 
-Comprehensive reference for defining PostgreSQL schemas with Drizzle ORM.
-
 ## Imports
 
 ```typescript
@@ -29,9 +27,9 @@ id: integer('id').primaryKey().generatedByDefaultAsIdentity(),  // allows manual
 id: integer('id').primaryKey().generatedAlwaysAsIdentity({ startWith: 1000, increment: 1, cache: 100 }),
 
 // Serial (legacy)
-id: serial('id').primaryKey(),       // 4 bytes, up to 2,147,483,647
-id: bigserial('id').primaryKey(),    // 8 bytes, up to 9,223,372,036,854,775,807
-id: smallserial('id').primaryKey(),  // 2 bytes, up to 32,767
+id: serial('id').primaryKey(),       // 4 bytes
+id: bigserial('id').primaryKey(),    // 8 bytes
+id: smallserial('id').primaryKey(),  // 2 bytes
 ```
 
 ## String Types
@@ -53,8 +51,8 @@ bigNumber: bigint('big_number', { mode: 'number' }),          // JS number
 bigNumberStr: bigint('big_number', { mode: 'bigint' }),       // JS BigInt
 
 // Floating point (approximate)
-score: real('score'),                   // 4 bytes, 6 decimal precision
-amount: doublePrecision('amount'),      // 8 bytes, 15 decimal precision
+score: real('score'),                   // 4 bytes, 6 decimal digits
+amount: doublePrecision('amount'),      // 8 bytes, 15 decimal digits
 
 // Exact numeric (use for money)
 price: numeric('price', { precision: 10, scale: 2 }),
@@ -143,11 +141,6 @@ import { arrayContains, arrayContained, arrayOverlaps } from 'drizzle-orm';
 ## Constraints
 
 ```typescript
-// Not null & default
-email: text('email').notNull(),
-status: text('status').notNull().default('active'),
-createdAt: timestamp('created_at').notNull().defaultNow(),
-
 // Unique (column-level)
 email: text('email').notNull().unique(),
 
@@ -210,8 +203,6 @@ export const orderItems = pgTable('order_items', {
 ## Composite Primary Key
 
 ```typescript
-import { primaryKey } from 'drizzle-orm/pg-core';
-
 export const usersToGroups = pgTable('users_to_groups', {
   userId: uuid('user_id').notNull().references(() => users.id),
   groupId: uuid('group_id').notNull().references(() => groups.id),
