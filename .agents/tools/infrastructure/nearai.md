@@ -107,7 +107,7 @@ Use HuggingFace-style IDs: `deepseek-ai/DeepSeek-V3.1`, `openai/gpt-oss-120b`, `
 
 - **TEE isolation**: Open-source models run inside hardware-enforced Trusted Execution Environments (Intel TDX / AMD SEV-SNP)
 - **Cryptographic attestation**: Every inference generates verifiable proof that code and data were not tampered with
-- **No data access**: Model providers, cloud providers, and NEAR AI cannot access prompts or responses
+- **No data access** (TEE-protected open-source models only): For open-source models running in TEEs, model providers, cloud providers, and NEAR AI cannot access prompts or responses. Closed-model proxy requests (Claude, GPT-5.2, Gemini) are anonymized but still forwarded to the upstream provider — the upstream provider processes the request and the "no data access" guarantee does not apply.
 - **TLS in enclave**: Direct completions endpoints terminate TLS inside the TEE — no intermediate can intercept
 - **E2EE chat**: End-to-end encrypted chat completions available (see [guide](https://docs.near.ai/cloud/guides/e2ee-chat-completions))
 - **Verification**: Clients can verify attestation reports. See [verification docs](https://docs.near.ai/cloud/verification)

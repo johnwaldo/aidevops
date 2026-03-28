@@ -138,9 +138,13 @@ curl https://api.fireworks.ai/inference/v1/chat/completions \
 # Upload from local files
 firectl model create <MODEL_ID> /path/to/files/
 
-# Upload from S3
-firectl model create <MODEL_ID> s3://<BUCKET>/<PATH>/ \
-  --aws-access-key-id <KEY> --aws-secret-access-key <SECRET>
+# Upload from S3 (use env vars or IAM role — never pass credentials as CLI flags)
+# Option A: environment variables (preferred)
+export AWS_ACCESS_KEY_ID="<KEY>"
+export AWS_SECRET_ACCESS_KEY="<SECRET>"
+firectl model create <MODEL_ID> s3://<BUCKET>/<PATH>/
+# Option B: IAM role (recommended for EC2/ECS — no credentials needed)
+# Attach an IAM role with S3 read access to the instance; firectl picks it up automatically
 
 # Upload LoRA adapter
 firectl model create <MODEL_ID> /path/to/adapter/ \
