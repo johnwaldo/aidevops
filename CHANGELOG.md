@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.7] - 2026-03-28
+
+### Fixed
+
+- always clean stale files during agent deployment (#11288)
+
 ## [3.2.0] - 2026-03-28
 
 ### Changed
