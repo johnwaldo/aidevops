@@ -14,7 +14,7 @@ This skill is split into focused sub-documents for progressive loading. Read wha
 | [video-ugc.md](video-ugc.md) | Video ad hooks (first 3 seconds), UGC-style ad creation | 998 |
 | [testing-optimization.md](testing-optimization.md) | Creative testing methodology, scoring rubrics, DCO, A/B testing, performance metrics | 2199 |
 | [psychology-targeting.md](psychology-targeting.md) | Emotional triggers, cognitive biases, audience-message match | 900 |
-| [offers-landing.md](offers-landing.md) | Offer construction, pricing psychology, landing page congruence | 1190 |
+| [offers-landing.md](offers-landing.md) | Offer construction, pricing psychology, landing page congruence | 223 |
 | [campaign-management.md](campaign-management.md) | Creative briefs, competitor analysis, seasonal creative, retargeting, ad fatigue, thumbnails | 2916 |
 | [ai-tools-reference.md](ai-tools-reference.md) | AI creative tools, implementation roadmap, quick-reference appendix | 831 |
 
