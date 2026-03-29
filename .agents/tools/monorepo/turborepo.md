@@ -1,16 +1,7 @@
 ---
 description: Turborepo monorepo build system - workspaces, caching, pipelines
 mode: subagent
-tools:
-  read: true
-  write: true
-  edit: true
-  bash: true
-  glob: true
-  grep: true
-  webfetch: true
-  task: true
-  context7_*: true
+tools: [read, write, edit, bash, glob, grep, webfetch, task, context7_*]
 ---
 
 # Turborepo - Monorepo Build System
@@ -19,56 +10,25 @@ tools:
 
 ## Quick Reference
 
-- **Purpose**: High-performance build system for JavaScript/TypeScript monorepos
+- **Purpose**: High-performance build system for JS/TS monorepos
 - **Package Manager**: pnpm (recommended), npm, yarn
-- **Docs**: Use Context7 MCP for current documentation
-- **Features**: Incremental builds with caching · Parallel task execution · Remote caching (Vercel) · Dependency-aware task ordering
+- **Docs**: Context7 MCP · **Features**: Incremental caching · Parallel execution · Remote caching (Vercel)
 
-**Common Commands**:
+**Commands**: `pnpm dev` (all) · `pnpm --filter web dev` (single) · `pnpm --filter web... build` (+ deps)
 
-```bash
-pnpm dev                              # all packages
-pnpm build                            # all packages
-pnpm --filter web dev                 # single package
-pnpm --filter @workspace/ui build     # by full name
-pnpm --filter web... build            # package + dependencies
-```
+**Structure**: `apps/{web,mobile,extension}` · `packages/{ui,api,db,auth,shared}` · `tooling/{eslint,typescript}`
 
-**Workspace Structure**:
-
-```text
-/
-├── apps/
-│   ├── web/        # Next.js app
-│   ├── mobile/     # React Native app
-│   └── extension/  # Browser extension
-├── packages/
-│   ├── ui/{web,mobile,shared}/
-│   ├── api/  db/  auth/  i18n/  shared/
-└── tooling/
-    ├── eslint/  typescript/  prettier/
-```
-
-**Package Naming**:
-
-| Location | Name Pattern | Import |
-|----------|--------------|--------|
-| `packages/ui/web` | `@workspace/ui-web` | `@workspace/ui-web/button` |
-| `packages/db` | `@workspace/db` | `@workspace/db/schema` |
-| `tooling/eslint` | `@workspace/eslint-config` | `@workspace/eslint-config` |
+**Naming**: `packages/ui/web` → `@workspace/ui-web` → `import from "@workspace/ui-web/button"`
 
 **turbo.json**:
 
 ```json
-{
-  "$schema": "https://turbo.build/schema.json",
+{ "$schema": "https://turbo.build/schema.json",
   "tasks": {
-    "build":     { "dependsOn": ["^build"], "outputs": [".next/**", "dist/**"] },
-    "dev":       { "cache": false, "persistent": true },
-    "lint":      { "dependsOn": ["^build"] },
-    "typecheck": { "dependsOn": ["^build"] }
-  }
-}
+    "build": { "dependsOn": ["^build"], "outputs": [".next/**", "dist/**"] },
+    "dev": { "cache": false, "persistent": true },
+    "lint": { "dependsOn": ["^build"] }, "typecheck": { "dependsOn": ["^build"] }
+  } }
 ```
 
 <!-- AI-CONTEXT-END -->
