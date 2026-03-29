@@ -27,7 +27,7 @@ tools:
 - **Skills**: [Official](https://github.com/tddworks/asc-cli-skills) (27 skills) | [Community](https://github.com/rudrankriyam/app-store-connect-cli-skills) (22 workflow skills)
 - **Requirements**: macOS 13+, App Store Connect API key, `jq` (workflow scripts use `jq -r`)
 
-**Dependency check**: Before any `asc` command: `command -v asc >/dev/null || brew install tddworks/tap/asccli`
+**Dependency check**: Before any `asc` command: `command -v asc >/dev/null || brew install tddworks/tap/asccli && command -v jq >/dev/null || brew install jq`
 
 **Credential security**: `asc auth login` stores the private key PEM in `~/.asc/credentials.json`. Never commit this file. Use `--private-key-path` — never pass key content as an argument.
 
