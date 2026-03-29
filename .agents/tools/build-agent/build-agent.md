@@ -113,7 +113,7 @@ External skills retain `-skill` suffix (provenance marker for `skill-update-help
 - **Files**: lowercase-hyphens. ALLCAPS for entry points only. Python: `snake_case`.
 - **Scripts**: `[domain]-[function]-helper.sh` (agent-callable), `[name].sh` (framework).
 - **Structure** — main: `# Name` → AI-CONTEXT Quick Reference → docs. Subagents: YAML frontmatter + content.
-- **Slash commands**: NEVER inline. Generic → `scripts/commands/`. Domain → `{domain}/{subagent}.md`.
+- **Slash commands**: NEVER inline. Generic → `scripts/commands/{command}.md`. Domain → `{domain}/{subagent}.md`.
 
 ## Model Tier Selection
 
@@ -127,7 +127,7 @@ Record: `/remember "SUCCESS/FAILURE: agent with model — reason"`. Frontmatter:
 
 ## Quality Checking
 
-Linter order: (1) deterministic (ShellCheck, ESLint, Ruff/Pylint), (2) static analysis (SonarCloud, Secretlint), (3) LLM review (CodeRabbit — architectural only). Prefer `bun`/`bunx`. Never send an LLM to do a linter's job.
+Linter order: (1) deterministic (ShellCheck, ESLint, Ruff/Pylint), (2) static analysis (SonarCloud, Secretlint), (3) LLM review (CodeRabbit — architectural only). Prefer `bun`/`bunx` over `npm`/`npx`. Never send an LLM to do a linter's job.
 
 **Sources:** Prefer official docs, RFCs, source code, first-party data. Watch for outdated tutorials, vendor claims, jurisdiction differences, commercial bias.
 
