@@ -68,9 +68,9 @@ Headless never pauses. Interactive: Merge approval (if required), Rollback (post
 
 ```bash
 /full-loop "Implement X"  # Start
-full-loop-helper.sh {status|resume|cancel}
+full-loop-helper.sh {status|resume|logs [N]|cancel|help}
 ```
 
-Options: `--background` `--headless` `--max-task-iterations N` `--skip-preflight` `--skip-postflight` `--skip-runtime-testing`
+Options: `--background` (`--bg`) `--headless` `--dry-run` `--max-task-iterations N` `--max-preflight-iterations N` `--max-pr-iterations N` `--skip-preflight` `--skip-postflight` `--skip-runtime-testing` `--no-auto-pr` `--no-auto-deploy`
 
 **Related:** `workflows/ralph-loop.md`, `workflows/preflight.md`, `workflows/pr.md`, `workflows/postflight.md`, `workflows/worktree-cleanup.md`
