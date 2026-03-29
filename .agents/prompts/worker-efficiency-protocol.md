@@ -3,7 +3,7 @@
 Maximise your output per token. Follow these practices to avoid wasted work:
 
 **1. Decompose with TodoWrite (MANDATORY)**
-At the START of your session, break your task into 3-7 subtasks. Last subtask MUST be: 'Push branch and create PR via gh pr create'. Mark each `in_progress` when started, `completed` when done. ONE `in_progress` at a time.
+At the START of your session, break your task into 3-7 subtasks. Last subtask MUST be: 'Push branch and create or update PR (`gh pr create` or `gh pr ready` if draft exists)'. Mark each `in_progress` when started, `completed` when done. ONE `in_progress` at a time.
 
 **2. Commit early, commit often (CRITICAL - prevents lost work)**
 After EACH implementation subtask, immediately commit. Uncommitted work is LOST if your session ends.
@@ -12,21 +12,24 @@ After EACH implementation subtask, immediately commit. Uncommitted work is LOST 
 git add -A && git commit -m 'feat: <what you just did> (<task-id>)'
 ```
 
-After your FIRST commit, push and create a draft PR:
+After your FIRST commit, push and optionally create a draft PR (skip if you prefer to create the final PR at the end):
 
 ```bash
 git push -u origin HEAD
-gh_issue=$(grep -E '^\s*- \[.\] <task-id> ' TODO.md 2>/dev/null | grep -oE 'ref:GH#[0-9]+' | head -1 | sed 's/ref:GH#//' || true)
-pr_body='WIP - incremental commits'
-[[ -n "$gh_issue" ]] && pr_body="${pr_body}
+# Optional: create draft PR now so work is visible; run gh pr ready when done
+if ! gh pr view --json state -q .state >/dev/null 2>&1; then
+  gh_issue=$(grep -E '^\s*- \[.\] <task-id> ' TODO.md 2>/dev/null | grep -oE 'ref:GH#[0-9]+' | head -1 | sed 's/ref:GH#//' || true)
+  pr_body='WIP - incremental commits'
+  [[ -n "$gh_issue" ]] && pr_body="${pr_body}
 
 Ref #${gh_issue}"
-SIG_FOOTER=$(~/.aidevops/agents/scripts/gh-signature-helper.sh footer --model "$ANTHROPIC_MODEL" 2>/dev/null || echo "")
-pr_body="${pr_body}${SIG_FOOTER}"
-gh pr create --draft --title '<task-id>: <description>' --body "$pr_body"
+  SIG_FOOTER=$(~/.aidevops/agents/scripts/gh-signature-helper.sh footer --model "$ANTHROPIC_MODEL" 2>/dev/null || echo "")
+  pr_body="${pr_body}${SIG_FOOTER}"
+  gh pr create --draft --title '<task-id>: <description>' --body "$pr_body"
+fi
 ```
 
-Subsequent commits just need `git push`. When done: `gh pr ready`.
+Subsequent commits just need `git push`. When done: `gh pr ready` (if draft) or `gh pr create` (if no PR yet).
 
 **3. ShellCheck gate before push (MANDATORY for .sh files - t234)**
 
@@ -34,7 +37,7 @@ Subsequent commits just need `git push`. When done: `gh pr ready`.
 if command -v shellcheck >/dev/null 2>&1; then
   sc_failed=0
   while IFS= read -r file; do
-    shellcheck -x -S warning "$file" || sc_failed=$((sc_failed + 1))
+    shellcheck -x -S warning -- "$file" || sc_failed=$((sc_failed + 1))
   done < <(git diff --name-only origin/HEAD..HEAD 2>/dev/null | grep '\.sh$')
   [[ "$sc_failed" -gt 0 ]] && echo "ShellCheck: $sc_failed file(s) with violations" && exit 1
 else
