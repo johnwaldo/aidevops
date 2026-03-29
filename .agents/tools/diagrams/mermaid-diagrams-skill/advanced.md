@@ -5,26 +5,13 @@ Configuration, theming, custom styling, troubleshooting, and export for Mermaid 
 ## Init Directive
 
 ```mermaid
-%%{init: { 'theme': 'dark' } }%%
-flowchart LR
-    A --> B
-```
-
-Multi-line with theme variables:
-
-```mermaid
 %%{init: {
   'theme': 'base',
   'themeVariables': {
-    'primaryColor': '#3b82f6',
-    'primaryTextColor': '#ffffff',
-    'primaryBorderColor': '#2563eb',
-    'secondaryColor': '#10b981',
-    'tertiaryColor': '#f1f5f9',
-    'lineColor': '#64748b',
-    'textColor': '#1e293b',
-    'fontSize': '16px',
-    'fontFamily': 'Inter, sans-serif'
+    'primaryColor': '#3b82f6', 'primaryTextColor': '#ffffff',
+    'primaryBorderColor': '#2563eb', 'secondaryColor': '#10b981',
+    'lineColor': '#64748b', 'textColor': '#1e293b',
+    'fontSize': '16px', 'fontFamily': 'Inter, sans-serif'
   }
 }}%%
 flowchart LR
@@ -33,7 +20,7 @@ flowchart LR
     B -->|No| D[Failure]
 ```
 
-## Frontmatter (alternative to init)
+Frontmatter alternative:
 
 ```yaml
 ---
@@ -47,40 +34,24 @@ config:
 
 ## Theme Variables
 
-Themes: `default`, `dark`, `forest`, `neutral`, `base` — see cheatsheet `## Styling`.
+Themes: `default`, `dark`, `forest`, `neutral`, `base`
 
-**Core variables:**
+**Core:** `primaryColor`, `primaryTextColor`, `primaryBorderColor`, `secondaryColor`, `tertiaryColor`, `lineColor`, `textColor`, `background`, `fontSize`, `fontFamily`
 
-| Variable | Description |
-|----------|-------------|
-| `primaryColor` | Main node color |
-| `primaryTextColor` | Text in primary nodes |
-| `primaryBorderColor` | Primary node border |
-| `secondaryColor` | Secondary elements |
-| `tertiaryColor` | Tertiary/background |
-| `lineColor` | Edge/arrow color |
-| `textColor` | General text |
-| `background` | Diagram background |
-| `fontSize` | Base font size |
-| `fontFamily` | Font family |
-
-**Diagram-specific variables:**
-
+**Diagram-specific:**
 - **Flowchart:** `nodeBorder`, `nodeTextColor`, `clusterBkg`, `clusterBorder`, `edgeLabelBackground`
-- **Sequence:** `actorBorder`, `actorBkg`, `actorTextColor`, `activationBorderColor`, `activationBkgColor`, `signalColor`, `signalTextColor`, `noteBkgColor`, `noteBorderColor`, `noteTextColor`
+- **Sequence:** `actorBorder`, `actorBkg`, `actorTextColor`, `activationBorderColor`, `signalColor`, `noteBkgColor`, `noteTextColor`
 - **State:** `labelColor`, `altBackground`
-- **Gantt:** `gridColor`, `todayLineColor`, `taskTextColor`, `doneTaskBkgColor`, `activeTaskBkgColor`, `critBkgColor`, `taskBorderColor`
+- **Gantt:** `gridColor`, `todayLineColor`, `taskTextColor`, `doneTaskBkgColor`, `critBkgColor`
 
 ## Class-Based Styling
 
 ```mermaid
 flowchart LR
     A[Start]:::success --> B[Process]:::info --> C[End]:::warning
-    class A,D success
-    class B,C info
 
     classDef success fill:#10b981,stroke:#059669,color:white
-    classDef info fill:#3b82f6,stroke:#2563eb,color:white
+    classDef info    fill:#3b82f6,stroke:#2563eb,color:white
     classDef warning fill:#f59e0b,stroke:#d97706,color:white
     classDef default fill:#f8fafc,stroke:#cbd5e1
 ```
@@ -106,21 +77,12 @@ Properties: `fill`, `stroke`, `stroke-width`, `stroke-dasharray`, `color`, `font
 
 **ELK Renderer (v9.4+):** Better complex layouts, predictable edge routing, improved subgraph positioning.
 
-```mermaid
-%%{init: {"flowchart": {"defaultRenderer": "elk"}} }%%
-flowchart TB
-    A --> B & C & D
-    B & C & D --> E
-```
-
-**Common init options:**
-
 ```javascript
 %%{init: {
   'theme': 'default',
   'flowchart': { 'defaultRenderer': 'elk', 'curve': 'basis', 'padding': 15 },
-  'sequence': { 'showSequenceNumbers': true, 'actorMargin': 50, 'boxMargin': 10 },
-  'gantt': { 'barHeight': 20, 'fontSize': 11, 'sectionFontSize': 14 }
+  'sequence': { 'showSequenceNumbers': true, 'actorMargin': 50 },
+  'gantt':    { 'barHeight': 20, 'fontSize': 11, 'sectionFontSize': 14 }
 }}%%
 ```
 
@@ -135,16 +97,11 @@ Directive keys: `flowchart`, `sequenceDiagram`, `classDiagram`, `stateDiagram`, 
 | `antiscript` | Allows HTML, blocks scripts |
 | `sandbox` | iframe sandbox |
 
-```mermaid
-%%{init: { 'securityLevel': 'loose' }}%%
-flowchart LR
-    A --> B
-    click A href "https://example.com" _blank
-```
+Use `%%{init: { 'securityLevel': 'loose' }}%%` to enable `click A href "..." _blank`.
 
 ## Troubleshooting
 
-**Special characters** — escape with HTML entities or use quoted strings (see cheatsheet `## Special Characters`):
+**Special characters** — escape with HTML entities or quoted strings:
 
 ```mermaid
 flowchart LR
@@ -153,7 +110,7 @@ flowchart LR
     C["Hash #35; symbol"]
 ```
 
-**Long labels:**
+**Long labels** — use backtick multiline strings:
 
 ```mermaid
 flowchart LR
@@ -171,13 +128,13 @@ flowchart LR
 | Class | `-->` | N/A | `..>` |
 | State | `-->` | N/A | N/A |
 
-**Debugging:** Verify diagram type declaration; check unclosed brackets/quotes; match arrow syntax to type. Start minimal, add elements one at a time to isolate breaking change. Live editor: https://mermaid.live — export PNG/SVG for guaranteed rendering across platforms.
+**Debugging:** Verify diagram type declaration; check unclosed brackets/quotes; match arrow syntax to type. Start minimal, add elements one at a time. Live editor: https://mermaid.live
 
 ## Accessibility & Performance
 
-**Accessibility:** Provide context text before diagrams for screen readers. HTML: `<div class="mermaid" role="img" aria-label="...">`.
+**Accessibility:** Provide context text before diagrams. HTML: `<div class="mermaid" role="img" aria-label="...">`.
 
-**Performance:** Split large diagrams. Use ELK for complex layouts. Prefer class-based styling over inline. Cache renders; lazy load in documentation.
+**Performance:** Split large diagrams. Use ELK for complex layouts. Prefer class-based over inline styling. Cache renders; lazy load in docs.
 
 ## Export
 
