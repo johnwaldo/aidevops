@@ -158,6 +158,7 @@ A -->|text| B # Labeled
 | [mermaid-diagrams-skill/state-journey.md](mermaid-diagrams-skill/state-journey.md) | States, user journeys |
 | [mermaid-diagrams-skill/data-charts.md](mermaid-diagrams-skill/data-charts.md) | Gantt, Pie, Timeline, Quadrant |
 | [mermaid-diagrams-skill/architecture.md](mermaid-diagrams-skill/architecture.md) | Architecture, Block, C4, Kanban, Packet, Requirement |
+| [mermaid-diagrams-skill/advanced.md](mermaid-diagrams-skill/advanced.md) | Theming, configuration, styling, troubleshooting |
 | [mermaid-diagrams-skill/cheatsheet.md](mermaid-diagrams-skill/cheatsheet.md) | All syntax quick reference |
 
 ## Resources
