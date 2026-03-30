@@ -19,22 +19,14 @@ model: sonnet
 
 ## Quick Reference
 
-- **Purpose**: Evaluate AI model responses against structured scoring criteria
+- **Purpose**: Evaluate actual AI responses (distinct from `compare-models` which compares specs)
 - **Command**: `/score-responses` (interactive evaluation)
 - **Helper**: `response-scoring-helper.sh [init|prompt|record|score|compare|leaderboard|export|history|criteria]`
 - **Criteria**: Correctness (30%), Completeness (25%), Code Quality (25%), Clarity (20%)
 - **Storage**: SQLite at `~/.aidevops/.agent-workspace/response-scoring.db`
+- **Use when**: selecting models by task type, comparing prompt engineering changes, building reproducible benchmarks
 
 <!-- AI-CONTEXT-END -->
-
-## When to Use
-
-- Evaluating which model performs best for a specific task type
-- Building evidence-based model selection for your workflow
-- Comparing model outputs before/after prompt engineering changes
-- Creating reproducible benchmarks for your use cases
-
-Distinct from `compare-models` (model specs) — this evaluates **actual responses**.
 
 ## Scoring Criteria (1–5 scale, weighted average)
 
