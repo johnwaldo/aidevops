@@ -117,8 +117,8 @@ for name, server in mcp_section.items():
     if not enabled:
         continue
     server_type = server.get('type', 'stdio')
-    # 'remote' and 'sse' are network-based MCPs — skip connectivity check
-    if server_type in ('remote', 'sse'):
+    # 'remote', 'sse', and 'streamable-http' are network-based MCPs — skip connectivity check
+    if server_type in ('remote', 'sse', 'streamable-http'):
         print(f"{name}\tremote\t")
         continue
     cmd = server.get('command', [])
@@ -225,20 +225,24 @@ _collect_all_configs() {
 	return 0
 }
 
+# Global array populated by _scan_config_file — reset by caller before each call.
+# Using a global avoids eval and is Bash 3.2 compatible.
+_SCAN_ERRORED=()
+
 # Scan a single config file and report MCP server health.
 # Arguments:
 #   $1 - config file path
-#   $2 - name of array variable to append errored server names to (passed by name)
 # Outputs results to stdout. Increments global ok_count/error_count/skip_count.
-# Parse failures are non-fatal: logs an error and returns 0 so the caller continues.
+# Appends errored server names to global _SCAN_ERRORED array.
+# Parse failures set global _SCAN_PARSE_FAILED=1 and return 1.
 _scan_config_file() {
 	local config_file="$1"
-	local errored_var="$2"
 
 	local server_list
 	if ! server_list=$(_extract_server_list "$config_file" 2>/dev/null); then
-		echo -e "  ${RED}✗ Failed to parse config file — skipping${NC}"
-		return 0
+		echo -e "  ${RED}✗ Failed to parse config file${NC}"
+		_SCAN_PARSE_FAILED=1
+		return 1
 	fi
 
 	if [[ -z "$server_list" ]]; then
@@ -271,8 +275,7 @@ _scan_config_file() {
 			((++ok_count))
 		else
 			echo -e "  ${RED}[error]${NC}  $name — command not found: ${cmd_path:-<none>}"
-			# Append to the caller-provided array variable by name
-			eval "${errored_var}+=(\"$name\")"
+			_SCAN_ERRORED+=("$name")
 			((++error_count))
 		fi
 	done <<<"$server_list"
@@ -304,23 +307,24 @@ _check_all_mcps() {
 	local error_count=0
 	local skip_count=0
 	local any_errors=false
+	_SCAN_PARSE_FAILED=0
 
 	local config_file
 	for config_file in "${all_configs[@]}"; do
 		echo "Config: $config_file"
-		# Per-config errored names array — remediation points to the correct config
-		local _cfg_errored=()
-		_scan_config_file "$config_file" "_cfg_errored"
+		# Reset per-config errored list — remediation points to the correct config
+		_SCAN_ERRORED=()
+		_scan_config_file "$config_file" || true
 		echo ""
-		if [[ ${#_cfg_errored[@]} -gt 0 ]]; then
-			_print_remediation "$config_file" "${_cfg_errored[@]}"
+		if [[ ${#_SCAN_ERRORED[@]} -gt 0 ]]; then
+			_print_remediation "$config_file" "${_SCAN_ERRORED[@]}"
 			any_errors=true
 		fi
 	done
 
 	echo "Summary: ${ok_count} ok, ${error_count} errored, ${skip_count} skipped (remote)"
 
-	if [[ "$any_errors" == "true" ]]; then
+	if [[ "$any_errors" == "true" || "${_SCAN_PARSE_FAILED:-0}" -ne 0 ]]; then
 		return 1
 	fi
 
@@ -355,18 +359,29 @@ try:
         cfg = json.load(f)
     mcp_section = cfg.get('mcp', cfg.get('mcpServers', {}))
     entry = mcp_section.get(mcp_name, {})
-    print(entry.get('type', ''))
+    # Only return type for enabled entries — disabled entries should not
+    # override enabled entries in other configs
+    if entry and entry.get('enabled', True):
+        print(entry.get('type', ''))
+    else:
+        print('')
 except Exception:
     print('')
 PYEOF
 }
 
 # Check all config files for this MCP's type.
-# Prefer 'remote' or 'sse' if found in any config (an enabled remote entry
-# takes precedence over a disabled local entry in another config).
+# Prefer network types ('remote', 'sse', 'streamable-http') if found in any
+# enabled config entry — takes precedence over disabled local entries.
+_is_network_type() {
+	local t="$1"
+	[[ "$t" == "remote" || "$t" == "sse" || "$t" == "streamable-http" ]]
+	return $?
+}
+
 while IFS= read -r _diag_cfg; do
 	_mcp_type=$(_detect_mcp_type "$MCP_NAME" "$_diag_cfg" 2>/dev/null)
-	if [[ "$_mcp_type" == "remote" || "$_mcp_type" == "sse" ]]; then
+	if _is_network_type "$_mcp_type"; then
 		MCP_CONFIGURED_TYPE="$_mcp_type"
 		break
 	elif [[ -n "$_mcp_type" && -z "$MCP_CONFIGURED_TYPE" ]]; then
@@ -374,7 +389,7 @@ while IFS= read -r _diag_cfg; do
 	fi
 done < <(_collect_all_configs)
 
-if [[ "$MCP_CONFIGURED_TYPE" == "remote" || "$MCP_CONFIGURED_TYPE" == "sse" ]]; then
+if _is_network_type "$MCP_CONFIGURED_TYPE"; then
 	MCP_IS_REMOTE=true
 fi
 
