@@ -119,7 +119,7 @@ Before generating strategy or campaigns, validate:
 
 **Lead magnet**: Create → landing page + form → `fluentcrm_create_list` → delivery automation → nurture. Forms: Fluent Forms, WPForms, Gravity Forms, Contact Form 7, custom API.
 
-**Lead handoff**: Tag `lead-mql` → automation notifies sales → sales accepts → tag `lead-sql` → remove from marketing.
+**Lead handoff**: Apply `lead-mql` tag → automation notifies sales → sales reviews/accepts (qualification checkpoint) → apply `lead-sql` tag → remove from marketing sequences.
 
 ## Analytics & Testing
 
