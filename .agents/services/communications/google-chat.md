@@ -90,7 +90,8 @@ Threading: `message.thread.name`. **Sync (< 30s)**: return `{ "text": "..." }`. 
 
 ```bash
 google-chat-helper.sh map 'spaces/AAAA1234' code-reviewer   # space→runner
-google-chat-helper.sh mappings | unmap 'spaces/AAAA1234'
+google-chat-helper.sh mappings                               # list mappings
+google-chat-helper.sh unmap 'spaces/AAAA1234'
 google-chat-helper.sh start [--daemon]                       # foreground or background
 google-chat-helper.sh stop && google-chat-helper.sh status
 google-chat-helper.sh logs [--follow] [--tail 200]
