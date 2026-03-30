@@ -14,7 +14,7 @@ openai==2.8.0
 litellm==1.79.3
 pandas==2.3.3
 numpy==2.0.2
-requests==2.32.5
+requests==2.33.0
 
 # Data processing and storage
 datasets==4.4.1
