@@ -1,8 +1,6 @@
 # Chapter 2: CRO Fundamentals and Core Concepts
 
-### Understanding Your Baseline
-
-#### Calculating Conversion Rates
+### Calculating Conversion Rates
 
 **Standard** (actions that can repeat per visitor):
 
@@ -16,7 +14,7 @@ Conversion Rate = (Total Conversions / Total Sessions) × 100
 Conversion Rate = (Total Conversions / Total Unique Visitors) × 100
 ```
 
-#### Segmenting Conversion Rates
+### Segmenting Conversion Rates
 
 Overall rates mask important variations. Always segment by:
 
@@ -26,7 +24,7 @@ Overall rates mask important variations. Always segment by:
 - **Behavior**: new vs. returning, pages viewed, engaged vs. bounced
 - **Product/service**: category, price point, tier
 
-#### Benchmark Data
+### Benchmark Data
 
 | Segment | Range |
 |---------|-------|
@@ -38,11 +36,11 @@ Overall rates mask important variations. Always segment by:
 | Content download | 2–7% |
 | Mobile vs. desktop | 40–70% of desktop |
 
-Benchmarks are reference points only. Your own trend matters more.
+Benchmarks are reference points. Your own trend matters more.
 
 ---
 
-### The Psychology of Conversion
+### Psychology of Conversion
 
 #### Cognitive Biases
 
@@ -75,7 +73,7 @@ Emotions drive the desire to convert; rational elements provide justification. A
 
 ---
 
-### The Conversion Funnel
+### Conversion Funnel
 
 #### Standard E-Commerce Funnel
 
@@ -88,7 +86,7 @@ Emotions drive the desire to convert; rational elements provide justification. A
 | Checkout | 2–8% |
 | Purchase Confirmation | 1.5–6% |
 
-At each drop-off point, ask: Why are users leaving? What friction exists? What information is missing?
+At each drop-off point: why are users leaving, what friction exists, what information is missing?
 
 **Funnel analysis tools**: Google Analytics Goals, Mixpanel, Amplitude, Heap, FullStory.
 
@@ -102,7 +100,7 @@ Optimizing micro conversions doesn't always improve macro conversions — easier
 
 ---
 
-### Attribution and Multi-Touch Paths
+### Attribution Models
 
 | Model | Credit Distribution | Limitation |
 |-------|--------------------|-----------| 
@@ -129,7 +127,7 @@ Relative importance varies by industry and audience — test to determine what m
 
 ---
 
-### The Cost of Conversion Friction
+### Conversion Friction
 
 Friction is anything that prevents, slows, or irritates users on the path to conversion.
 
@@ -150,7 +148,7 @@ Users tolerate more friction for higher-value offerings. Implications:
 
 ---
 
-### The Data Foundation
+### Data Foundation
 
 #### Quantitative Sources
 
@@ -177,5 +175,3 @@ Users tolerate more friction for higher-value offerings. Implications:
 - **Qualitative** tells you *why* (users are concerned about security; mobile form fields are hard to use)
 
 Combine both to form targeted hypotheses before running tests.
-
----
