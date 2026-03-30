@@ -89,7 +89,7 @@ pulumi import cloudflare:index/workersKvNamespace:WorkersKvNamespace my-kv <name
 pulumi import cloudflare:index/r2Bucket:R2Bucket my-bucket <account_id>/<bucket_name>
 ```
 
-**From Terraform/Wrangler:** Use `pulumi import` and rewrite configs in Pulumi DSL. For wrangler.toml: create matching Pulumi resources, import, verify with `pulumi preview`, then switch deployments.
+**From Terraform/Wrangler:** Use `pulumi import`, rewrite configs in Pulumi DSL, verify with `pulumi preview`, then switch deployments.
 
 ## CI/CD
 
