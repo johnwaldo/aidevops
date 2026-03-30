@@ -59,8 +59,6 @@
 1. **Functions take precedence**: Redirects don't apply to Function routes
 2. **Syntax**: Check `_redirects` file format
 3. **Limits**: Max 2,100 redirects (2,000 static + 100 dynamic)
-4. **Query strings**: Preserved automatically
-5. **Testing**: Preview deployments to test before production
 
 ## TypeScript Errors
 
@@ -81,8 +79,6 @@
 
 1. **Different bindings**: Set separately in Dashboard
 2. **Different env vars**: Configure per environment
-3. **Branch deploys**: Every branch gets preview deployment
-4. **URLs**: `https://branch.project.pages.dev` vs `https://project.pages.dev`
 
 ## Performance Issues
 
@@ -124,8 +120,6 @@ console.log('Params:', params);
 console.log('Data:', data);
 ```
 
-**View logs**:
-
 ```bash
 npx wrangler pages deployment tail --project-name=my-project
 ```
@@ -157,9 +151,3 @@ npx wrangler pages deployment tail --project-name=my-project
 
 [Full limits](https://developers.cloudflare.com/pages/platform/limits/)
 
-## Getting Help
-
-1. Check [Pages Docs](https://developers.cloudflare.com/pages/)
-2. Search [Discord #functions](https://discord.com/channels/595317990191398933/910978223968518144)
-3. Review [Workers Examples](https://developers.cloudflare.com/workers/examples/)
-4. Check framework-specific docs/adapters
