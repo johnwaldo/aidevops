@@ -28,7 +28,7 @@ tenacity==9.1.2
 # Utilities
 rich==14.2.0
 tqdm==4.67.1
-python-dotenv==1.2.1
+python-dotenv==1.2.2
 pydantic==2.12.4
 
 # Optional: Browser automation (for Agno integration)
