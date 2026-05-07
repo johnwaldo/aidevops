@@ -13,9 +13,10 @@ tools:
   task: true
 ---
 
-# Open Tech Explorer - Tech Stack Discovery Provider
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
-<!-- AI-CONTEXT-START -->
+# Open Tech Explorer - Tech Stack Discovery Provider
 
 ## Quick Reference
 
@@ -23,25 +24,24 @@ tools:
 - **Helper**: `~/.aidevops/agents/scripts/tech-stack-helper.sh openexplorer <url>`
 - **Source**: [github.com/turazashvili/openexplorer.tech](https://github.com/turazashvili/openexplorer.tech)
 - **Cost**: Free, open-source, community-driven
-- **API Auth**: Supabase anon key (embedded in web app, or use Playwright for web UI)
+- **API Auth**: Supabase anon key embedded in web app JS bundle; use Playwright for UI fallback
 - **Rate Limits**: None documented
 
-**Quick Commands**:
-
 ```bash
-tech-stack-helper.sh openexplorer search github.com          # Search by URL
-tech-stack-helper.sh openexplorer tech React                 # Search by technology
+tech-stack-helper.sh openexplorer search github.com            # Search by URL
+tech-stack-helper.sh openexplorer tech React                   # Search by technology
 tech-stack-helper.sh openexplorer category "Frontend Framework"
 tech-stack-helper.sh openexplorer analyse https://example.com  # Playwright (real-time)
-tech-stack-helper.sh providers                               # List all providers
-tech-stack-helper.sh compare https://example.com             # Compare providers
+tech-stack-helper.sh providers                                 # List all providers
+tech-stack-helper.sh compare https://example.com               # Compare providers
 ```
 
-<!-- AI-CONTEXT-END -->
+**Use**: free lookups, metadata/performance/security signals, cross-checking, no API key needed.
+**Avoid**: broad coverage beyond ~7k indexed sites, version detection, historical tracking, enterprise scale.
 
 ## API Integration
 
-**Endpoint**: `{SUPABASE_URL}/functions/v1/search` (Supabase Edge Function; anon key embedded in web app JS bundle)
+**Endpoint**: `{SUPABASE_URL}/functions/v1/search` (Supabase Edge Function)
 
 | Param | Type | Description |
 |-------|------|-------------|
@@ -54,23 +54,9 @@ tech-stack-helper.sh compare https://example.com             # Compare providers
 | `limit` | int | Results per page (default: 20) |
 | `responsive` / `https` / `spa` / `service_worker` | bool | Metadata filters |
 
-**Response**: `results[].technologies[{name, category}]`, `results[].metadata{is_responsive, is_https, likely_spa, has_service_worker, page_load_time}`, `pagination{page, limit, total, totalPages}`.
+**Response**: `results[].technologies[{name, category}]`, `results[].metadata{is_responsive, is_https, likely_spa, has_service_worker, page_load_time}`, `pagination{page, limit, total, totalPages}`
 
-**Playwright fallback**: When API is unavailable or URL not yet indexed — navigate to `https://openexplorer.tech`, enter URL, wait for React SPA to render, parse results table. Helper implements both with automatic fallback.
-
-## Category Normalisation
-
-| OpenExplorer | Common Schema |
-|-------------|---------------|
-| Frontend Framework | `frontend-framework` |
-| Backend | `backend-framework` |
-| Analytics | `analytics` |
-| CMS | `cms` |
-| CDN | `cdn` |
-| Payment | `payment` |
-| Performance | `performance` |
-| Security | `security` |
-| Other | `other` |
+**Fallback**: URL not indexed → open `https://openexplorer.tech`, submit URL, wait for React SPA to render, parse results table. Helper tries API first, then Playwright.
 
 ## Provider Comparison
 
@@ -86,9 +72,19 @@ tech-stack-helper.sh compare https://example.com             # Compare providers
 | Metadata (perf/security) | Yes | Limited | Limited | No |
 | Real-time updates | Yes | No | No | No |
 
-**Use when**: Free lookups, metadata/perf/security signal analysis, complementary cross-reference, no API keys available.
+## Category Normalisation
 
-**Avoid when**: Comprehensive audits (dataset too small ~7k sites), version-specific analysis, historical tracking, enterprise-scale research.
+| OpenExplorer | Common Schema |
+|-------------|---------------|
+| Frontend Framework | `frontend-framework` |
+| Backend | `backend-framework` |
+| Analytics | `analytics` |
+| CMS | `cms` |
+| CDN | `cdn` |
+| Payment | `payment` |
+| Performance | `performance` |
+| Security | `security` |
+| Other | `other` |
 
 ## Troubleshooting
 
@@ -98,9 +94,3 @@ tech-stack-helper.sh compare https://example.com             # Compare providers
 | No results for URL | URL not in database; try Playwright analysis |
 | Stale data | Check `lastScraped` timestamp; depends on community visits |
 | Slow response | Supabase Edge Functions have cold start; retry after 2-3 seconds |
-
-## References
-
-- Website: [openexplorer.tech](https://openexplorer.tech)
-- GitHub: [turazashvili/openexplorer.tech](https://github.com/turazashvili/openexplorer.tech)
-- Chrome Extension: [openexplorer.tech/extension](https://openexplorer.tech/extension)

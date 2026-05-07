@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 set -euo pipefail
 
@@ -69,11 +71,32 @@ set_ps_fixture() {
 }
 
 ps() {
+	# t2190: record the exact flags used so tests can assert that
+	# worker-detection paths always call ps with unlimited width (`ww`).
+	# Must write to a file, not a variable — `ps` is typically invoked in
+	# a pipe (e.g. `ps axwwo ... | awk ...`), which runs in a subshell
+	# whose variable mutations never propagate back to the parent.
+	if [[ -n "${PS_INVOCATION_LOG_FILE:-}" ]]; then
+		printf '%s\n' "${1:-}" >>"$PS_INVOCATION_LOG_FILE" 2>/dev/null || true
+	fi
+
+	# t2190: canonical path — ps axwwo (unlimited width; works on BSD and procps).
+	if [[ "${1:-}" == "axwwo" && "${2:-}" == "pid,stat,etime,command" ]]; then
+		cat "$PS_FIXTURE_FILE"
+		return 0
+	fi
+	if [[ "${1:-}" == "axwwo" && "${2:-}" == "pid,etime,command" ]]; then
+		cat "$PS_FIXTURE_FILE"
+		return 0
+	fi
+	# Backward compat: pre-t2190 callers used `axo` — intercept so the test
+	# still feeds the fixture (but a new t2190 regression test asserts zero
+	# bare-`axo` calls; leaving this here only prevents a collateral test
+	# breakage if a call site is missed during conversion).
 	if [[ "${1:-}" == "axo" && "${2:-}" == "pid,stat,etime,command" ]]; then
 		cat "$PS_FIXTURE_FILE"
 		return 0
 	fi
-	# Backward compat: also intercept old format for any tests not yet updated
 	if [[ "${1:-}" == "axo" && "${2:-}" == "pid,etime,command" ]]; then
 		cat "$PS_FIXTURE_FILE"
 		return 0
@@ -315,6 +338,56 @@ test_counts_standalone_opencode_binary_workers() {
 	return 0
 }
 
+test_counts_headless_runtime_helper_wrapper_without_child_process() {
+	# GH#14944: The live worker may be visible only as the outer
+	# headless-runtime-helper.sh wrapper before/without an opencode child in ps.
+	set_ps_fixture "650 S 00:18 bash /Users/test/.aidevops/agents/scripts/headless-runtime-helper.sh run --role worker --session-key issue-14944 --dir /tmp/aidevops --title Issue #14944 --prompt-file /tmp/pulse-14944.prompt"
+
+	local count output
+	count=$(count_active_workers)
+	if [[ "$count" != "1" ]]; then
+		print_result "count_active_workers counts wrapper-only headless-runtime-helper worker (GH#14944)" 1 "Expected 1, got ${count}"
+		return 0
+	fi
+
+	output=$(list_active_worker_processes)
+	if ! echo "$output" | grep -q "^650 "; then
+		print_result "count_active_workers counts wrapper-only headless-runtime-helper worker (GH#14944)" 1 "Expected wrapper PID 650 in output"
+		return 0
+	fi
+
+	print_result "count_active_workers counts wrapper-only headless-runtime-helper worker (GH#14944)" 0
+	return 0
+}
+
+test_deduplicates_headless_runtime_helper_wrapper_with_child_processes() {
+	# GH#14944: Wrapper + sandbox + opencode child chain should count as one
+	# logical worker, keeping the outer headless-runtime-helper wrapper PID.
+	set_ps_fixture "660 S 00:20 bash /Users/test/.aidevops/agents/scripts/headless-runtime-helper.sh run --role worker --session-key issue-14944 --dir /tmp/aidevops --title Issue #14944 --prompt-file /tmp/pulse-14944.prompt
+661 S 00:19 bash /Users/test/.aidevops/agents/scripts/sandbox-exec-helper.sh run --timeout 3600 --allow-secret-io -- /opt/homebrew/bin/opencode run \"/full-loop Implement issue #14944\" --dir /tmp/aidevops --session-key issue-14944 --title Issue #14944
+662 S 00:19 /opt/homebrew/lib/node_modules/opencode-ai/bin/.opencode run \"/full-loop Implement issue #14944\" --dir /tmp/aidevops --session-key issue-14944 --title Issue #14944"
+
+	local count output
+	count=$(count_active_workers)
+	if [[ "$count" != "1" ]]; then
+		print_result "count_active_workers deduplicates headless-runtime-helper wrapper with children (GH#14944)" 1 "Expected 1, got ${count}"
+		return 0
+	fi
+
+	output=$(list_active_worker_processes)
+	if ! echo "$output" | grep -q "^660 "; then
+		print_result "count_active_workers deduplicates headless-runtime-helper wrapper with children (GH#14944)" 1 "Expected wrapper PID 660 in output"
+		return 0
+	fi
+	if echo "$output" | grep -q "^661 \|^662 "; then
+		print_result "count_active_workers deduplicates headless-runtime-helper wrapper with children (GH#14944)" 1 "Expected child PIDs 661/662 to be deduplicated away"
+		return 0
+	fi
+
+	print_result "count_active_workers deduplicates headless-runtime-helper wrapper with children (GH#14944)" 0
+	return 0
+}
+
 test_deduplicates_chain_but_keeps_standalone_opencode_binary() {
 	# GH#12361: Mix of sandbox-launched chain and standalone /bin/.opencode worker.
 	# The chain (issue #5001) should deduplicate to 1; the standalone (issue #12361)
@@ -390,6 +463,25 @@ test_review_issue_pr_session_key_fallback_dedup() {
 	return 0
 }
 
+test_worker_title_prefixes_issue_number() {
+	local title
+	title=$(_dlw_build_worker_title "21994" "t3237: standardize session title guidance" "Issue #21994")
+
+	if [[ "$title" != "Issue #21994: t3237: standardize session title guidance" ]]; then
+		print_result "worker session title prefixes issue number" 1 "Expected issue-prefixed title, got '${title}'"
+		return 0
+	fi
+
+	title=$(_dlw_build_worker_title "21994" "Issue #21994: existing prefix" "fallback")
+	if [[ "$title" != "Issue #21994: existing prefix" ]]; then
+		print_result "worker session title prefixes issue number" 1 "Expected existing prefix to be preserved, got '${title}'"
+		return 0
+	fi
+
+	print_result "worker session title prefixes issue number" 0
+	return 0
+}
+
 test_check_dispatch_dedup_treats_merged_pr_as_duplicate() {
 	local original_script_dir="$SCRIPT_DIR"
 	SCRIPT_DIR="$TEST_ROOT"
@@ -428,6 +520,38 @@ test_dispatch_with_dedup_blocks_when_duplicate() {
 	fi
 
 	print_result "dispatch_with_dedup blocks when dedup detects duplicate (GH#12436)" 1 \
+		"Expected exit 1 (blocked), got ${dispatch_rc}"
+	return 0
+}
+
+test_dispatch_with_dedup_fails_closed_when_issue_metadata_missing() {
+	local original_script_dir="$SCRIPT_DIR"
+	SCRIPT_DIR="$TEST_ROOT"
+
+	set_ps_fixture ""
+
+	# Stub gh issue view to fail so metadata cannot be loaded.
+	gh() {
+		if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
+			return 1
+		fi
+		return 0
+	}
+	export -f gh
+
+	local dispatch_rc=0
+	dispatch_with_dedup "7777" "marcusquinn/aidevops" "Issue #7777: fail-closed" "t7777: fail-closed" \
+		"testuser" "/tmp/aidevops" "/full-loop test" || dispatch_rc=$?
+
+	SCRIPT_DIR="$original_script_dir"
+	unset -f gh
+
+	if [[ "$dispatch_rc" -eq 1 ]]; then
+		print_result "dispatch_with_dedup fails closed when issue metadata lookup fails (GH#14409)" 0
+		return 0
+	fi
+
+	print_result "dispatch_with_dedup fails closed when issue metadata lookup fails (GH#14409)" 1 \
 		"Expected exit 1 (blocked), got ${dispatch_rc}"
 	return 0
 }
@@ -478,7 +602,13 @@ STUB
 	chmod +x "${TEST_ROOT}/dispatch-ledger-helper.sh"
 
 	# Stub gh to avoid real API calls
-	gh() { return 0; }
+	gh() {
+		if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
+			printf '{"state":"OPEN","title":"t8888: test pass","labels":[]}\n'
+			return 0
+		fi
+		return 0
+	}
 	export -f gh
 
 	local dispatch_rc=0
@@ -500,6 +630,679 @@ STUB
 	return 0
 }
 
+test_dispatch_with_dedup_detaches_worker_stdio() {
+	local original_script_dir="$SCRIPT_DIR"
+	local original_helper="$HEADLESS_RUNTIME_HELPER"
+	local stdin_capture="${TEST_ROOT}/worker-stdin.txt"
+	local issue_log="/tmp/pulse-marcusquinn-aidevops-8890.log"
+	local fallback_log="/tmp/pulse-8890.log"
+	SCRIPT_DIR="$TEST_ROOT"
+
+	rm -f "$stdin_capture" "$issue_log" "$fallback_log"
+	set_ps_fixture ""
+
+	cat >"${TEST_ROOT}/dispatch-dedup-helper.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+set -euo pipefail
+command_name="${1:-}"
+case "$command_name" in
+claim) exit 0 ;;
+*) exit 1 ;;
+esac
+FIXTURE
+	chmod +x "${TEST_ROOT}/dispatch-dedup-helper.sh"
+
+	cat >"${TEST_ROOT}/dispatch-ledger-helper.sh" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+check-issue) exit 1 ;;
+*) exit 0 ;;
+esac
+STUB
+	chmod +x "${TEST_ROOT}/dispatch-ledger-helper.sh"
+
+	HEADLESS_RUNTIME_HELPER="${TEST_ROOT}/headless-stdin-stub.sh"
+	cat >"$HEADLESS_RUNTIME_HELPER" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cat >"${stdin_capture}"
+printf 'stub worker output\n'
+exit 0
+EOF
+	chmod +x "$HEADLESS_RUNTIME_HELPER"
+
+	gh() {
+		if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
+			printf '{"state":"OPEN","title":"t8890: stdio detach","labels":[]}\n'
+			return 0
+		fi
+		return 0
+	}
+	export -f gh
+
+	local dispatch_rc=0
+	dispatch_with_dedup "8890" "marcusquinn/aidevops" "Issue #8890: stdio detach" "t8890: stdio detach" \
+		"testuser" "/tmp/aidevops" "/full-loop test" <<<"candidate-stream-must-not-leak" || dispatch_rc=$?
+
+	local stdin_contents=""
+	if [[ -f "$stdin_capture" ]]; then
+		stdin_contents=$(tr '\n' ' ' <"$stdin_capture")
+	fi
+	local issue_log_contents=""
+	if [[ -f "$issue_log" ]]; then
+		issue_log_contents=$(tr '\n' ' ' <"$issue_log")
+	fi
+
+	HEADLESS_RUNTIME_HELPER="$original_helper"
+	SCRIPT_DIR="$original_script_dir"
+	unset -f gh
+	rm -f "$issue_log" "$fallback_log"
+
+	if [[ "$dispatch_rc" -eq 0 && -z "$stdin_contents" && "$issue_log_contents" == *"stub worker output"* ]]; then
+		print_result "dispatch_with_dedup detaches stdin and captures worker output to issue log (GH#14483)" 0
+		return 0
+	fi
+
+	print_result "dispatch_with_dedup detaches stdin and captures worker output to issue log (GH#14483)" 1 \
+		"dispatch_rc=${dispatch_rc}, stdin='${stdin_contents}', issue_log='${issue_log_contents}'"
+	return 0
+}
+
+test_dispatch_with_dedup_passes_explicit_model_override() {
+	local original_script_dir="$SCRIPT_DIR"
+	local original_helper="$HEADLESS_RUNTIME_HELPER"
+	local args_log="${TEST_ROOT}/worker-args.log"
+	SCRIPT_DIR="$TEST_ROOT"
+
+	set_ps_fixture ""
+	: >"$args_log"
+
+	cat >"${TEST_ROOT}/dispatch-dedup-helper.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+claim) exit 0 ;;
+*) exit 1 ;;
+esac
+FIXTURE
+	chmod +x "${TEST_ROOT}/dispatch-dedup-helper.sh"
+
+	cat >"${TEST_ROOT}/dispatch-ledger-helper.sh" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+check-issue) exit 1 ;;
+*) exit 0 ;;
+esac
+STUB
+	chmod +x "${TEST_ROOT}/dispatch-ledger-helper.sh"
+
+	HEADLESS_RUNTIME_HELPER="${TEST_ROOT}/headless-model-stub.sh"
+	cat >"$HEADLESS_RUNTIME_HELPER" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "\$*" >"${args_log}"
+exit 0
+EOF
+	chmod +x "$HEADLESS_RUNTIME_HELPER"
+
+	gh() {
+		if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
+			printf '{"state":"OPEN","title":"t8891: model override","labels":[{"name":"tier:simple"}]}'
+			return 0
+		fi
+		return 0
+	}
+	export -f gh
+
+	local dispatch_rc=0
+	dispatch_with_dedup "8891" "marcusquinn/aidevops" "Issue #8891: model override" "t8891: model override" \
+		"testuser" "/tmp/aidevops" "/full-loop test" "issue-8891" "anthropic/claude-haiku-4-5" || dispatch_rc=$?
+
+	local args_contents=""
+	if [[ -f "$args_log" ]]; then
+		args_contents=$(tr '\n' ' ' <"$args_log")
+	fi
+
+	HEADLESS_RUNTIME_HELPER="$original_helper"
+	SCRIPT_DIR="$original_script_dir"
+	unset -f gh
+
+	if [[ "$dispatch_rc" -eq 0 && "$args_contents" == *"--model anthropic/claude-haiku-4-5"* ]]; then
+		print_result "dispatch_with_dedup forwards explicit model override to worker launch" 0
+		return 0
+	fi
+
+	print_result "dispatch_with_dedup forwards explicit model override to worker launch" 1 \
+		"dispatch_rc=${dispatch_rc}, args='${args_contents}'"
+	return 0
+}
+
+test_build_ranked_dispatch_candidates_json_scores_candidates() {
+	local original_repos_json="$REPOS_JSON"
+	cat >"${REPOS_JSON}" <<'JSON'
+{
+  "initialized_repos": [
+    {
+      "slug": "marcusquinn/aidevops",
+      "path": "/tmp/aidevops",
+      "pulse": true,
+      "priority": "tooling",
+      "maintainer": "marcusquinn"
+    },
+    {
+      "slug": "webapp",
+      "path": "/tmp/webapp",
+      "pulse": true,
+      "priority": "product",
+      "maintainer": "marcusquinn"
+    }
+  ]
+}
+JSON
+
+	gh_issue_list() {
+		if [[ "${1:-}" == "--repo" ]]; then
+			if [[ "${2:-}" == "marcusquinn/aidevops" ]]; then
+				printf '%s\n' '[
+				  {"number":7001,"title":"tooling simplification","url":"https://github.com/marcusquinn/aidevops/issues/7001","updatedAt":"2026-03-31T00:00:00Z","assignees":[],"labels":[{"name":"file-size-debt"}]},
+				  {"number":7002,"title":"tooling bug","url":"https://github.com/marcusquinn/aidevops/issues/7002","updatedAt":"2026-03-31T00:01:00Z","assignees":[],"labels":[{"name":"bug"}]}
+				]'
+				return 0
+			fi
+			if [[ "${2:-}" == "webapp" ]]; then
+				printf '%s\n' '[
+				  {"number":8001,"title":"product simplification","url":"webapp#8001","updatedAt":"2026-03-31T00:02:00Z","assignees":[],"labels":[{"name":"function-complexity-debt"}]}
+				]'
+				return 0
+			fi
+		fi
+		return 1
+	}
+	export -f gh_issue_list
+
+	local ordered_numbers
+	ordered_numbers=$(build_ranked_dispatch_candidates_json 20 | jq -r '.[].number' 2>/dev/null || true)
+
+	unset -f gh_issue_list
+	REPOS_JSON="$original_repos_json"
+
+	if [[ "$ordered_numbers" == $'7002\n7001\n8001' ]]; then
+		print_result "build_ranked_dispatch_candidates_json orders bug before tooling simplification before product simplification" 0
+		return 0
+	fi
+
+	print_result "build_ranked_dispatch_candidates_json orders bug before tooling simplification before product simplification" 1 \
+		"Unexpected order: ${ordered_numbers}"
+	return 0
+}
+
+test_build_ranked_dispatch_candidates_json_respects_priority_labels() {
+	local original_repos_json="$REPOS_JSON"
+	cat >"${REPOS_JSON}" <<'JSON'
+{
+  "initialized_repos": [
+    {
+      "slug": "marcusquinn/aidevops",
+      "path": "/tmp/aidevops",
+      "pulse": true,
+      "priority": "tooling",
+      "maintainer": "marcusquinn"
+    }
+  ]
+}
+JSON
+
+	gh_issue_list() {
+		if [[ "${1:-}" == "--repo" && "${2:-}" == "marcusquinn/aidevops" ]]; then
+			printf '%s\n' '[
+			  {"number":9100,"title":"unlabeled task","url":"#9100","updatedAt":"2026-03-31T00:00:00Z","assignees":[],"labels":[]},
+			  {"number":9101,"title":"low priority task","url":"#9101","updatedAt":"2026-03-31T00:01:00Z","assignees":[],"labels":[{"name":"priority:low"}]},
+			  {"number":9102,"title":"bug task","url":"#9102","updatedAt":"2026-03-31T00:02:00Z","assignees":[],"labels":[{"name":"bug"}]},
+			  {"number":9103,"title":"medium priority task","url":"#9103","updatedAt":"2026-03-31T00:03:00Z","assignees":[],"labels":[{"name":"priority:medium"}]},
+			  {"number":9104,"title":"high priority task","url":"#9104","updatedAt":"2026-03-31T00:04:00Z","assignees":[],"labels":[{"name":"priority:high"}]},
+			  {"number":9105,"title":"critical priority task","url":"#9105","updatedAt":"2026-03-31T00:05:00Z","assignees":[],"labels":[{"name":"priority:critical"}]}
+			]'
+			return 0
+		fi
+		return 1
+	}
+	export -f gh_issue_list
+
+	local ordered_numbers
+	ordered_numbers=$(build_ranked_dispatch_candidates_json 20 | jq -r '.[].number' 2>/dev/null || true)
+
+	unset -f gh_issue_list
+	REPOS_JSON="$original_repos_json"
+
+	if [[ "$ordered_numbers" == $'9105\n9104\n9103\n9102\n9101\n9100' ]]; then
+		print_result "build_ranked_dispatch_candidates_json respects critical/high/medium/low labels" 0
+		return 0
+	fi
+
+	print_result "build_ranked_dispatch_candidates_json respects critical/high/medium/low labels" 1 \
+		"Unexpected order: ${ordered_numbers}"
+	return 0
+}
+
+test_build_ranked_dispatch_candidates_json_prioritizes_security_quality_debt() {
+	local original_repos_json="$REPOS_JSON"
+	cat >"${REPOS_JSON}" <<'JSON'
+{
+  "initialized_repos": [
+    {
+      "slug": "marcusquinn/aidevops",
+      "path": "/tmp/aidevops",
+      "pulse": true,
+      "priority": "tooling",
+      "maintainer": "marcusquinn"
+    }
+  ]
+}
+JSON
+
+	gh_issue_list() {
+		if [[ "${1:-}" == "--repo" && "${2:-}" == "marcusquinn/aidevops" ]]; then
+			printf '%s\n' '[
+			  {"number":9201,"title":"ordinary high quality debt","url":"#9201","updatedAt":"2026-03-31T00:01:00Z","assignees":[],"labels":[{"name":"quality-debt"},{"name":"priority:high"}]},
+			  {"number":9202,"title":"security high quality debt","url":"#9202","updatedAt":"2026-03-31T00:02:00Z","assignees":[],"labels":[{"name":"quality-debt"},{"name":"security"},{"name":"priority:high"}]}
+			]'
+			return 0
+		fi
+		return 1
+	}
+	export -f gh_issue_list
+
+	local ordered_numbers
+	ordered_numbers=$(build_ranked_dispatch_candidates_json 20 | jq -r '.[].number' 2>/dev/null || true)
+
+	unset -f gh_issue_list
+	REPOS_JSON="$original_repos_json"
+
+	if [[ "$ordered_numbers" == $'9202\n9201' ]]; then
+		print_result "build_ranked_dispatch_candidates_json prioritizes security quality-debt" 0
+		return 0
+	fi
+
+	print_result "build_ranked_dispatch_candidates_json prioritizes security quality-debt" 1 \
+		"Unexpected order: ${ordered_numbers}"
+	return 0
+}
+
+test_dispatch_max_dispatches_up_to_capacity() {
+	local dispatch_log="${TEST_ROOT}/deterministic-dispatch.log"
+	: >"$dispatch_log"
+
+	resolve_dispatch_model_for_labels() {
+		# Tier label resolution — tier:thinking is the canonical opus-tier label
+		case ",${1}," in
+		*,tier:thinking,*)
+			echo "anthropic/claude-opus-4-6"
+			return 0
+			;;
+		*,tier:standard,*)
+			echo "anthropic/claude-sonnet-4-6"
+			return 0
+			;;
+		*,tier:simple,*)
+			echo "anthropic/claude-haiku-4-5"
+			return 0
+			;;
+		esac
+		echo ""
+		return 0
+	}
+
+	build_ranked_dispatch_candidates_json() {
+		printf '%s\n' '[
+		  {"number":9101,"repo_slug":"marcusquinn/aidevops","repo_path":"/tmp/aidevops","url":"https://github.com/marcusquinn/aidevops/issues/9101","title":"candidate one","labels":["bug"],"updatedAt":"2026-03-31T00:00:00Z","score":8000},
+		  {"number":9102,"repo_slug":"marcusquinn/aidevops","repo_path":"/tmp/aidevops","url":"https://github.com/marcusquinn/aidevops/issues/9102","title":"candidate two","labels":["file-size-debt","tier:simple"],"updatedAt":"2026-03-31T00:01:00Z","score":4000},
+		  {"number":9103,"repo_slug":"marcusquinn/aidevops","repo_path":"/tmp/aidevops","url":"https://github.com/marcusquinn/aidevops/issues/9103","title":"candidate three","labels":["function-complexity-debt"],"updatedAt":"2026-03-31T00:02:00Z","score":4000}
+		]'
+	}
+	get_max_workers_target() { echo 2; }
+	count_active_workers() { echo 0; }
+	count_runnable_candidates() { echo 3; }
+	count_queued_without_worker() { echo 0; }
+	check_terminal_blockers() { return 1; }
+	dispatch_with_dedup() {
+		printf '%s|%s\n' "$1" "${9:-}" >>"$dispatch_log"
+		return 0
+	}
+	check_worker_launch() { return 0; }
+	gh() {
+		if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
+			printf 'testuser\n'
+			return 0
+		fi
+		return 0
+	}
+	export -f gh
+
+	local dispatch_count dispatched_numbers
+	dispatch_count=$(dispatch_max)
+	dispatched_numbers=$(tr '\n' ',' <"$dispatch_log" | sed 's/,$//')
+
+	unset -f gh build_ranked_dispatch_candidates_json get_max_workers_target count_active_workers count_runnable_candidates count_queued_without_worker check_terminal_blockers dispatch_with_dedup check_worker_launch
+
+	if [[ "$dispatch_count" == "2" && "$dispatched_numbers" == "9101|,9102|anthropic/claude-haiku-4-5" ]]; then
+		print_result "dispatch_max dispatches ranked candidates up to capacity and honors simple-tier override" 0
+		return 0
+	fi
+
+	print_result "dispatch_max dispatches ranked candidates up to capacity and honors simple-tier override" 1 \
+		"Expected count=2 and issues 9101,9102; got count=${dispatch_count}, issues=${dispatched_numbers}"
+	return 0
+}
+
+test_build_ranked_dispatch_candidates_json_respects_schedule_gate() {
+	local original_repos_json="$REPOS_JSON"
+	cat >"${REPOS_JSON}" <<'JSON'
+{
+  "initialized_repos": [
+    {
+      "slug": "marcusquinn/aidevops",
+      "path": "/tmp/aidevops",
+      "pulse": true,
+      "priority": "tooling"
+    },
+    {
+      "slug": "webapp",
+      "path": "/tmp/webapp",
+      "pulse": true,
+      "priority": "product"
+    }
+  ]
+}
+JSON
+
+	check_repo_pulse_schedule() {
+		[[ "$1" == "marcusquinn/aidevops" ]]
+	}
+	gh_issue_list() {
+		if [[ "${1:-}" == "--repo" ]]; then
+			if [[ "${2:-}" == "marcusquinn/aidevops" ]]; then
+				printf '%s\n' '[{"number":9201,"title":"allowed","url":"https://github.com/marcusquinn/aidevops/issues/9201","updatedAt":"2026-03-31T00:00:00Z","assignees":[],"labels":[{"name":"bug"}]}]'
+				return 0
+			fi
+			if [[ "${2:-}" == "webapp" ]]; then
+				printf '%s\n' '[{"number":9202,"title":"blocked by schedule","url":"webapp#9202","updatedAt":"2026-03-31T00:00:00Z","assignees":[],"labels":[{"name":"bug"}]}]'
+				return 0
+			fi
+		fi
+		return 1
+	}
+	export -f gh_issue_list
+
+	local candidate_numbers
+	candidate_numbers=$(build_ranked_dispatch_candidates_json 20 | jq -r '.[].number' 2>/dev/null || true)
+
+	unset -f gh_issue_list check_repo_pulse_schedule
+	REPOS_JSON="$original_repos_json"
+
+	if [[ "$candidate_numbers" == "9201" ]]; then
+		print_result "build_ranked_dispatch_candidates_json skips repos outside schedule gate" 0
+		return 0
+	fi
+
+	print_result "build_ranked_dispatch_candidates_json skips repos outside schedule gate" 1 \
+		"Unexpected scheduled candidate set: ${candidate_numbers}"
+	return 0
+}
+
+test_build_ranked_dispatch_candidates_json_accepts_array_pulse_hours() {
+	local original_repos_json="$REPOS_JSON"
+	local schedule_args_log="${TEST_ROOT}/pulse-hours-array-schedule-args.log"
+	: >"$schedule_args_log"
+	cat >"${REPOS_JSON}" <<'JSON'
+{
+  "initialized_repos": [
+    {
+      "slug": "marcusquinn/aidevops",
+      "path": "/tmp/aidevops",
+      "pulse": true,
+      "priority": "tooling",
+      "pulse_hours": [9, 17]
+    }
+  ]
+}
+JSON
+
+	check_repo_pulse_schedule() {
+		printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" >>"$schedule_args_log"
+		return 0
+	}
+	gh_issue_list() {
+		if [[ "${1:-}" == "--repo" && "${2:-}" == "marcusquinn/aidevops" ]]; then
+			printf '%s\n' '[{"number":9251,"title":"array pulse hours","url":"https://github.com/marcusquinn/aidevops/issues/9251","updatedAt":"2026-03-31T00:00:00Z","assignees":[],"labels":[{"name":"bug"}]}]'
+			return 0
+		fi
+		return 1
+	}
+	export -f gh_issue_list
+
+	local candidate_numbers schedule_args
+	candidate_numbers=$(build_ranked_dispatch_candidates_json 20 | jq -r '.[].number' 2>/dev/null || true)
+	schedule_args=$(cat "$schedule_args_log" 2>/dev/null || true)
+
+	unset -f gh_issue_list check_repo_pulse_schedule
+	REPOS_JSON="$original_repos_json"
+
+	if [[ "$candidate_numbers" == "9251" && "$schedule_args" == "marcusquinn/aidevops|9|17|" ]]; then
+		print_result "build_ranked_dispatch_candidates_json accepts array pulse_hours" 0
+		return 0
+	fi
+
+	print_result "build_ranked_dispatch_candidates_json accepts array pulse_hours" 1 \
+		"candidate_numbers='${candidate_numbers}', schedule_args='${schedule_args}'"
+	return 0
+}
+
+test_dispatch_max_honors_stop_flag() {
+	local dispatch_log="${TEST_ROOT}/deterministic-stop.log"
+	: >"$dispatch_log"
+	touch "$STOP_FLAG"
+
+	build_ranked_dispatch_candidates_json() {
+		printf '%s\n' '[{"number":9301,"repo_slug":"marcusquinn/aidevops","repo_path":"/tmp/aidevops","url":"https://github.com/marcusquinn/aidevops/issues/9301","title":"candidate one","labels":["bug"],"updatedAt":"2026-03-31T00:00:00Z","score":8000}]'
+	}
+	dispatch_with_dedup() {
+		printf '%s\n' "$1" >>"$dispatch_log"
+		return 0
+	}
+
+	local dispatch_count dispatched_numbers
+	dispatch_count=$(dispatch_max)
+	dispatched_numbers=$(tr '\n' ',' <"$dispatch_log" | sed 's/,$//')
+
+	rm -f "$STOP_FLAG"
+	unset -f build_ranked_dispatch_candidates_json dispatch_with_dedup
+
+	if [[ "$dispatch_count" == "0" && -z "$dispatched_numbers" ]]; then
+		print_result "dispatch_max skips dispatch when stop flag is present" 0
+		return 0
+	fi
+
+	print_result "dispatch_max skips dispatch when stop flag is present" 1 \
+		"Expected no dispatch with stop flag; got count=${dispatch_count}, issues=${dispatched_numbers}"
+	return 0
+}
+
+test_dispatch_max_ignores_noisy_count_output() {
+	local dispatch_log="${TEST_ROOT}/deterministic-noisy-counts.log"
+	: >"$dispatch_log"
+
+	build_ranked_dispatch_candidates_json() {
+		printf '%s\n' '[
+		  {"number":9401,"repo_slug":"marcusquinn/aidevops","repo_path":"/tmp/aidevops","url":"https://github.com/marcusquinn/aidevops/issues/9401","title":"candidate one","labels":["bug"],"updatedAt":"2026-03-31T00:00:00Z","score":8000}
+		]'
+	}
+	get_max_workers_target() { echo 2; }
+	count_active_workers() { echo 0; }
+	count_runnable_candidates() {
+		printf 'DEBUG: prefetched runnable backlog\n'
+		echo 5
+	}
+	count_queued_without_worker() {
+		printf 'TRACE: queued scan complete\n'
+		echo 0
+	}
+	check_terminal_blockers() { return 1; }
+	dispatch_with_dedup() {
+		printf '%s\n' "$1" >>"$dispatch_log"
+		return 0
+	}
+	check_worker_launch() { return 0; }
+	gh() {
+		if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
+			printf 'testuser\n'
+			return 0
+		fi
+		return 0
+	}
+	export -f gh
+
+	local dispatch_count dispatched_numbers
+	dispatch_count=$(dispatch_max)
+	dispatched_numbers=$(tr '\n' ',' <"$dispatch_log" | sed 's/,$//')
+
+	unset -f gh build_ranked_dispatch_candidates_json get_max_workers_target count_active_workers count_runnable_candidates count_queued_without_worker check_terminal_blockers dispatch_with_dedup check_worker_launch
+
+	if [[ "$dispatch_count" == "1" && "$dispatched_numbers" == "9401" ]]; then
+		print_result "dispatch_max ignores noisy count helper output" 0
+		return 0
+	fi
+
+	print_result "dispatch_max ignores noisy count helper output" 1 \
+		"Expected count=1 and issue 9401; got count=${dispatch_count}, issues=${dispatched_numbers}"
+	return 0
+}
+
+test_active_pulse_refill_skips_without_idle_or_stall_signal() {
+	get_max_workers_target() { echo 4; }
+	count_active_workers() { echo 1; }
+	count_runnable_candidates() { echo 9; }
+	count_queued_without_worker() { echo 2; }
+	run_underfill_worker_recycler() {
+		printf 'recycler\n' >>"${TEST_ROOT}/active-refill-skip.log"
+		return 0
+	}
+	dispatch_max() {
+		printf 'dispatch\n' >>"${TEST_ROOT}/active-refill-skip.log"
+		return 0
+	}
+
+	local last_refill_epoch
+	last_refill_epoch=$(maybe_refill_underfilled_pool_during_active_pulse 0 60 0 true)
+
+	unset -f get_max_workers_target count_active_workers count_runnable_candidates count_queued_without_worker run_underfill_worker_recycler dispatch_max
+
+	if [[ "$last_refill_epoch" == "0" && ! -e "${TEST_ROOT}/active-refill-skip.log" ]]; then
+		print_result "maybe_refill_underfilled_pool_during_active_pulse waits for idle or stall evidence" 0
+		return 0
+	fi
+
+	print_result "maybe_refill_underfilled_pool_during_active_pulse waits for idle or stall evidence" 1 \
+		"Expected no refill without idle/stall; got epoch=${last_refill_epoch}"
+	return 0
+}
+
+test_active_pulse_refill_dispatches_when_underfilled_and_idle() {
+	local action_log="${TEST_ROOT}/active-refill.log"
+	: >"$action_log"
+	export PULSE_ACTIVE_REFILL_INTERVAL=120
+
+	get_max_workers_target() { echo 6; }
+	count_active_workers() { echo 1; }
+	count_runnable_candidates() { echo 12; }
+	count_queued_without_worker() { echo 3; }
+	run_underfill_worker_recycler() {
+		printf 'recycler\n' >>"$action_log"
+		return 0
+	}
+	dispatch_max() {
+		printf 'dispatch\n' >>"$action_log"
+		return 0
+	}
+
+	local first_refill second_refill actions
+	first_refill=$(maybe_refill_underfilled_pool_during_active_pulse 0 0 60 true)
+	second_refill=$(maybe_refill_underfilled_pool_during_active_pulse "$first_refill" 0 60 true)
+	actions=$(tr '\n' ',' <"$action_log" | sed 's/,$//')
+
+	unset -f get_max_workers_target count_active_workers count_runnable_candidates count_queued_without_worker run_underfill_worker_recycler dispatch_max
+	unset PULSE_ACTIVE_REFILL_INTERVAL
+
+	if [[ "$first_refill" =~ ^[0-9]+$ && "$first_refill" -gt 0 && "$second_refill" == "$first_refill" && "$actions" == "recycler,dispatch" ]]; then
+		print_result "maybe_refill_underfilled_pool_during_active_pulse refills once per interval when idle" 0
+		return 0
+	fi
+
+	print_result "maybe_refill_underfilled_pool_during_active_pulse refills once per interval when idle" 1 \
+		"Expected one recycler+dispatch pass with cooldown; got first=${first_refill}, second=${second_refill}, actions=${actions}"
+	return 0
+}
+
+test_worker_detection_uses_unlimited_width_ps_flag() {
+	# t2190: Linux procps truncates the command column to the detected
+	# terminal width (~80 cols) when ps output is piped. Worker commands
+	# carry the full HEADLESS_CONTINUATION_CONTRACT_V6 prompt (5000+ chars),
+	# so substrings needed by list_active_workers.awk (`--role worker`,
+	# `/full-loop`, `--session-key issue-NNN`, `--dir <path>`) end up past
+	# position 80 and get stripped. The awk regex then fails to match,
+	# has_worker_for_repo_issue returns false within the 35s grace window,
+	# and recover_failed_launch_state unassigns the worker — every dispatch
+	# cycle loops on the same issue.
+	#
+	# Fix: all ps invocations in worker-detection paths must pass `ww`
+	# (axwwo = unlimited width; works on both BSD ps and procps).
+	#
+	# This test asserts the canonical invocation form at runtime.
+	# NB: Must rely on list_active_worker_processes directly, not
+	# count_active_workers — earlier tests `unset -f count_active_workers`
+	# as part of their teardown, so by the time this test runs the
+	# wrapper is gone but the lower-level function is still defined.
+	local log_file="${TEST_ROOT}/ps-invocations.log"
+	: >"$log_file"
+	PS_INVOCATION_LOG_FILE="$log_file"
+	export PS_INVOCATION_LOG_FILE
+
+	set_ps_fixture "100 S 00:10 bash /Users/test/.aidevops/agents/scripts/headless-runtime-helper.sh run --role worker --session-key issue-2190 --dir /tmp/aidevops --title Issue #2190 --prompt-file /tmp/pulse-2190.prompt"
+
+	local output
+	output=$(list_active_worker_processes)
+	local count
+	count=$(printf '%s\n' "$output" | grep -c '^100 ' || true)
+
+	local invocations
+	invocations=$(tr '\n' ',' <"$log_file" | sed 's/,$//')
+
+	unset PS_INVOCATION_LOG_FILE
+
+	# Must have at least one axwwo invocation.
+	if ! grep -qxE 'axwwo' "$log_file"; then
+		print_result "worker-detection calls ps with unlimited-width flag (t2190)" 1 \
+			"Expected at least one 'ps axwwo' call, got: ${invocations:-<empty>}"
+		return 0
+	fi
+
+	# Must have zero bare axo invocations (Linux truncation foot-gun).
+	if grep -qxE 'axo' "$log_file"; then
+		print_result "worker-detection calls ps with unlimited-width flag (t2190)" 1 \
+			"Regression: found bare 'ps axo' call — Linux procps will truncate. Use 'ps axwwo'. Log: ${invocations}"
+		return 0
+	fi
+
+	# And the fixture should have been detected as a worker.
+	if [[ "$count" != "1" ]]; then
+		print_result "worker-detection calls ps with unlimited-width flag (t2190)" 1 \
+			"Expected 1 worker detected (PID 100), got ${count}. list output: ${output}"
+		return 0
+	fi
+
+	print_result "worker-detection calls ps with unlimited-width flag (t2190)" 0
+	return 0
+}
+
 main() {
 	trap teardown_test_env EXIT
 	setup_test_env
@@ -516,9 +1319,24 @@ main() {
 	test_deduplicates_chain_but_keeps_standalone_opencode_binary
 	test_counts_review_issue_pr_workers
 	test_review_issue_pr_session_key_fallback_dedup
+	test_worker_title_prefixes_issue_number
 	test_check_dispatch_dedup_treats_merged_pr_as_duplicate
 	test_dispatch_with_dedup_blocks_when_duplicate
+	test_dispatch_with_dedup_fails_closed_when_issue_metadata_missing
 	test_dispatch_with_dedup_proceeds_when_no_duplicate
+	test_dispatch_with_dedup_detaches_worker_stdio
+	test_dispatch_with_dedup_passes_explicit_model_override
+	test_build_ranked_dispatch_candidates_json_scores_candidates
+	test_build_ranked_dispatch_candidates_json_respects_priority_labels
+	test_build_ranked_dispatch_candidates_json_prioritizes_security_quality_debt
+	test_build_ranked_dispatch_candidates_json_respects_schedule_gate
+	test_build_ranked_dispatch_candidates_json_accepts_array_pulse_hours
+	test_dispatch_max_dispatches_up_to_capacity
+	test_dispatch_max_honors_stop_flag
+	test_dispatch_max_ignores_noisy_count_output
+	test_active_pulse_refill_skips_without_idle_or_stall_signal
+	test_active_pulse_refill_dispatches_when_underfilled_and_idle
+	test_worker_detection_uses_unlimited_width_ps_flag
 
 	printf '\nRan %s tests, %s failed.\n' "$TESTS_RUN" "$TESTS_FAILED"
 	if [[ "$TESTS_FAILED" -gt 0 ]]; then

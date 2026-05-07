@@ -1,57 +1,44 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cloudflare Tunnel
 
-Secure outbound-only connections between infrastructure and Cloudflare's global network.
+Outbound-only connectivity from origin to Cloudflare — no inbound ports, no firewall exposure, no public IP required.
 
-## Overview
+## Architecture
 
-Cloudflare Tunnel (formerly Argo Tunnel) enables:
-- **Outbound-only connections** - No inbound ports or firewall changes
-- **Public hostname routing** - Expose local services to internet
-- **Private network access** - Connect internal networks via WARP
-- **Zero Trust integration** - Built-in access policies
+`Tunnel` (named, persistent object) → `cloudflared` connector(s) → origin service(s)
 
-**Architecture**: Tunnel (persistent object) → Connector (`cloudflared` process) → Origin services
+- **Public hostname routing**: expose HTTP, HTTPS, SSH, or gRPC services through Cloudflare
+- **Private routing**: publish private CIDRs for WARP-connected users
+- **Zero Trust**: pair hostnames with Access policies instead of opening the origin directly
 
-## Quick Start
+## Quick start
 
 ```bash
-# Install cloudflared
-brew install cloudflared  # macOS
-
-# Authenticate
-cloudflared tunnel login
-
-# Create tunnel
-cloudflared tunnel create my-tunnel
-
-# Route DNS
+brew install cloudflared               # macOS; use distro package manager elsewhere
+cloudflared tunnel login               # authorize this machine
+cloudflared tunnel create my-tunnel    # creates named tunnel + credentials file
 cloudflared tunnel route dns my-tunnel app.example.com
-
-# Run tunnel
 cloudflared tunnel run my-tunnel
 ```
 
-## Core Commands
+## Core commands
 
 ```bash
-# Tunnel lifecycle
 cloudflared tunnel create <name>
 cloudflared tunnel list
 cloudflared tunnel info <name>
 cloudflared tunnel delete <name>
 
-# DNS routing
 cloudflared tunnel route dns <tunnel> <hostname>
 cloudflared tunnel route list
-
-# Private network
 cloudflared tunnel route ip add 10.0.0.0/8 <tunnel>
 
-# Run tunnel
 cloudflared tunnel run <name>
 ```
 
-## Configuration Example
+## Config skeleton
 
 ```yaml
 # ~/.cloudflared/config.yml
@@ -64,17 +51,18 @@ ingress:
   - hostname: api.example.com
     service: https://localhost:8443
     originRequest:
-      noTLSVerify: true
+      noTLSVerify: true # dev only; prefer valid TLS in production
   - service: http_status:404
 ```
 
-## In This Reference
+## Operating notes
 
-- [patterns.md](./patterns.md) - Docker, Kubernetes, HA, service types, use cases
-- [gotchas.md](./gotchas.md) - Troubleshooting, limitations, best practices
+- Prefer remotely managed tunnels and Access policies for sensitive services.
+- Multiple connectors per named tunnel = HA; Cloudflare load-balances automatically.
+- Ingress rules are first-match-wins; always end with a catch-all (`http_status:404`).
+- Long-lived connections may drop on connector restart or replica replacement.
 
-## See Also
+## Related docs
 
-- [workers](../workers/) - Workers with Tunnel integration
-- [access](../access/) - Zero Trust access policies
-- [warp](../warp/) - WARP client for private networks
+- [Tunnel patterns](./tunnel-patterns.md) - Docker, Kubernetes, HA, service types, use cases
+- [Tunnel gotchas](./tunnel-gotchas.md) - troubleshooting, limits, operational guardrails

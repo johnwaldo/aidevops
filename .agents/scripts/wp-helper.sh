@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2155
 
 # WordPress CLI Helper Script
@@ -318,7 +320,12 @@ execute_wp_via_ssh() {
 		return $?
 		;;
 	hostinger | closte)
-		# Hostinger/Closte - sshpass with password file
+		# Prefer SSH key auth if configured (Hostinger supports and recommends it)
+		if [[ -n "$ssh_identity_file" ]]; then
+			ssh -n "${ssh_identity_flag[@]}" -p "$ssh_port" "${ssh_user}@${ssh_host}" "$remote_cmd"
+			return $?
+		fi
+		# Fallback: sshpass with password file (backward compatible for password-auth users)
 		check_sshpass
 		local expanded_password_file
 		if [[ -n "$password_file" ]]; then
@@ -339,13 +346,13 @@ execute_wp_via_ssh() {
 
 		# Warn if password file has insecure permissions (should be 600)
 		local file_perms
-		file_perms=$(stat -c "%a" "$expanded_password_file" 2>/dev/null || stat -f "%OLp" "$expanded_password_file" 2>/dev/null || echo "")
+		file_perms=$(_file_perms "$expanded_password_file")
 		if [[ -n "$file_perms" && "$file_perms" != "600" ]]; then
 			print_warning "Password file has insecure permissions ($file_perms): $expanded_password_file"
 			print_info "Fix with: chmod 600 $expanded_password_file"
 		fi
 
-		sshpass -f "$expanded_password_file" ssh -n "${ssh_identity_flag[@]}" -p "$ssh_port" "${ssh_user}@${ssh_host}" "$remote_cmd"
+		sshpass -f "$expanded_password_file" ssh -n -p "$ssh_port" "${ssh_user}@${ssh_host}" "$remote_cmd"
 		return $?
 		;;
 	hetzner | cloudways | cloudron)

@@ -30,13 +30,17 @@ export function jsonToToon(data: unknown, options: ToonOptions = {}): string {
   return convertToToon(data, opts, 0)
 }
 
+const PRIMITIVE_CONVERTERS: Record<string, (data: unknown) => string> = {
+  string: (data) => data as string,
+  number: (data) => String(data),
+  boolean: (data) => String(data),
+}
+
 function convertPrimitive(data: unknown): string | null {
   if (data === null) return 'null'
   if (data === undefined) return 'undefined'
-  if (typeof data === 'string') return data
-  if (typeof data === 'number') return String(data)
-  if (typeof data === 'boolean') return String(data)
-  return null
+  const converter = PRIMITIVE_CONVERTERS[typeof data]
+  return converter ? converter(data) : null
 }
 
 function convertArrayToToon(data: unknown[], opts: ToonOptions, depth: number): string {
@@ -83,22 +87,38 @@ function convertToToon(data: unknown, opts: ToonOptions, depth: number): string 
   return String(data)
 }
 
+function isPlainObject(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null && !Array.isArray(val)
+}
+
 /**
  * Check if array is tabular (array of objects with same keys)
  */
 function isTabularArray(arr: unknown[]): boolean {
-  if (arr.length < 2) return false
-  if (typeof arr[0] !== 'object' || arr[0] === null) return false
-  if (Array.isArray(arr[0])) return false
+  if (arr.length < 2 || !isPlainObject(arr[0])) return false
 
-  const firstKeys = Object.keys(arr[0] as object).sort().join(',')
-  
-  return arr.every(item => {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
-      return false
-    }
-    return Object.keys(item).sort().join(',') === firstKeys
-  })
+  const firstKeys = Object.keys(arr[0]).sort().join(',')
+  return arr.every(item => isPlainObject(item) && Object.keys(item).sort().join(',') === firstKeys)
+}
+
+/**
+ * Check if a string value requires CSV-style quoting (contains delimiter,
+ * quotes, newlines, or leading/trailing whitespace).
+ */
+function needsCsvQuoting(str: string, delimiter: string): boolean {
+  const hasSpecialChars = str.includes(delimiter) || str.includes('"')
+  const hasWhitespaceIssues = str.includes('\n') || str.includes('\r') || str !== str.trim()
+  return hasSpecialChars || hasWhitespaceIssues
+}
+
+function formatTabularCell(val: unknown, delimiter: string): string {
+  if (val === null) return 'null'
+  if (val === undefined) return ''
+  const str = String(val)
+  if (typeof val === 'string' && needsCsvQuoting(str, delimiter)) {
+    return `"${str.replace(/"/g, '""')}"`
+  }
+  return str
 }
 
 /**
@@ -117,20 +137,12 @@ function convertTabularArray(
   const delimiter = opts.delimiter!
 
   const header = `[${arr.length}]{${keys.join(',')}}:`
-  const rows = arr.map(obj => {
-    return keys.map(key => {
-      const val = obj[key]
-      if (val === null) return 'null'
-      if (val === undefined) return ''
-      if (typeof val === 'string' && val.includes(delimiter)) {
-        return `"${val}"`
-      }
-      return String(val)
-    }).join(delimiter)
-  })
+  const rows = arr.map(obj => keys.map(key => formatTabularCell(obj[key], delimiter)).join(delimiter))
 
   return `${header}\n${rows.map(r => `${indent}  ${r}`).join('\n')}`
 }
+
+import { parseToon } from './toon-parser'
 
 /**
  * Convert TOON format back to JSON
@@ -140,206 +152,5 @@ export function toonToJson(toon: string): unknown {
   return parseToon(lines, 0).value
 }
 
-interface ParseResult {
-  value: unknown
-  consumed: number
-}
-
-function parseLiteral(line: string): ParseResult | null {
-  if (line === 'null') return { value: null, consumed: 1 }
-  if (line === 'undefined') return { value: undefined, consumed: 1 }
-  if (line === 'true') return { value: true, consumed: 1 }
-  if (line === 'false') return { value: false, consumed: 1 }
-  if (/^-?\d+(\.\d+)?$/.test(line)) return { value: Number(line), consumed: 1 }
-  if (line === '[]') return { value: [], consumed: 1 }
-  if (line === '{}') return { value: {}, consumed: 1 }
-  return null
-}
-
-function parseTabularBlock(lines: string[], startIndex: number, match: RegExpMatchArray): ParseResult {
-  const count = parseInt(match[1], 10)
-  const keys = match[2].split(',')
-  const result: Record<string, unknown>[] = []
-
-  for (let i = 0; i < count && startIndex + 1 + i < lines.length; i++) {
-    const rowLine = lines[startIndex + 1 + i].trim()
-    const values = parseDelimitedRow(rowLine, ',')
-    const obj: Record<string, unknown> = {}
-    keys.forEach((key, idx) => {
-      obj[key] = parseValue(values[idx] || '')
-    })
-    result.push(obj)
-  }
-
-  return { value: result, consumed: count + 1 }
-}
-
-function parseKeyValuePair(lines: string[], startIndex: number, match: RegExpMatchArray): ParseResult {
-  const key = match[1].trim()
-  const valueStr = match[2].trim()
-
-  if (valueStr) {
-    return {
-      value: { [key]: parseValue(valueStr) },
-      consumed: 1,
-    }
-  }
-
-  const nested = parseToon(lines, startIndex + 1)
-  return {
-    value: { [key]: nested.value },
-    consumed: 1 + nested.consumed,
-  }
-}
-
-function parseToon(lines: string[], startIndex: number): ParseResult {
-  if (startIndex >= lines.length) {
-    return { value: null, consumed: 0 }
-  }
-
-  const line = lines[startIndex].trim()
-
-  const literal = parseLiteral(line)
-  if (literal !== null) return literal
-
-  const tabularMatch = line.match(/^\[(\d+)\]\{([^}]+)\}:$/)
-  if (tabularMatch) {
-    return parseTabularBlock(lines, startIndex, tabularMatch)
-  }
-
-  const kvMatch = line.match(/^([^:]+):\s*(.*)$/)
-  if (kvMatch) {
-    return parseKeyValuePair(lines, startIndex, kvMatch)
-  }
-
-  return { value: line, consumed: 1 }
-}
-
-function parseDelimitedRow(row: string, delimiter: string): string[] {
-  const result: string[] = []
-  let current = ''
-  let inQuotes = false
-
-  for (let i = 0; i < row.length; i++) {
-    const char = row[i]
-    
-    if (char === '"' && !inQuotes) {
-      inQuotes = true
-    } else if (char === '"' && inQuotes) {
-      inQuotes = false
-    } else if (char === delimiter && !inQuotes) {
-      result.push(current)
-      current = ''
-    } else {
-      current += char
-    }
-  }
-  
-  result.push(current)
-  return result
-}
-
-function detectKnownValue(trimmed: string): { known: true; value: unknown } | { known: false } {
-  if (trimmed === 'null') return { known: true, value: null }
-  if (trimmed === 'undefined') return { known: true, value: undefined }
-  if (trimmed === 'true') return { known: true, value: true }
-  if (trimmed === 'false') return { known: true, value: false }
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) return { known: true, value: Number(trimmed) }
-  return { known: false }
-}
-
-function parseValue(str: string): unknown {
-  const trimmed = str.trim()
-
-  const detected = detectKnownValue(trimmed)
-  if (detected.known) return detected.value
-
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1)
-  }
-
-  return trimmed
-}
-
-/**
- * Compare JSON vs TOON sizes
- */
-export function compareSizes(data: unknown): {
-  jsonSize: number
-  toonSize: number
-  savings: number
-  savingsPercent: string
-} {
-  const jsonStr = JSON.stringify(data)
-  const toonStr = jsonToToon(data)
-
-  const jsonSize = new TextEncoder().encode(jsonStr).length
-  const toonSize = new TextEncoder().encode(toonStr).length
-  const savings = jsonSize - toonSize
-
-  return {
-    jsonSize,
-    toonSize,
-    savings,
-    savingsPercent: `${((savings / jsonSize) * 100).toFixed(1)}%`,
-  }
-}
-
-/**
- * Estimate token count (rough approximation)
- * Uses ~4 chars per token as a rough estimate
- */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4)
-}
-
-/**
- * Compare token usage between JSON and TOON
- */
-export function compareTokens(data: unknown): {
-  jsonTokens: number
-  toonTokens: number
-  tokensSaved: number
-  savingsPercent: string
-} {
-  const jsonStr = JSON.stringify(data)
-  const toonStr = jsonToToon(data)
-
-  const jsonTokens = estimateTokens(jsonStr)
-  const toonTokens = estimateTokens(toonStr)
-  const tokensSaved = jsonTokens - toonTokens
-
-  return {
-    jsonTokens,
-    toonTokens,
-    tokensSaved,
-    savingsPercent: `${((tokensSaved / jsonTokens) * 100).toFixed(1)}%`,
-  }
-}
-
-// File operations using Bun
-export async function convertFile(
-  inputPath: string,
-  outputPath: string,
-  direction: 'toToon' | 'toJson'
-): Promise<{ success: boolean; stats: ReturnType<typeof compareSizes> | null }> {
-  const inputFile = Bun.file(inputPath)
-  
-  if (!(await inputFile.exists())) {
-    throw new Error(`Input file not found: ${inputPath}`)
-  }
-
-  const content = await inputFile.text()
-
-  if (direction === 'toToon') {
-    const data = JSON.parse(content)
-    const toon = jsonToToon(data)
-    await Bun.write(outputPath, toon)
-    return { success: true, stats: compareSizes(data) }
-  } else {
-    const data = toonToJson(content)
-    const json = JSON.stringify(data, null, 2)
-    await Bun.write(outputPath, json)
-    return { success: true, stats: null }
-  }
-}
+// Re-export utility functions for backward compatibility
+export { compareSizes, estimateTokens, compareTokens, convertFile } from './toon-utils'

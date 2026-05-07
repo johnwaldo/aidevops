@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Drizzle + PostgreSQL Quick Reference
 
 ## Chapters
@@ -6,7 +9,7 @@
 |------|----------|
 | [cheatsheet-schema.md](cheatsheet-schema.md) | Column types, constraints, indexes, enums |
 | [cheatsheet-relations.md](cheatsheet-relations.md) | One-to-many, many-to-many, type inference |
-| [cheatsheet-queries.md](cheatsheet-queries.md) | Operators, select, relational queries, aggregations, prepared statements |
+| [queries.md](queries.md) | Operators, select, relational queries, joins, aggregations, subqueries, mutations, raw SQL, prepared statements, transactions |
 | [cheatsheet-mutations.md](cheatsheet-mutations.md) | Insert, update, delete, transactions |
 | [cheatsheet-config.md](cheatsheet-config.md) | drizzle-kit commands, drizzle.config.ts, connection setup |
 | [cheatsheet-reference.md](cheatsheet-reference.md) | Error codes, PostgreSQL 18 features, quick tips |
@@ -17,7 +20,7 @@
 
 **Relations:** `relations()`, `one()`, `many()`, junction tables — see [cheatsheet-relations.md](cheatsheet-relations.md)
 
-**Queries:** `eq`, `and`, `or`, `ilike`, `inArray`, `findMany`, `findFirst`, `with` — see [cheatsheet-queries.md](cheatsheet-queries.md)
+**Queries:** `eq`, `and`, `or`, `ilike`, `inArray`, `findMany`, `findFirst`, `with` — see [queries.md](queries.md)
 
 **Mutations:** `insert`, `update`, `delete`, `onConflictDoUpdate`, `transaction` — see [cheatsheet-mutations.md](cheatsheet-mutations.md)
 

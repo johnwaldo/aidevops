@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Execution Plans
 
 Complex, multi-session work requiring research, design decisions, and detailed tracking.
@@ -5,7 +8,7 @@ Complex, multi-session work requiring research, design decisions, and detailed t
 Based on [OpenAI's PLANS.md](https://cookbook.openai.com/articles/codex_exec_plans) and [plan.md](https://github.com/Digital-Tvilling/plan.md), with TOON-enhanced parsing.
 
 <!--TOON:meta{version,format,updated}:
-1.0,plans-md+toon,2026-03-21T00:00:00Z
+1.0,plans-md+toon,2026-03-31T00:00:00Z
 -->
 
 ## Format
@@ -21,6 +24,214 @@ Each plan includes:
 - **Outcomes & Retrospective**: Results and lessons (when complete)
 
 ## Active Plans
+
+### [2026-04-10] Qlty Maintainability Recovery Phase 2 (C→A)
+
+**Status:** In Progress (Phase 1/4)
+**Estimate:** ~28h across 18 tasks (6 existing + 12 new)
+**TODOs:** t1860, t1910, t1911, t1912, t1913, t1914, t1915, t1941, t1942, t1943, t1944, t1945, t1946, t1947, t1948, t1949, t1950, t1951, t1952
+**Logged:** 2026-04-10
+**Trigger:** Qlty maintainability badge at C rating. 112 smell findings across 49 files. Phase 1 (t1858-t1863, April 2026) addressed 5 files but smells persist in 49 files. Systematic sweep needed to reach and maintain A.
+
+#### Purpose
+
+Eliminate all Qlty code smell findings to restore the maintainability badge to A and prevent regression. Four phases:
+
+1. **Quick wins** (t1950, t1948) — fix function-level smells (many returns, duplication) in small files. ~1.25h.
+2. **Core refactors** (t1941-t1947, t1949, t1951) — reduce total complexity in standalone scripts and utilities. ~21h.
+3. **Plugin decomposition** (t1860, t1914) — decompose the opencode-aidevops plugin directory. ~12.5h. Blocked by phase 2 for oauth-pool.mjs.
+4. **Regression prevention** (t1910, t1911, t1912, t1913, t1915) — CI gates, scanner extensions, ratchets. ~8.5h.
+
+The higgsfield cluster (t1952, 1017 combined complexity) is the single largest contributor (~25% of all findings). t1862 was marked completed but smells persist — this is the follow-up.
+
+#### Development Environment
+
+| Item | Value |
+|------|-------|
+| Language/runtime | Python 3.11+, Node.js (ESM), TypeScript, Shell |
+| Tests | `qlty smells --all --no-snippets` (zero findings target), shellcheck, existing test suites |
+| Constraints | All refactors must preserve existing functionality. No API changes. Decomposition only — no feature changes. |
+
+#### Progress
+
+**Phase 1 — Quick wins:**
+- [ ] (2026-04-10) t1950: Fix many-returns in git_safety_guard.py + extract-urls.py ~45m
+- [ ] (2026-04-10) t1948: Deduplicate linkedin/local-browser automation ~30m
+
+**Phase 2 — Core refactors (ordered by complexity, highest first):**
+- [ ] (2026-04-10) t1952: Higgsfield stack (1017 combined) ~5h
+- [ ] (2026-04-10) t1943: Email stack (502 combined) ~4h
+- [ ] (2026-04-10) t1946: cross-document-linking + extraction_pipeline + voice-bridge (335 combined) ~3h
+- [ ] (2026-04-10) t1947: tabby-profile-sync + add-related-docs + generate-manifest + pageindex-generator (327 combined) ~3h
+- [ ] (2026-04-10) t1945: playwright-contrast + browser-qa (217 combined) ~2.5h
+- [ ] (2026-04-10) t1944: session-miner extract + compress (225 combined) ~2h
+- [ ] (2026-04-10) t1942: agent-discovery + opencode-agent-discovery (329 combined + dedup) ~2.5h
+- [ ] (2026-04-10) t1941: chromium-debug-use (211) ~2h
+- [ ] (2026-04-10) t1949: .opencode/ toon.ts + api-gateway.ts + ai-research.ts (145 combined) ~1.5h
+- [ ] (2026-04-10) t1951: simplex-bot commands.ts + index.ts (119 combined) ~1.5h
+
+**Phase 3 — Plugin decomposition:**
+- [ ] t1860: oauth-pool.mjs (117) ~5.5h
+- [ ] t1914: Full opencode-aidevops plugin directory (~1300 combined) ~7h (blocked-by:t1860)
+
+**Phase 4 — Regression prevention:**
+- [ ] t1910: Extend complexity scanner to .py/.mjs/.js/.ts ~2h
+- [ ] t1911: Qlty smells CI gate ~1.5h
+- [ ] t1912: Post-merge re-queue (blocked-by:t1910) ~2.5h
+- [ ] t1913: Automate ratchet-down thresholds ~2h
+- [ ] t1915: Qlty verification in simplification briefs ~40m
+
+#### Decision Log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-04-10 | All code is authored and maintained by us — no qltyignore exclusions | User confirmed all files are our creation. Apply simplification to everything rather than excluding. |
+| 2026-04-10 | Order by complexity (highest first) | Highest-complexity files contribute most to the grade. Fixing them first gives the fastest badge improvement. |
+| 2026-04-10 | Quick wins first (returns, dedup) | These are tier:simple tasks that can be dispatched immediately and completed in <1h each. |
+| 2026-04-10 | Higgsfield follow-up (t1952) despite t1862 completed | t1862 reduced complexity but qlty smells still reports 1017 combined. The previous refactor was insufficient. |
+
+---
+
+### [2026-04-07] Pulse Triage Restoration and Linux Scheduler Fixes
+
+**Status:** In Progress (Phase 1/2)
+**Estimate:** ~3.5h across 2 tasks
+**TODOs:** t1916, t1917
+**Logged:** 2026-04-07
+**Trigger:** User noticed pulse stopped posting triage analysis comments on external `needs-maintainer-review` issues. Investigation revealed t1894's cryptographic approval gate was applied too broadly (blocking triage, not just dispatch). Separately, GH#17695 identified real Linux scheduler gaps.
+
+#### Purpose
+
+Two related fixes:
+1. **Pulse triage restoration** (t1916) -- remove the approval gate from triage dispatch so the pulse posts analysis comments on external issues before approval. The comment helps the maintainer decide whether to approve.
+2. **Linux scheduler completion** (t1917) -- fix dual-execution bug and complete systemd migration on Linux. macOS (launchd) is unaffected.
+
+#### Development Environment
+
+| Item | Value |
+|------|-------|
+| Language/runtime | Shell (bash 3.2) |
+| Tests | shellcheck, manual triage verification |
+| Constraints | macOS launchd path must remain unchanged. Approval gate must stay on implementation dispatch. |
+
+#### Progress
+
+- [ ] (2026-04-07) t1916: Remove approval gate from triage dispatch ~25m
+- [ ] (2026-04-07) t1917: Linux scheduler dual-execution fix ~3h
+
+#### Decision Log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-04-07 | Triage exempt from approval gate | Triage is read + comment, not code execution. The comment is what helps the maintainer decide whether to approve. Blocking it defeats the purpose. |
+| 2026-04-07 | Accept GH#17695 despite being Linux-only | Valid cross-platform work. macOS uses launchd correctly. Linux scheduler path had real bugs. |
+| 2026-04-07 | t1916 implemented first | Quick fix, enables triage on GH#17695 immediately. t1917 can be dispatched to workers. |
+
+---
+
+### [2026-04-03] mngr-Inspired Quality and Architecture Improvements
+
+**Status:** Planning
+**Estimate:** ~18.5h across 4 tasks
+**TODOs:** t1876, t1877, t1878, t1879
+**Logged:** 2026-04-03
+**Trigger:** Analysis of [imbue-ai/mngr](https://github.com/imbue-ai/mngr/) (MIT-licensed agent process manager) identified 4 adoptable patterns for aidevops. Three are quality/pipeline improvements; one is strategic research for the SaaS agent hosting roadmap.
+
+#### Purpose
+
+Adopt proven patterns from mngr's architecture to improve aidevops in two dimensions:
+1. **Quality pipeline** (t1876, t1877, t1878) -- better signal mining, structured reviews, and regression prevention. These enrich existing systems (session miner, audit agents, linters) rather than creating new ones.
+2. **Strategic research** (t1879) -- evaluate mngr's tmux/provider/idle-detection architecture as a design reference for aidevops SaaS agent hosting, where users need AI agents running in secure containers.
+
+#### Development Environment
+
+| Item | Value |
+|------|-------|
+| Language/runtime | Shell (bash 3.2), Python 3.11+ (session miner), Markdown |
+| Tests | shellcheck, markdownlint-cli2, ratchet self-test |
+| Constraints | No new tools/commands -- enrich existing pipelines. Conservative false-positive tolerance (user directive). |
+
+#### Progress
+
+- [ ] (2026-04-03) t1876: Add `instruction_to_save` detection to session miner ~4h
+- [ ] (2026-04-03) t1877: Structured code review categories reference doc ~2.5h
+- [ ] (2026-04-03) t1878: Ratchet pattern for quality regression prevention ~4h
+- [ ] (2026-04-03) t1879: Research mngr architecture for SaaS agent hosting ~8h
+
+#### Decision Log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-04-03 | Enrich session miner instead of creating `/verify-conversation` command | We already have session-miner-pulse.sh (743 lines) and autoagent signal-mining.md. Adding a signal source is cheaper than a new command and uses the established pipeline. |
+| 2026-04-03 | Drop worktree ownership lock file idea | User warned about false positives disrupting productivity. Current prompt-level enforcement works. Revisit only if session miner shows evidence of actual ownership collisions. |
+| 2026-04-03 | Ratchets advisory by default, --strict for CI | Productivity > strictness. Developers shouldn't be blocked by ratchets during interactive work, but CI should enforce them. |
+| 2026-04-03 | t1879 is research-only, no code | SaaS hosting is strategic but premature to implement. Design doc informs future tasks when that work begins. |
+| 2026-04-03 | Credit mngr in CREDITS.md | Attribution for design inspiration and patterns adopted. |
+
+#### Surprises & Discoveries
+
+- mngr and aidevops are complementary, not competing: mngr manages agent *processes*; aidevops manages agent *intelligence and workflow*. mngr could be a provider backend for aidevops headless dispatch.
+- mngr's convention-based state (no database, prefix naming) is resilient but slower for multi-tenant SaaS. A thin metadata layer on top would be needed.
+- mngr's conversation review categories include `instruction_to_save` -- detecting persistent user guidance -- which has no equivalent in our pipeline. This is the highest-novelty finding.
+- Their ratchet pattern (`test_ratchets.py`) is simple but effective: ~50 lines of code prevent quality regression across an entire codebase.
+
+### [2026-03-31] Chromium Debug Use Live Chromium Session Skill
+
+**Status:** In Progress (Phase 1/4 after foundation)
+**Estimate:** ~6h (ai:4h test:45m read:1h15m)
+**TODOs:** t1706, t1707, t1708, t1709, t1710
+**PRs:** #14956 (foundation)
+**Logged:** 2026-03-31
+**Trigger:** User wants an aidevops-owned `chromium-debug-use` agent/skill for inspecting what is already open in a Chromium-based browser, teaching the user how to enable the required debugging path for that browser, and using the live session as a fast discovery step before formal automation planning.
+
+#### Purpose
+
+PR #14956 already landed the initial `chromium-debug-use` browser guide and baseline discovery links. The remaining gap is turning that foundation into a fuller worker-ready capability with explicit browser enablement guidance, a loadable skill/helper surface, deeper automation-planning handoff rules, and bounded future-scope documentation.
+
+V1 should optimize for the fastest path to answer: “help me understand or interact with what I already have open right now.” It should not replace Playwright, dev-browser, Stagehand, or Playwriter. Instead, it should provide a low-friction attach path, explicit consent model, and a clean handoff into the heavier tools when the task shifts from investigation to repeatable automation.
+
+#### Development Environment
+
+| Item | Value |
+|------|-------|
+| Language/runtime | Markdown, Bash 3.2 wrapper(s), Node.js 22+ for direct CDP/WebSocket access |
+| Install | Prefer zero npm install for v1 helper path; reuse repo conventions for shell helpers and tool docs |
+| Tests | `markdownlint-cli2` for new docs, `shellcheck` for any new shell helper, and a documented manual smoke check against a supported Chromium browser |
+| Do NOT | Replace the existing browser stack, require a browser extension for v1, or promise blanket Electron support before adapter constraints are documented |
+
+#### Linkage (The Pin)
+
+| Concept | Files | Lines | Synonyms |
+|---------|-------|-------|----------|
+| Existing-browser routing gap | `.agents/tools/browser/browser-automation.md` | 17-35, 69-79 | current browser, live session, browser selection |
+| Existing-browser automation baseline | `.agents/tools/browser/playwriter.md` | 23-35 | Playwriter, attached browser, extension attach |
+| Inspection/debugging companion | `.agents/tools/browser/chrome-devtools.md` | 21-25, 39-54 | DevTools MCP, debugging, network inspection |
+| Managed persistent browser alternative | `.agents/tools/browser/dev-browser.md` | 21-35, 161-170 | dev-browser, persistent profile, stateful automation |
+| Top-level browser routing entry | `.agents/build-plus.md` | 124-126 | browser automation, tool routing |
+
+#### Progress
+
+- [x] (2026-03-31 15:28Z) Foundation: initial `chromium-debug-use` browser guide and baseline discovery links landed via PR #14956 (`t1706`) ~1h
+- [ ] (2026-03-31 16:00Z) Phase 1: add the loadable skill entry point, helper wrapper, and richer attach operations for live Chromium sessions (`t1707`) ~2h
+- [ ] (2026-03-31 16:00Z) Phase 2: add per-browser enablement, consent, and safety guidance for Chrome-family browsers (`t1708`) ~1h
+- [ ] (2026-03-31 16:00Z) Phase 3: deepen browser tool routing and “inspect before automating” workflow guidance (`t1709`) ~1.5h
+- [ ] (2026-03-31 16:00Z) Phase 4: document the Electron/macOS extension envelope and recommended follow-up boundaries (`t1710`) ~1h
+
+#### Decision Log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-03-31 | Name the aidevops-owned capability `chromium-debug-use` | User explicitly wants that identity, and it distinguishes the tool from broader “browser-use” style automation claims. |
+| 2026-03-31 | Treat PR #14956 as shipped foundation and re-scope follow-ups around it | A pulse worker merged the initial guide before the planning commit landed, so the remaining tasks should build on that work instead of duplicating it. |
+| 2026-03-31 | Keep v1 Chromium-only | Chromium browsers expose the same CDP family and satisfy the immediate “current browser window/webapp” use case with lower complexity than cross-engine support. |
+| 2026-03-31 | Require explicit user approval before attaching to a live session | This is a more privileged attach path than isolated automation and should always be framed as opt-in local inspection. |
+| 2026-03-31 | Position the tool as investigation-first, not automation-stack replacement | Playwright, Stagehand, dev-browser, Playwriter, and DevTools MCP already cover repeatable automation, self-healing, or deep analysis better once the session has been understood. |
+| 2026-03-31 | Treat Electron and macOS automation as extension paths, not promised v1 scope | Electron support varies by app launch model and exposed debugging endpoint; macOS automation is valuable mainly for focus/discovery/handoff rather than DOM control. |
+
+#### Surprises & Discoveries
+
+- The upstream `chrome-cdp-skill` model proves there is a small-footprint Node 22+ path with no npm install and a daemonized attach model, so the main aidevops work is packaging, consent, routing, and verification rather than raw protocol feasibility.
+- A pulse worker merged the initial browser guide from issue creation alone before the TODO/plan commit landed, which means follow-up planning must account for live GitHub state instead of assuming a clean queue.
 
 ### [2026-03-27] Context Token Optimization — Reduce Session Baseline
 
@@ -7480,6 +7691,51 @@ Note: Additional tools (Tor, YubiKey, Whonix, Tails, etc.) assessed and added as
 - matterbridge-simplex already exists (MIT, 52 commits, Docker-compose ready) — no need to build a custom SimpleX-Matrix bridge from scratch
 - Matterbridge supports 40+ platforms — one bridge config gives us SimpleX + Matrix + Telegram + Discord + Slack + IRC simultaneously
 - `/hide` prefix in SimpleX messages prevents bridging — useful for private comms that should stay on SimpleX only
+
+---
+
+### [2026-04-07] Qlty Maintainability A-Grade Recovery
+
+**Goal:** Recover the Qlty maintainability badge from C to A and keep it there permanently through process tightening.
+
+**Status:** Active — tasks created, dependency-ordered dispatch.
+
+**Root Cause Analysis (2026-04-07):**
+- 224 smell findings across 45 files (Python/JS/TS/MJS)
+- Top contributor: `oauth-pool.mjs` (complexity 440, t1860 — never completed despite being marked closed)
+- 15 of 45 files in `.agents/plugins/opencode-aidevops/` (~1,300 combined complexity)
+- Completed tasks (t1858, t1861) didn't fully resolve — Qlty still flags them
+- `complexity-scan-helper.sh` only scans `.sh`/`.md` — blind to Qlty-scored file types
+- No CI gate prevents new smells from landing
+- `complexity-thresholds.conf` bumped UP 11 times, never ratcheted down
+
+**Tasks (dependency order):**
+
+| Task | Title | Tier | Blocked by | GH# |
+|------|-------|------|------------|-----|
+| t1860 | Reduce oauth-pool.mjs complexity (440→120) | reasoning | — | #440 |
+| t1915 | Add Qlty verification to simplification templates | simple | — | #17704 |
+| t1910 | Extend scanner to .py/.mjs/.js/.ts | standard | — | #17699 |
+| t1911 | Add Qlty smells CI gate (diff mode) | standard | — | #17700 |
+| t1913 | Automate ratchet-down | standard | — | #17702 |
+| t1912 | Post-merge re-queue for persistent smells | standard | t1910 | #17701 |
+| t1914 | Plugin directory decomposition | reasoning | t1860 | #17703 |
+
+**Scope/Direction:**
+- t1860 + t1914 address the smell backlog (cure)
+- t1911 + t1912 prevent regression (gate)
+- t1910 + t1913 + t1915 close process gaps (infrastructure)
+
+#### Decision Log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-04-07 | Scanner must cover Qlty-scored types | Scanner was blind to 100% of badge-relevant files |
+| 2026-04-07 | CI gate in diff mode, not --all | --all would fail every PR (224 pre-existing smells) |
+| 2026-04-07 | Re-queue with pass limit (3) then escalate | Prevents infinite re-simplification loops |
+| 2026-04-07 | Plugin decomposition at tier:reasoning | Architectural work requiring dependency graph analysis |
+| 2026-04-07 | Ratchet-down proposed at actual+2 buffer | Prevents flapping from concurrent PRs |
+| 2026-04-07 | GH#440 was never completed (PR#13932 was wrong file) | Worker closed with wrong evidence — re-opened |
 
 ---
 

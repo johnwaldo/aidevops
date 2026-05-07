@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2155
 #
 # migrate-pr-backfill.sh — Retroactive PR backfill for supervisor DB (t237)
@@ -16,6 +18,8 @@
 #
 # Options:
 #   --dry-run   Show what would be updated without making changes
+#
+# Sources shared-constants.sh for portable stat functions.
 #   --verbose   Show detailed output for each task
 #   --task <id> Process only a specific task ID (for testing)
 #
@@ -24,6 +28,10 @@
 #   1 — Fatal error (DB not found, GitHub CLI unavailable)
 
 set -euo pipefail
+
+# shellcheck source=shared-constants.sh
+_mpb_dir="${BASH_SOURCE[0]%/*}"
+[[ -f "${_mpb_dir}/shared-constants.sh" ]] && source "${_mpb_dir}/shared-constants.sh"
 
 # --- Configuration -----------------------------------------------------------
 
@@ -119,7 +127,7 @@ detect_repo_slug() {
 	return 0
 }
 
-# --- Validate PR belongs to task (mirrors supervisor-helper.sh:5110) ----------
+# --- Validate PR belongs to task ----------
 
 validate_pr_belongs_to_task() {
 	local task_id="$1"
@@ -177,7 +185,7 @@ validate_pr_belongs_to_task() {
 	return 1
 }
 
-# --- Write proof log entry (mirrors supervisor-helper.sh:264) -----------------
+# --- Write proof log entry -----------------
 
 write_proof_log() {
 	local task_id="$1"
@@ -208,7 +216,7 @@ fetch_merged_prs() {
 	# Use cache if less than 5 minutes old
 	if [[ -f "$cache_file" ]]; then
 		local cache_age
-		cache_age=$(($(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0)))
+		cache_age=$(($(date +%s) - $(_file_mtime_epoch "$cache_file")))
 		if ((cache_age < 300)); then
 			log "Using cached PR list (${cache_age}s old)"
 			cat "$cache_file"

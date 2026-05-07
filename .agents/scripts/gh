@@ -1,0 +1,1070 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+# =============================================================================
+# gh shim — auto-inject signature footer on write commands (t2685)
+#            + GraphQL→REST read rewriting under low budget (t3037)
+# =============================================================================
+#
+# Intercepts GitHub content writes (`gh issue/pr create|edit|comment|review`
+# and selected `gh api` REST write endpoints), calls
+# gh-signature-helper.sh footer, and appends the footer to --body / --body-file
+# when the canonical HTML marker `<!-- aidevops:sig -->` is missing. Every
+# other gh subcommand is passed straight through with minimal overhead.
+#
+# Why this exists
+# ---------------
+# The shell-level wrappers in shared-gh-wrappers.sh (gh_issue_comment,
+# gh_create_issue, gh_create_pr, gh_pr_comment) auto-inject the signature —
+# but ONLY when callers invoke them by name. Raw `gh issue comment …` from
+# an opencode Bash tool call, a shell script, or an interactive terminal
+# bypasses them entirely, because the shell wrapper is a function name, not
+# a binary on PATH. This shim closes that gap: it sits on PATH before the
+# real `gh` binary, so every gh invocation — no matter the caller — goes
+# through sig enforcement.
+#
+# Design principles
+# -----------------
+#   1. Fast path: non-write subcommands pay a single case-match then exec.
+#   2. Fail-open: if anything goes wrong (missing helper, sourcing failure,
+#      malformed args), exec the real gh without modification. A broken
+#      shim must never break `gh` for the user.
+#   3. Recursion guard: if the shim somehow re-enters (subprocess inherits
+#      PATH), the second invocation short-circuits to the real gh.
+#   4. Single source of truth: uses the same marker (`<!-- aidevops:sig -->`)
+#      as _gh_wrapper_auto_sig in shared-gh-wrappers.sh for idempotent dedup.
+#
+# Bypass
+# ------
+#   AIDEVOPS_GH_SHIM_DISABLE=1 gh …          # skip entire shim
+#   AIDEVOPS_GH_SHIM_NO_REST_REWRITE=1 gh …  # skip read-rewrite only (t3037)
+#
+# Runtime-vs-pre-execution split (t2893)
+# --------------------------------------
+# Two enforcement layers cooperate, separated by WHEN they run:
+#   - JS plugin hook (quality-hooks-signature.mjs):
+#       Runs PRE-bash-execution. Blocks gh writes missing the signature,
+#       repairs `--body` and pre-existing `--body-file` in place. CANNOT
+#       see files that bash will create later in the same call — the
+#       readFileSync sees ENOENT and now reports FAIL_REASON.FILE_NOT_FOUND
+#       with same-bash-call mentorship instead of a generic guess.
+#   - This PATH shim:
+#       Runs at EXEC-TIME (after bash finishes building --body-file). The
+#       file exists at the moment gh is invoked, so this layer is the
+#       canonical enforcement point for the same-bash-call shape. The JS
+#       hook is the canonical enforcement point for `--body "literal"`
+#       writes (where exec-time has no opportunity to mutate the body).
+# When the JS hook blocks a `--body-file` call whose file is created
+# earlier in the same bash command, the worker should split into two
+# bash calls or source `shared-gh-wrappers.sh` and call gh_issue_comment
+# (etc.) by name. The wrapper-sourcing path runs in the worker's shell
+# AFTER the file-creation steps complete, then this shim takes over for
+# the actual gh exec. AIDEVOPS_GH_SHIM_DISABLE=1 only defeats this shim
+# — the JS hook still blocks unsigned writes.
+#
+# Related
+# -------
+#   .agents/plugins/opencode-aidevops/quality-hooks.mjs — JS-side enforcement
+#   .agents/plugins/opencode-aidevops/quality-hooks-signature.mjs — t2893 structured failures
+#   .agents/AGENTS.md "Signature footer hallucination (t2685)" — prompt-level rule
+#   .agents/scripts/shared-gh-wrappers.sh _gh_wrapper_auto_sig — reference impl
+# =============================================================================
+
+_SHIM_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || _SHIM_DIR=""
+
+# -----------------------------------------------------------------------------
+# Source instrumentation helper for gh_record_call (GH#21857 — full visibility).
+# Load once here rather than lazily inside _shim_rest_rewrite_read so ALL gh
+# calls — not just REST-fallback reads — are captured in the log.
+# Fail-open: if the helper is unavailable, define a no-op stub so every
+# gh_record_call site below is unconditionally safe.
+# -----------------------------------------------------------------------------
+_INST_LOADED=0
+for _cand in \
+	"$_SHIM_DIR/gh-api-instrument.sh" \
+	"$HOME/.aidevops/agents/scripts/gh-api-instrument.sh"; do
+	if [[ -f "$_cand" ]]; then
+		# shellcheck source=/dev/null
+		source "$_cand" 2>/dev/null && _INST_LOADED=1
+		break
+	fi
+done
+if [[ $_INST_LOADED -eq 0 ]]; then
+	gh_record_call() { return 0; }
+fi
+unset _cand _INST_LOADED
+
+# _shim_classify_endpoint <sub1> [<sub2>]
+# Classify a gh invocation for instrumentation. Returns one of:
+#   graphql | rest | search-graphql | other
+# Follows the classification from GH#21857:
+#   gh search *        → search-graphql
+#   gh api graphql     → graphql
+#   gh api <other>     → rest  (REST API endpoints)
+#   gh pr|issue|…      → graphql (default for gh CLI commands)
+_shim_classify_endpoint() {
+	local sub1="${1:-}" sub2="${2:-}"
+	case "$sub1" in
+	search)
+		printf 'search-graphql'
+		return 0
+		;;
+	api)
+		if [[ "$sub2" == "graphql" || "$sub2" == graphql/* ]]; then
+			printf 'graphql'
+		else
+			printf 'rest'
+		fi
+		return 0
+		;;
+	*)
+		# gh pr *, gh issue *, gh run *, gh repo *, etc. — all classified
+		# as graphql since the majority of gh CLI commands use the GraphQL
+		# endpoint internally. REST-dominant commands (gh release, gh run)
+		# can be reclassified in a follow-up once usage data confirms the
+		# breakdown.
+		printf 'graphql'
+		return 0
+		;;
+	esac
+}
+
+# _shim_caller_label <sub1> [<sub2>]
+# Return a stable instrumentation label for gh shim calls.  The old catch-all
+# `gh-shim` label hid which read/list subcommand was consuming GraphQL budget;
+# keeping the label operation-specific makes duplicate pressure visible in
+# pulse-current-state-helper without changing call semantics.
+_shim_caller_label() {
+	local sub1="${1:-}" sub2="${2:-}"
+	case "${sub1}:${sub2}" in
+	issue:list) printf 'gh_issue_list' ;;
+	issue:view) printf 'gh_issue_view' ;;
+	pr:list) printf 'gh_pr_list' ;;
+	pr:view) printf 'gh_pr_view' ;;
+	api:graphql | api:graphql/*) printf 'gh_api_graphql' ;;
+	api:*) printf 'gh_api_rest' ;;
+	search:issues) printf 'gh_search_issues' ;;
+	search:prs) printf 'gh_search_prs' ;;
+	search:*) printf 'gh_search' ;;
+	*) printf 'gh_%s%s' "${sub1:-unknown}" "${sub2:+_${sub2}}" ;;
+	esac
+	return 0
+}
+
+# -----------------------------------------------------------------------------
+# Locate the REAL gh binary, excluding our own shim directory from PATH lookup
+# so we never recurse into ourselves even if PATH is unusual.
+# -----------------------------------------------------------------------------
+_find_real_gh() {
+	local p
+	local IFS=:
+	for p in $PATH; do
+		[[ -n "$_SHIM_DIR" && "$p" == "$_SHIM_DIR" ]] && continue
+		[[ -x "$p/gh" ]] || continue
+		printf '%s\n' "$p/gh"
+		return 0
+	done
+	# Fallback: well-known install locations
+	for p in /opt/homebrew/bin/gh /usr/local/bin/gh /usr/bin/gh; do
+		[[ -x "$p" ]] && {
+			printf '%s\n' "$p"
+			return 0
+		}
+	done
+	return 1
+}
+
+# -----------------------------------------------------------------------------
+# Fast pass-through for non-intercepted subcommands.
+# Every gh invocation pays this case-match plus one exec.
+# t2876: extended to include issue:edit and pr:edit so privacy-scan layer
+# protects body/title edits and review bodies the same way create/comment are
+# protected.
+# t3037: read subcommands (pr:view, issue:view, pr:list, issue:list) are
+# intercepted for GraphQL→REST budget-aware rewriting.
+# -----------------------------------------------------------------------------
+_SHIM_READ_REWRITE=""
+case "${1:-}:${2:-}" in
+	issue:comment | issue:create | issue:edit | pr:create | pr:comment | pr:edit | pr:review) ;;
+pr:view | issue:view | pr:list | issue:list)
+	# t3037: read subcommands — may be rewritten to REST when GraphQL budget
+	# is low. Falls through to the read-rewrite handler below.
+	_SHIM_READ_REWRITE="${1}:${2}"
+	;;
+api:*)
+	# `gh api` subcommand — needs further analysis for POST/PATCH write endpoints.
+	# Falls through to the api-specific handling block below.
+	;;
+*)
+	_real_gh="$(_find_real_gh)" || {
+		echo "[aidevops] gh shim: real gh binary not found on PATH" >&2
+		exit 127
+	}
+	# GH#21857/t3448: instrument every passthrough gh call (pr merge, pr checks,
+	# run list, repo clone, etc.) that previously bypassed all recording.
+	gh_record_call "$(_shim_classify_endpoint "${1:-}" "${2:-}")" "$(_shim_caller_label "${1:-}" "${2:-}")" 2>/dev/null || true
+	exec "$_real_gh" "$@"
+	;;
+esac
+
+# -----------------------------------------------------------------------------
+# Emergency bypass — matches the escape hatch documented in build.txt.
+# -----------------------------------------------------------------------------
+if [[ "${AIDEVOPS_GH_SHIM_DISABLE:-0}" == "1" ]]; then
+	_real_gh="$(_find_real_gh)" || {
+		echo "[aidevops] gh shim: real gh binary not found on PATH" >&2
+		exit 127
+	}
+	exec "$_real_gh" "$@"
+fi
+
+# -----------------------------------------------------------------------------
+# Recursion guard. If a subprocess somehow re-invokes us (e.g., PATH inherited
+# by a child that also has us first), short-circuit to the real gh.
+# -----------------------------------------------------------------------------
+if [[ -n "${_AIDEVOPS_GH_SHIM_ACTIVE:-}" ]]; then
+	_real_gh="$(_find_real_gh)" || exit 127
+	exec "$_real_gh" "$@"
+fi
+export _AIDEVOPS_GH_SHIM_ACTIVE=1
+
+REAL_GH="$(_find_real_gh)" || {
+	echo "[aidevops] gh shim: real gh binary not found; aborting" >&2
+	exit 127
+}
+
+# -----------------------------------------------------------------------------
+# t3037: GraphQL→REST budget-aware read rewriting.
+#
+# When GraphQL budget is below threshold, rewrite high-frequency read
+# subcommands (pr view, issue view, pr list, issue list) to use REST API
+# translators from shared-gh-wrappers-rest-fallback.sh. This captures
+# every worker `gh pr view` / `gh issue view` call without requiring
+# workers to source shared-gh-wrappers.sh.
+#
+# Bypass: AIDEVOPS_GH_SHIM_NO_REST_REWRITE=1
+# Fail-open: any error in sourcing, budget check, or REST call falls
+# through to the real gh binary.
+# -----------------------------------------------------------------------------
+if [[ -n "$_SHIM_READ_REWRITE" ]]; then
+	# Bypass — explicit override.
+	if [[ "${AIDEVOPS_GH_SHIM_NO_REST_REWRITE:-0}" == "1" ]]; then
+		exec "$REAL_GH" "$@"
+	fi
+
+	# _shim_extract_repo_and_args: Parse --repo/-R from args and build the
+	# stripped arg array for REST translator delegation. Sets _SHIM_REPO
+	# and _SHIM_REST_ARGS (global-ish, consumed by the caller).
+	# Returns 1 if no repo can be determined.
+	_shim_extract_repo_and_args() {
+		_SHIM_REPO=""
+		_SHIM_REST_ARGS=()
+		local _i=0
+		local _args=("$@")
+		# Extract --repo/-R from args.
+		while [[ $_i -lt ${#_args[@]} ]]; do
+			case "${_args[$_i]}" in
+			--repo)   _SHIM_REPO="${_args[_i + 1]:-}"; _i=$((_i + 2)); continue ;;
+			--repo=*) _SHIM_REPO="${_args[$_i]#--repo=}" ;;
+			-R)       _SHIM_REPO="${_args[_i + 1]:-}"; _i=$((_i + 2)); continue ;;
+			-R*)      _SHIM_REPO="${_args[$_i]#-R}" ;;
+			esac
+			_i=$((_i + 1))
+		done
+		if [[ -z "$_SHIM_REPO" ]]; then
+			_SHIM_REPO=$(gh api repos/:owner/:repo --jq '.full_name' 2>/dev/null) || true
+			[[ -z "$_SHIM_REPO" ]] && return 1
+		fi
+		# Build stripped args: skip first two positional args and --repo/-R.
+		local _positional_count=0 _skip_next=0
+		for (( _i=0; _i < ${#_args[@]}; _i++ )); do
+			if [[ $_skip_next -eq 1 ]]; then _skip_next=0; continue; fi
+			local _a="${_args[$_i]}"
+			if [[ "$_a" != -* && $_positional_count -lt 2 ]]; then
+				_positional_count=$((_positional_count + 1))
+				continue
+			fi
+			case "$_a" in
+			--repo) _skip_next=1; continue ;; --repo=*) continue ;;
+			-R)     _skip_next=1; continue ;; -R*)      continue ;;
+			esac
+			_SHIM_REST_ARGS+=("$_a")
+		done
+		return 0
+	}
+
+	_shim_read_has_json_flag() {
+		local _arg=""
+		for _arg in "$@"; do
+			case "$_arg" in
+			--json | --json=*) return 0 ;;
+			esac
+		done
+		return 1
+	}
+
+	_shim_rest_rewrite_read() {
+		# Source the REST fallback helper (contains _rest_should_fallback
+		# and the _rest_* translator functions).
+		local _rest_helper=""
+		local _cand
+		for _cand in \
+			"$_SHIM_DIR/shared-gh-wrappers-rest-fallback.sh" \
+			"$HOME/.aidevops/agents/scripts/shared-gh-wrappers-rest-fallback.sh"; do
+			[[ -f "$_cand" ]] && { _rest_helper="$_cand"; break; }
+		done
+		[[ -z "$_rest_helper" ]] && return 1
+
+		# Source the instrumentation helper for gh_record_call. Fail-open.
+		local _inst_helper=""
+		for _cand in \
+			"$_SHIM_DIR/gh-api-instrument.sh" \
+			"$HOME/.aidevops/agents/scripts/gh-api-instrument.sh"; do
+			[[ -f "$_cand" ]] && { _inst_helper="$_cand"; break; }
+		done
+		# shellcheck source=/dev/null
+		[[ -n "$_inst_helper" ]] && source "$_inst_helper" 2>/dev/null || true
+		# shellcheck source=/dev/null
+		source "$_rest_helper" 2>/dev/null || return 1
+
+		# `gh * view/list --json ...` can include GraphQL-only safety-gate fields
+		# (reviews, statusCheckRollup, reviewDecision). Preserve gate safety by
+		# leaving non-equivalent reads on GraphQL. REST translators map common
+		# issue/pr list/view fields onto gh-shaped output, and REST-first mode may
+		# use them while GraphQL is healthy when the args are semantically safe.
+		case "$_SHIM_READ_REWRITE" in
+		pr:list) _rest_pr_list_can_preserve_args "$@" || return 1 ;;
+		pr:view) _rest_pr_view_can_preserve_args "$@" || return 1 ;;
+		issue:list | issue:view) ;;
+		*)
+			_shim_read_has_json_flag "$@" && return 1
+			;;
+		esac
+
+		# Prefer REST in pulse/workflow REST-first mode; otherwise use the legacy
+		# low-GraphQL-budget fallback. This shares native GitHub quota pools instead
+		# of imposing a synthetic lower GraphQL budget.
+		_rest_read_first_enabled || _rest_should_fallback || return 1
+
+		# Extract repo and build stripped args.
+		_shim_extract_repo_and_args "$@" || return 1
+
+		# Record the call as REST under the original gh operation. The REST
+		# translator records its own _rest_* label too; this shadow record keeps
+		# before/after ratios visible for the original high-frequency command.
+		gh_record_call rest "$(_shim_caller_label "${1:-}" "${2:-}")" 2>/dev/null || true
+
+		# Dispatch to the appropriate REST translator.
+		case "$_SHIM_READ_REWRITE" in
+		pr:view)    _rest_pr_view "${_SHIM_REST_ARGS[@]}" --repo "$_SHIM_REPO" ;;
+		issue:view) _rest_issue_view "${_SHIM_REST_ARGS[@]}" --repo "$_SHIM_REPO" ;;
+		pr:list)    _rest_pr_list "${_SHIM_REST_ARGS[@]}" --repo "$_SHIM_REPO" ;;
+		issue:list)
+			if _rest_args_have_search "${_SHIM_REST_ARGS[@]}"; then
+				_rest_issue_search "${_SHIM_REST_ARGS[@]}" --repo "$_SHIM_REPO"
+			else
+				_rest_issue_list "${_SHIM_REST_ARGS[@]}" --repo "$_SHIM_REPO"
+			fi
+			;;
+		*) return 1 ;;
+		esac
+		return $?
+	}
+
+	# Attempt REST rewrite. On success, exit with the translator's status.
+	# On failure (helper missing, budget OK, REST error), fall through to
+	# the real gh binary — fail-open.
+	if _shim_rest_rewrite_read "$@"; then
+		exit 0
+	else
+		_rest_rc=$?
+		# If the REST translator ran but returned non-zero (actual API error
+		# vs. budget-OK/missing-helper), propagate the error rather than
+		# retrying via GraphQL (which would also fail if budget is exhausted).
+		# Budget-OK returns rc=1 from _rest_should_fallback; we only
+		# get here when rc=1 from the function wrapper. The translator errors
+		# are already printed to stderr by the _rest_* functions.
+		# Conservative: always fall through to real gh.
+		# GH#21857/t3448: record the graphql call — the real gh will use GraphQL.
+		gh_record_call graphql "$(_shim_caller_label "${1:-}" "${2:-}")" 2>/dev/null || true
+		exec "$REAL_GH" "$@"
+	fi
+fi
+
+# -----------------------------------------------------------------------------
+# Locate signature helper.
+# -----------------------------------------------------------------------------
+SIG_HELPER=""
+for _cand in \
+	"$_SHIM_DIR/gh-signature-helper.sh" \
+	"$HOME/.aidevops/agents/scripts/gh-signature-helper.sh"; do
+	if [[ -x "$_cand" ]]; then
+		SIG_HELPER="$_cand"
+		break
+	fi
+done
+
+if [[ -z "$SIG_HELPER" ]]; then
+	# No helper available — fail-open: exec real gh unchanged.
+	exec "$REAL_GH" "$@"
+fi
+
+# -----------------------------------------------------------------------------
+# _shim_api_is_write_endpoint
+# Returns 0 (true) when the current _modified_args array represents a
+# POST or PATCH to an issue, issue-comment, PR, PR-review, or PR-review-comment
+# REST endpoint.
+# Recognises: /repos/*/issues, /repos/*/issues/N/comments, /repos/*/pulls,
+# /repos/*/pulls/N/reviews, and PR review-comment endpoints.
+# Leaves GET, DELETE, and non-content endpoints (e.g. /labels PATCH) untouched.
+# -----------------------------------------------------------------------------
+_shim_api_is_write_endpoint() {
+	local method="" path="" i a
+	i=0
+	while [[ $i -lt ${#_modified_args[@]} ]]; do
+		a="${_modified_args[$i]}"
+		case "$a" in
+		-X)
+			method="${_modified_args[i + 1]:-}"
+			i=$((i + 2))
+			continue
+			;;
+		-X*) method="${a#-X}" ;;
+		--method)
+			method="${_modified_args[i + 1]:-}"
+			i=$((i + 2))
+			continue
+			;;
+		--method=*) method="${a#--method=}" ;;
+		-f | --field | -F | --raw-field | --jq | -H | --header | --input | --template | --cache | --hostname | --preview)
+			i=$((i + 2))
+			continue
+			;;
+		api) ;;
+		/repos/* | repos/*) [[ -z "$path" ]] && path="$a" ;;
+		-*) ;;
+		*) [[ -z "$path" ]] && path="$a" ;;
+		esac
+		i=$((i + 1))
+	done
+	[[ "$method" != "POST" && "$method" != "PATCH" ]] && return 1
+	local npath="${path#/}"
+	[[ "$npath" =~ ^repos/[^/]+/[^/]+/issues(/[0-9]+)?(\?.*)?$ ]] && return 0
+	[[ "$npath" =~ ^repos/[^/]+/[^/]+/issues(/[0-9]+/comments|/comments/[0-9]+)(\?.*)?$ ]] && return 0
+	[[ "$npath" =~ ^repos/[^/]+/[^/]+/pulls(/[0-9]+)?(\?.*)?$ ]] && return 0
+	[[ "$npath" =~ ^repos/[^/]+/[^/]+/pulls(/[0-9]+/(comments|reviews)|/[0-9]+/reviews/[0-9]+)(\?.*)?$ ]] && return 0
+	[[ "$npath" =~ ^repos/[^/]+/[^/]+/pulls/comments/[0-9]+(\?.*)?$ ]] && return 0
+	return 1
+}
+
+_shim_api_target_from_path() {
+	local path=""
+	local i=0
+	local a=""
+	while [[ $i -lt ${#_modified_args[@]} ]]; do
+		a="${_modified_args[$i]}"
+		case "$a" in
+		-f | --field | -F | --raw-field | --jq | -H | --header | --input | --template | --cache | --hostname | --preview | -X | --method)
+			i=$((i + 2))
+			continue
+			;;
+		api) ;;
+		/repos/* | repos/*) [[ -z "$path" ]] && path="$a" ;;
+		-*) ;;
+		*) [[ -z "$path" ]] && path="$a" ;;
+		esac
+		i=$((i + 1))
+	done
+	local npath="${path#/}"
+	if [[ "$npath" =~ ^repos/([^/]+/[^/]+)(/|$|\?) ]]; then
+		printf 'https://github.com/%s\n' "${BASH_REMATCH[1]}"
+		return 0
+	fi
+	return 1
+}
+
+# -----------------------------------------------------------------------------
+# _shim_api_inject_body_sig
+# Scans _modified_args for -f/-F body=@<file> or body=<inline> arguments
+# and injects the sig footer (idempotent via marker check). Mutates
+# _modified_args in place. Fail-open on any error.
+# -----------------------------------------------------------------------------
+_shim_api_inject_body_sig() {
+	local i=0 a _next _kv _bfile _bval _footer
+	while [[ $i -lt ${#_modified_args[@]} ]]; do
+		a="${_modified_args[$i]}"
+		case "$a" in
+		-f | -F | --field | --raw-field)
+			# Separate-arg form: -f body=value / --field body=value
+			_next="${_modified_args[i + 1]:-}"
+			case "$_next" in
+			body=@*)
+				_bfile="${_next#body=@}"
+				if [[ -f "$_bfile" ]] && ! grep -q "<!-- aidevops:sig -->" "$_bfile" 2>/dev/null; then
+					_footer=$("$SIG_HELPER" footer 2>/dev/null) || true
+					[[ -n "$_footer" ]] && printf '%s' "$_footer" >>"$_bfile" || true
+				fi
+				;;
+			body=*)
+				_bval="${_next#body=}"
+				if [[ "$_bval" != *"<!-- aidevops:sig -->"* ]]; then
+					_footer=$("$SIG_HELPER" footer --body "$_bval" 2>/dev/null) || {
+						i=$((i + 2))
+						continue
+					}
+					[[ -n "$_footer" ]] && _modified_args[i + 1]="body=${_bval}${_footer}"
+				fi
+				;;
+			esac
+			i=$((i + 2))
+			continue
+			;;
+		-f* | -F* | --field=* | --raw-field=*)
+			# Attached form: -fbody=value / -Fbody=@file / --field=body=value / --raw-field=body=@file
+			case "$a" in
+			-f*)           _kv="${a#-f}" ;;
+			-F*)           _kv="${a#-F}" ;;
+			--field=*)     _kv="${a#--field=}" ;;
+			--raw-field=*) _kv="${a#--raw-field=}" ;;
+			esac
+			case "$_kv" in
+			body=@*)
+				_bfile="${_kv#body=@}"
+				if [[ -f "$_bfile" ]] && ! grep -q "<!-- aidevops:sig -->" "$_bfile" 2>/dev/null; then
+					_footer=$("$SIG_HELPER" footer 2>/dev/null) || true
+					[[ -n "$_footer" ]] && printf '%s' "$_footer" >>"$_bfile" || true
+				fi
+				;;
+			body=*)
+				_bval="${_kv#body=}"
+				if [[ "$_bval" != *"<!-- aidevops:sig -->"* ]]; then
+					_footer=$("$SIG_HELPER" footer --body "$_bval" 2>/dev/null) || {
+						i=$((i + 1))
+						continue
+					}
+					if [[ -n "$_footer" ]]; then
+						case "$a" in
+						-f*)           _modified_args[$i]="-fbody=${_bval}${_footer}" ;;
+						-F*)           _modified_args[$i]="-Fbody=${_bval}${_footer}" ;;
+						--field=*)     _modified_args[$i]="--field=body=${_bval}${_footer}" ;;
+						--raw-field=*) _modified_args[$i]="--raw-field=body=${_bval}${_footer}" ;;
+						esac
+					fi
+				fi
+				;;
+			esac
+			;;
+		esac
+		i=$((i + 1))
+	done
+	return 0
+}
+
+# -----------------------------------------------------------------------------
+# t2876: Privacy-scan layer
+# After signature-footer injection, before exec'ing real gh, scan write
+# content for private-repo references when the target is a public repo.
+# Fail-closed on hit; fail-open on missing helper / unauthenticated gh /
+# unparseable args. Bypass via AIDEVOPS_GH_PRIVACY_BYPASS=1.
+# -----------------------------------------------------------------------------
+
+# Locate privacy-guard-helper.sh (same lookup pattern as SIG_HELPER above).
+_PRIVACY_HELPER=""
+for _cand in \
+	"$_SHIM_DIR/privacy-guard-helper.sh" \
+	"$HOME/.aidevops/agents/scripts/privacy-guard-helper.sh"; do
+	if [[ -f "$_cand" ]]; then
+		_PRIVACY_HELPER="$_cand"
+		break
+	fi
+done
+
+# _shim_privacy_scan
+# Returns 0 to allow exec, 1 to block (caller should print no extra
+# message — this function emits its own mentoring error to stderr).
+# Fail-open on every error path.
+_shim_privacy_scan() {
+	# Bypass — explicit override with audit log.
+	if [[ "${AIDEVOPS_GH_PRIVACY_BYPASS:-0}" == "1" ]]; then
+		printf '[aidevops][privacy-scan] BYPASSED via AIDEVOPS_GH_PRIVACY_BYPASS=1\n' >&2
+		return 0
+	fi
+
+	# Helper available?
+	if [[ -z "$_PRIVACY_HELPER" || ! -f "$_PRIVACY_HELPER" ]]; then
+		return 0 # fail-open
+	fi
+	# shellcheck source=/dev/null
+	source "$_PRIVACY_HELPER" 2>/dev/null || return 0
+
+	# Determine target repo from --repo arg, gh api /repos/owner/repo path, or
+	# current git remote.
+	local target_url="" _idx=0
+	while [[ $_idx -lt ${#_modified_args[@]} ]]; do
+		case "${_modified_args[$_idx]}" in
+		--repo)
+			target_url="${_modified_args[_idx + 1]:-}"
+			_idx=$((_idx + 2))
+			continue
+			;;
+		--repo=*) target_url="${_modified_args[$_idx]#--repo=}" ;;
+		-R)
+			target_url="${_modified_args[_idx + 1]:-}"
+			_idx=$((_idx + 2))
+			continue
+			;;
+		-R*) target_url="${_modified_args[$_idx]#-R}" ;;
+		esac
+		_idx=$((_idx + 1))
+	done
+	if [[ -z "$target_url" && "${_modified_args[0]:-}" == "api" ]]; then
+		target_url="$(_shim_api_target_from_path 2>/dev/null || true)"
+	fi
+	if [[ -z "$target_url" ]]; then
+		target_url=$(git remote get-url origin 2>/dev/null) || return 0
+		[[ -z "$target_url" ]] && return 0
+	fi
+	# Normalize bare owner/repo to a URL form privacy_is_target_public accepts.
+	if [[ "$target_url" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		target_url="https://github.com/${target_url}"
+	fi
+
+	# Public-target check — fail-open on private (rc=1) or unknown (rc=2).
+	privacy_is_target_public "$target_url"
+	local _pub_rc=$?
+	if [[ $_pub_rc -ne 0 ]]; then
+		return 0
+	fi
+
+	# Build content blob from --body / --body-file / --title args plus
+	# `-f body=...` / `-F body=@...` forms used by gh api. Secret-material
+	# egress scan runs before private-slug enumeration so it remains active even
+	# when the user has no private repos configured.
+	local _blob="" _bf _kv
+	_idx=0
+	while [[ $_idx -lt ${#_modified_args[@]} ]]; do
+		case "${_modified_args[$_idx]}" in
+		--body)
+			_blob+="${_modified_args[_idx + 1]:-}"$'\n'
+			_idx=$((_idx + 2))
+			continue
+			;;
+		--body=*) _blob+="${_modified_args[$_idx]#--body=}"$'\n' ;;
+		--body-file)
+			_bf="${_modified_args[_idx + 1]:-}"
+			[[ -n "$_bf" && -f "$_bf" ]] && _blob+="$(<"$_bf")"$'\n'
+			_idx=$((_idx + 2))
+			continue
+			;;
+		--body-file=*)
+			_bf="${_modified_args[$_idx]#--body-file=}"
+			[[ -n "$_bf" && -f "$_bf" ]] && _blob+="$(<"$_bf")"$'\n'
+			;;
+		--title)
+			_blob+="${_modified_args[_idx + 1]:-}"$'\n'
+			_idx=$((_idx + 2))
+			continue
+			;;
+		--title=*) _blob+="${_modified_args[$_idx]#--title=}"$'\n' ;;
+		-f | --field | -F | --raw-field)
+			_kv="${_modified_args[_idx + 1]:-}"
+			case "$_kv" in
+			body=@*)
+				_bf="${_kv#body=@}"
+				[[ -f "$_bf" ]] && _blob+="$(<"$_bf")"$'\n'
+				;;
+			body=*) _blob+="${_kv#body=}"$'\n' ;;
+			title=*) _blob+="${_kv#title=}"$'\n' ;;
+			esac
+			_idx=$((_idx + 2))
+			continue
+			;;
+		-f* | -F* | --field=* | --raw-field=*)
+			case "${_modified_args[$_idx]}" in
+			-f*) _kv="${_modified_args[$_idx]#-f}" ;;
+			-F*) _kv="${_modified_args[$_idx]#-F}" ;;
+			--field=*) _kv="${_modified_args[$_idx]#--field=}" ;;
+			--raw-field=*) _kv="${_modified_args[$_idx]#--raw-field=}" ;;
+			esac
+			case "$_kv" in
+			body=@*)
+				_bf="${_kv#body=@}"
+				[[ -f "$_bf" ]] && _blob+="$(<"$_bf")"$'\n'
+				;;
+			body=*) _blob+="${_kv#body=}"$'\n' ;;
+			title=*) _blob+="${_kv#title=}"$'\n' ;;
+			esac
+			;;
+		esac
+		_idx=$((_idx + 1))
+	done
+
+	local _secret_hits
+	_secret_hits=$(privacy_scan_secret_material_text "$_blob")
+	local _secret_scan_rc=$?
+	if [[ $_secret_scan_rc -eq 1 ]]; then
+		printf '\n[aidevops][privacy-scan][BLOCK] Write to public %s contains secret/private-key material:\n\n' "$target_url" >&2
+		printf '%s\n' "$_secret_hits" | sed 's/^/  /' >&2
+		printf '\n  Remove secret material before posting. Use synthetic fixtures only; never paste private keys or credential values.\n' >&2
+		printf '  Bypass (audit-logged): AIDEVOPS_GH_PRIVACY_BYPASS=1 gh ...\n\n' >&2
+		return 1
+	fi
+
+	# Enumerate private slugs.
+	local _slugs_file
+	_slugs_file=$(mktemp 2>/dev/null) || return 0
+	if ! privacy_enumerate_private_slugs "$_slugs_file" 2>/dev/null; then
+		rm -f "$_slugs_file"
+		return 0
+	fi
+	# Build content blob from --body / --body-file / --title args plus
+	# `-f body=...` / `-F body=@...` forms used by gh api.
+	_blob=""
+	_idx=0
+	while [[ $_idx -lt ${#_modified_args[@]} ]]; do
+		case "${_modified_args[$_idx]}" in
+		--body)
+			_blob+="${_modified_args[_idx + 1]:-}"$'\n'
+			_idx=$((_idx + 2))
+			continue
+			;;
+		--body=*) _blob+="${_modified_args[$_idx]#--body=}"$'\n' ;;
+		--body-file)
+			_bf="${_modified_args[_idx + 1]:-}"
+			[[ -n "$_bf" && -f "$_bf" ]] && _blob+="$(<"$_bf")"$'\n'
+			_idx=$((_idx + 2))
+			continue
+			;;
+		--body-file=*)
+			_bf="${_modified_args[$_idx]#--body-file=}"
+			[[ -n "$_bf" && -f "$_bf" ]] && _blob+="$(<"$_bf")"$'\n'
+			;;
+		--title)
+			_blob+="${_modified_args[_idx + 1]:-}"$'\n'
+			_idx=$((_idx + 2))
+			continue
+			;;
+		--title=*) _blob+="${_modified_args[$_idx]#--title=}"$'\n' ;;
+		-f | --field | -F | --raw-field)
+			_kv="${_modified_args[_idx + 1]:-}"
+			case "$_kv" in
+			body=@*)
+				_bf="${_kv#body=@}"
+				[[ -f "$_bf" ]] && _blob+="$(<"$_bf")"$'\n'
+				;;
+			body=*) _blob+="${_kv#body=}"$'\n' ;;
+			title=*) _blob+="${_kv#title=}"$'\n' ;;
+			esac
+			_idx=$((_idx + 2))
+			continue
+			;;
+		-f* | -F* | --field=* | --raw-field=*)
+			case "${_modified_args[$_idx]}" in
+			-f*) _kv="${_modified_args[$_idx]#-f}" ;;
+			-F*) _kv="${_modified_args[$_idx]#-F}" ;;
+			--field=*) _kv="${_modified_args[$_idx]#--field=}" ;;
+			--raw-field=*) _kv="${_modified_args[$_idx]#--raw-field=}" ;;
+			esac
+			case "$_kv" in
+			body=@*)
+				_bf="${_kv#body=@}"
+				[[ -f "$_bf" ]] && _blob+="$(<"$_bf")"$'\n'
+				;;
+			body=*) _blob+="${_kv#body=}"$'\n' ;;
+			title=*) _blob+="${_kv#title=}"$'\n' ;;
+			esac
+			;;
+		esac
+		_idx=$((_idx + 1))
+	done
+
+	if [[ -z "$_blob" ]]; then
+		rm -f "$_slugs_file"
+		return 0
+	fi
+
+	local _hits
+	_hits=$(privacy_scan_text "$_blob" "$_slugs_file")
+	local _scan_rc=$?
+	rm -f "$_slugs_file"
+
+	if [[ $_scan_rc -eq 1 ]]; then
+		printf '\n[aidevops][privacy-scan][BLOCK] Write to public %s contains private-repo references:\n\n' "$target_url" >&2
+		printf '%s\n' "$_hits" | sed 's/^/  /' >&2
+		printf '\n  Use generic placeholders (e.g. <webapp>) for private repo names before posting to public repos.\n' >&2
+		printf '  Private slugs source: privacy_enumerate_private_slugs (mirror_upstream/local_only in repos.json + ~/.aidevops/configs/privacy-guard-extra-slugs.txt).\n' >&2
+		printf '  Bypass (audit-logged): AIDEVOPS_GH_PRIVACY_BYPASS=1 gh ...\n\n' >&2
+		return 1
+	fi
+	return 0
+}
+
+# -----------------------------------------------------------------------------
+# Initialise the mutable args array used by all injection code below.
+# -----------------------------------------------------------------------------
+_modified_args=("$@")
+
+# -----------------------------------------------------------------------------
+# t3565: Raw interactive tracking-issue label normalization.
+#
+# The prompt rule says to use gh_create_issue/claim-task-id wrappers, but raw
+# `gh issue create` still reaches this PATH shim from ad-hoc Bash calls. When an
+# interactive session creates an aidevops-shaped tracking issue, inject the live
+# ownership labels that the wrappers would have applied so the issue is never
+# born invisible to review/dispatch guards.
+# -----------------------------------------------------------------------------
+_shim_arg_labels_contain() {
+	local labels="$1"
+	local needle="$2"
+	local old_ifs="$IFS"
+	local label=""
+	IFS=,
+	for label in $labels; do
+		label="${label#"${label%%[![:space:]]*}"}"
+		label="${label%"${label##*[![:space:]]}"}"
+		if [[ "$label" == "$needle" ]]; then
+			IFS="$old_ifs"
+			return 0
+		fi
+	done
+	IFS="$old_ifs"
+	return 1
+}
+
+_shim_arg_labels_have_prefix() {
+	local labels="$1"
+	local prefix="$2"
+	local old_ifs="$IFS"
+	local label=""
+	IFS=,
+	for label in $labels; do
+		label="${label#"${label%%[![:space:]]*}"}"
+		label="${label%"${label##*[![:space:]]}"}"
+		if [[ "$label" == "${prefix}"* ]]; then
+			IFS="$old_ifs"
+			return 0
+		fi
+	done
+	IFS="$old_ifs"
+	return 1
+}
+
+_shim_issue_create_get_title() {
+	local idx=0
+	local arg=""
+	while [[ $idx -lt ${#_modified_args[@]} ]]; do
+		arg="${_modified_args[$idx]}"
+		case "$arg" in
+		--title)
+			printf '%s\n' "${_modified_args[idx + 1]:-}"
+			return 0
+			;;
+		--title=*)
+			printf '%s\n' "${arg#--title=}"
+			return 0
+			;;
+		esac
+		idx=$((idx + 1))
+	done
+	return 1
+}
+
+_shim_issue_create_has_label() {
+	local wanted="$1"
+	local idx=0
+	local arg=""
+	while [[ $idx -lt ${#_modified_args[@]} ]]; do
+		arg="${_modified_args[$idx]}"
+		case "$arg" in
+		--label | -l)
+			_shim_arg_labels_contain "${_modified_args[idx + 1]:-}" "$wanted" && return 0
+			idx=$((idx + 2))
+			continue
+			;;
+		--label=*) _shim_arg_labels_contain "${arg#--label=}" "$wanted" && return 0 ;;
+		-l*) _shim_arg_labels_contain "${arg#-l}" "$wanted" && return 0 ;;
+		esac
+		idx=$((idx + 1))
+	done
+	return 1
+}
+
+_shim_issue_create_has_label_prefix() {
+	local prefix="$1"
+	local idx=0
+	local arg=""
+	while [[ $idx -lt ${#_modified_args[@]} ]]; do
+		arg="${_modified_args[$idx]}"
+		case "$arg" in
+		--label | -l)
+			_shim_arg_labels_have_prefix "${_modified_args[idx + 1]:-}" "$prefix" && return 0
+			idx=$((idx + 2))
+			continue
+			;;
+		--label=*) _shim_arg_labels_have_prefix "${arg#--label=}" "$prefix" && return 0 ;;
+		-l*) _shim_arg_labels_have_prefix "${arg#-l}" "$prefix" && return 0 ;;
+		esac
+		idx=$((idx + 1))
+	done
+	return 1
+}
+
+_shim_issue_create_has_type_label() {
+	local type_label=""
+	for type_label in bug enhancement documentation docs test tests refactor chore feature maintenance security; do
+		_shim_issue_create_has_label "$type_label" && return 0
+	done
+	return 1
+}
+
+_shim_normalize_interactive_tracking_issue_create() {
+	[[ "${_modified_args[0]:-}:${_modified_args[1]:-}" == "issue:create" ]] || return 0
+	[[ -z "${FULL_LOOP_HEADLESS:-}${AIDEVOPS_HEADLESS:-}${OPENCODE_HEADLESS:-}${GITHUB_ACTIONS:-}" ]] || return 0
+
+	local title=""
+	title="$(_shim_issue_create_get_title 2>/dev/null || true)"
+	[[ "$title" =~ ^(t[0-9]+(\.[0-9]+)*|GH#[0-9]+):[[:space:]] ]] || return 0
+
+	_shim_issue_create_has_label_prefix "origin:" || _modified_args+=(--label "origin:interactive")
+	_shim_issue_create_has_label_prefix "status:" || _modified_args+=(--label "status:in-review")
+	_shim_issue_create_has_type_label || _modified_args+=(--label "bug")
+	return 0
+}
+
+_shim_normalize_interactive_tracking_issue_create
+
+# -----------------------------------------------------------------------------
+# Handle `gh api` subcommand: intercept write calls to content endpoints.
+# Non-targeted api calls pass straight through after this block.
+# t2876: write endpoints also run through the privacy-scan layer.
+# -----------------------------------------------------------------------------
+if [[ "${1:-}" == "api" ]]; then
+	if _shim_api_is_write_endpoint; then
+		_shim_api_inject_body_sig
+		if ! _shim_privacy_scan; then
+			exit 1
+		fi
+	fi
+	# GH#21857: instrument gh api calls — rest or graphql depending on path.
+	gh_record_call "$(_shim_classify_endpoint "${1:-}" "${2:-}")" gh-shim 2>/dev/null || true
+	exec "$REAL_GH" "${_modified_args[@]}"
+fi
+
+# -----------------------------------------------------------------------------
+# Scan args for --body / --body-file and inject signature if missing.
+# Mirrors _gh_wrapper_auto_sig in shared-gh-wrappers.sh. Marker-based dedup
+# means idempotent: running the shim twice on the same args is a no-op.
+# -----------------------------------------------------------------------------
+_i=0
+_body_idx=-1
+_body_val=""
+_body_eq=0
+_body_file_idx=-1
+_body_file_val=""
+_body_file_eq=0
+
+while [[ $_i -lt ${#_modified_args[@]} ]]; do
+	case "${_modified_args[_i]}" in
+	--body)
+		_body_idx=$_i
+		_body_val="${_modified_args[_i + 1]:-}"
+		_body_eq=0
+		;;
+	--body=*)
+		_body_idx=$_i
+		_body_val="${_modified_args[_i]#--body=}"
+		_body_eq=1
+		;;
+	--body-file)
+		_body_file_idx=$_i
+		_body_file_val="${_modified_args[_i + 1]:-}"
+		_body_file_eq=0
+		;;
+	--body-file=*)
+		_body_file_idx=$_i
+		_body_file_val="${_modified_args[_i]#--body-file=}"
+		_body_file_eq=1
+		;;
+	esac
+	_i=$((_i + 1))
+done
+
+# --- --body case -------------------------------------------------------------
+if [[ $_body_idx -ge 0 && -n "$_body_val" ]]; then
+	if [[ "$_body_val" != *"<!-- aidevops:sig -->"* ]]; then
+		_sig_footer=$("$SIG_HELPER" footer --body "$_body_val" 2>/dev/null || echo "")
+		if [[ -n "$_sig_footer" ]]; then
+			_new_body="${_body_val}${_sig_footer}"
+			if [[ $_body_eq -eq 1 ]]; then
+				_modified_args[_body_idx]="--body=${_new_body}"
+			else
+				_modified_args[_body_idx + 1]="$_new_body"
+			fi
+		fi
+	fi
+fi
+
+# --- --body-file case --------------------------------------------------------
+# t2861: write the augmented content to a fresh temp file rather than appending
+# to the user's source. The user's brief on disk stays byte-identical after the
+# gh call. The temp file is cleaned up by a background reaper (the shim ends
+# with exec, which replaces the process and clears traps).
+if [[ $_body_file_idx -ge 0 && -n "$_body_file_val" && -f "$_body_file_val" ]]; then
+	if ! grep -q "<!-- aidevops:sig -->" "$_body_file_val" 2>/dev/null; then
+		_file_content=$(<"$_body_file_val") || _file_content=""
+		_sig_footer=$("$SIG_HELPER" footer --body "$_file_content" 2>/dev/null || echo "")
+		if [[ -n "$_sig_footer" ]]; then
+			# Build augmented body in a temp file we own — never mutate the source.
+			_tmp_body_file=$(mktemp -t aidevops-gh-shim-body.XXXXXX 2>/dev/null) || _tmp_body_file=""
+			if [[ -n "$_tmp_body_file" ]]; then
+				if printf '%s%s' "$_file_content" "$_sig_footer" >"$_tmp_body_file" 2>/dev/null; then
+					# Substitute the arg pointing at user's file with our temp file.
+					if [[ $_body_file_eq -eq 1 ]]; then
+						_modified_args[_body_file_idx]="--body-file=${_tmp_body_file}"
+					else
+						_modified_args[_body_file_idx + 1]="$_tmp_body_file"
+					fi
+					# Background reaper: exec replaces this process so EXIT traps
+					# never fire. Fork a sleep-then-rm to clean up the temp file
+					# after gh has had time to read it (30s >> typical gh runtime).
+					( sleep 30 && rm -f "$_tmp_body_file" ) &
+					disown
+				else
+					rm -f "$_tmp_body_file"
+					# Fall through: gh receives original file, footer is omitted.
+					# Better than corrupting the user's source on a write failure.
+				fi
+			fi
+			# If mktemp failed, fall through silently — same safe degradation.
+		fi
+	fi
+fi
+
+# t2876: privacy scan runs after sig footer injection — fail-closed on hit.
+if ! _shim_privacy_scan; then
+	exit 1
+fi
+
+# t2861: test-mode hook — short-circuits exec so regression tests can inspect
+# the resolved --body-file path without actually calling the real gh binary.
+# Usage: SHIM_TEST_MODE=1 ./gh issue create --body-file <file> ...
+if [[ "${SHIM_TEST_MODE:-}" == "1" ]]; then
+	_shim_t=0
+	while [[ $_shim_t -lt ${#_modified_args[@]} ]]; do
+		case "${_modified_args[$_shim_t]}" in
+		--body-file)
+			printf 'resolved_body_file=%s\n' "${_modified_args[_shim_t + 1]}"
+			;;
+		--body-file=*)
+			printf 'resolved_body_file=%s\n' "${_modified_args[$_shim_t]#--body-file=}"
+			;;
+		esac
+		_shim_t=$((_shim_t + 1))
+	done
+	exit 0
+fi
+
+# GH#21857: instrument write commands (issue comment/create/edit, pr create/
+# comment/edit) — these all use the GraphQL endpoint.
+gh_record_call graphql "$(_shim_caller_label "${1:-}" "${2:-}")" 2>/dev/null || true
+exec "$REAL_GH" "${_modified_args[@]}"

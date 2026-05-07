@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # MuAPI Helper - REST API client for MuAPI (muapi.ai)
 # Part of AI DevOps Framework
@@ -681,7 +683,8 @@ submit_specialized() {
 	local endpoint="$1"
 	local image_url="$2"
 	shift 2
-	local extra_payload="${1:-{}}"
+	local extra_payload="${1:-}"
+	[[ -n "$extra_payload" ]] || extra_payload="{}"
 	local poll_interval="${2:-${DEFAULT_POLL_INTERVAL}}"
 	local timeout="${3:-${DEFAULT_TIMEOUT}}"
 	local output_file="${4:-}"
@@ -1319,7 +1322,7 @@ Lipsync Options:
   --model <name>          Model: sync-lipsync, latentsync, creatify, veed (default: sync-lipsync)
 
 Face Swap Options:
-  --image <url>           Source image URL (required for image mode)
+  --image <url>           Source image URL (image mode, required)
   --video <url>           Source video URL (sets mode to video)
   --face <url>            Face reference image URL (required)
   --mode <image|video>    Swap mode (default: image)
@@ -1379,7 +1382,7 @@ Examples:
   muapi-helper.sh agent-create "I want an agent that creates minimalist brand assets"
 
   # Chat with an agent
-  muapi-helper.sh agent-chat agent_abc123 "Design a logo for Vapor"
+  muapi-helper.sh agent-chat agent_abc123 "Design a Vapor logo"
 
   # Check task status
   muapi-helper.sh status abc123-def456

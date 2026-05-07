@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # ai-judgment-helper.sh - Intelligent threshold replacement for aidevops
 # Replaces hardcoded thresholds with AI judgment calls (haiku-tier, ~$0.001 each).
 #
@@ -243,6 +245,7 @@ cmd_is_memory_relevant() {
 	fi
 	init_judgment_cache
 	local cache_key
+	# shell-portability: ignore next — sha256sum: macOS needs shasum -a 256 (GH#18787)
 	cache_key="relevance:$(echo -n "$_imr_content" | sha256sum | cut -d' ' -f1)"
 	local cached
 	cached=$(get_cached_judgment "$cache_key")
@@ -1106,6 +1109,7 @@ run_single_evaluator() {
 	fi
 	local cache_input="${_rse_eval_type}:${_rse_input_text}:${_rse_output_text}:${_rse_context_text}"
 	local cache_key
+	# shell-portability: ignore next — sha256sum: macOS needs shasum -a 256 (GH#18787)
 	cache_key="eval:$(echo -n "$cache_input" | sha256sum | cut -d' ' -f1)"
 	local cached
 	cached=$(get_cached_judgment "$cache_key")

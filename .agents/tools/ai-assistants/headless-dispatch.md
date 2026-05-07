@@ -12,6 +12,9 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Headless Dispatch
 
 <!-- AI-CONTEXT-START -->
@@ -25,6 +28,7 @@ tools:
 
 **Use for**: parallel tasks, scheduled/cron AI work, CI/CD, chat-triggered dispatch (Matrix/Discord/Slack via OpenClaw), background tasks.
 **Don't use for**: interactive dev (use TUI), frequent human-in-the-loop, single quick questions.
+**Diagnostics**: When workers fail, stall, or loop: `reference/worker-diagnostics.md`.
 
 **Draft agents**: Share domain instructions across workers via `~/.aidevops/agents/draft/`. See `tools/build-agent/build-agent.md`.
 **Remote dispatch**: `tools/containers/remote-dispatch.md` (SSH/Tailscale with credential forwarding).

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # milestone-validation-worker.sh - Milestone validation for mission system
 # Part of aidevops framework: https://aidevops.sh
 #
@@ -647,7 +649,7 @@ _run_shell_tests() {
 			record_pass "ShellCheck validation"
 		else
 			local failure_count
-			failure_count=$(echo "$sc_output" | grep -c "^In " || echo "0")
+			failure_count=$(echo "$sc_output" | safe_grep_count "^In ")
 			record_fail "ShellCheck validation" "$failure_count files with issues"
 		fi
 	else
@@ -687,7 +689,7 @@ run_build() {
 
 	if [[ -f "$repo_path/package.json" ]]; then
 		local has_build
-		has_build=$(grep -c '"build"' "$repo_path/package.json" 2>/dev/null || echo "0")
+		has_build=$(safe_grep_count '"build"' "$repo_path/package.json")
 
 		if [[ "$has_build" -gt 0 ]]; then
 			local build_output
@@ -757,7 +759,7 @@ run_linter() {
 	# Check for project-level linter config
 	if [[ -f "$repo_path/package.json" ]]; then
 		local has_lint
-		has_lint=$(grep -c '"lint"' "$repo_path/package.json" 2>/dev/null || echo "0")
+		has_lint=$(safe_grep_count '"lint"' "$repo_path/package.json")
 
 		if [[ "$has_lint" -gt 0 ]]; then
 			local lint_output
@@ -1064,7 +1066,7 @@ create_fix_tasks() {
 				gh label create "source:mission-validation" --repo "$repo_slug" \
 					--description "Auto-created by milestone-validation-worker.sh" \
 					--color "C2E0C6" --force 2>/dev/null || true
-				issue_url=$(gh issue create --repo "$repo_slug" \
+				issue_url=$(gh_create_issue --repo "$repo_slug" \
 					--title "$fix_title" \
 					--body "$issue_body" \
 					--label "bug,mission:$mission_id,source:mission-validation" 2>/dev/null || echo "")

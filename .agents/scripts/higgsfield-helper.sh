@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # Higgsfield Helper - UI automation for Higgsfield AI via Playwright
 # Part of AI DevOps Framework
@@ -288,7 +290,7 @@ cmd_batch_lipsync() {
 cmd_status() {
     if [[ -f "${STATE_FILE}" ]]; then
         local age
-        age=$(( $(date +%s) - $(stat -c %Y "${STATE_FILE}" 2>/dev/null || stat -f %m "${STATE_FILE}" 2>/dev/null || echo 0) ))
+        age=$(( $(date +%s) - $(_file_mtime_epoch "${STATE_FILE}") ))
         local hours=$(( age / 3600 ))
         print_success "Auth state exists (${hours}h old)"
         print_info "State file: ${STATE_FILE}"

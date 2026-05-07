@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC2154,SC2155
 set -euo pipefail
 
@@ -501,7 +503,10 @@ toggle_domain_lock() {
     local data
     data=$(jq -n --arg locked "$locked" '{locked: ($locked | test("true"))}')
 
-    print_info "${action^}ing domain: $domain"
+    # Bash 3.2 compat: ${var^} requires Bash 4+
+    local action_cap
+    action_cap="$(printf '%s' "${action:0:1}" | tr '[:lower:]' '[:upper:]')${action:1}"
+    print_info "${action_cap}ing domain: $domain"
     local response
     if response=$(api_request "$account_name" "PUT" "domains/$domain/lock" "$data"); then
         print_success "Domain ${action}ed successfully"

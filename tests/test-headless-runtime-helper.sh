@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 set -euo pipefail
 
@@ -44,10 +46,18 @@ export AIDEVOPS_HEADLESS_RUNTIME_DIR="$TEST_TMP_DIR/runtime"
 export STUB_LOG_FILE="$TEST_TMP_DIR/opencode-args.log"
 # Set a known model list so tests are self-contained and don't depend on
 # the user's environment. Includes two providers for rotation/fallback tests.
-export AIDEVOPS_HEADLESS_MODELS="anthropic/claude-sonnet-4-6,openai/gpt-5.3-codex"
+# GH#17769: AIDEVOPS_HEADLESS_MODELS is deprecated but respected as override
+# for backward compat. Using agentic models only (codex models removed).
+export AIDEVOPS_HEADLESS_MODELS="anthropic/claude-sonnet-4-6,openai/gpt-5.4"
+unset AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST
 # Disable sandbox for tests — the sandbox strips env vars (STUB_*) needed
 # by the opencode stub, causing test failures.
 export AIDEVOPS_HEADLESS_SANDBOX_DISABLED=1
+# Disable pattern-driven downgrades so selection-order tests stay deterministic.
+unset AIDEVOPS_TIER_DOWNGRADE_TASK_TYPE
+# Provide a fake Anthropic API key so Anthropic remains selectable even when
+# the local environment has no OpenCode auth session.
+export ANTHROPIC_API_KEY="test-key-for-provider-auth-check"
 # Provide a fake OpenAI API key so provider_auth_available("openai") returns true
 # in tests that exercise OpenAI model selection. Tests for the no-auth path
 # explicitly unset this and remove the auth file.
@@ -471,6 +481,34 @@ if printf '%s' "$source_with_args" | grep -q "Commands:"; then
 		"help text found when sourced with numeric args"
 else
 	pass "sourcing sandbox-exec-helper.sh with watchdog args does not print help text (GH#6617)"
+fi
+
+section "Deprecated Env Var Override (GH#17769)"
+# GH#17769: AIDEVOPS_HEADLESS_MODELS is deprecated but respected as override
+# for one release cycle. When set, it should be used directly.
+config_selected=$(
+	AIDEVOPS_HEADLESS_MODELS="openai/gpt-5.4" \
+		OPENAI_API_KEY="test-key-for-provider-auth-check" \
+		bash "$HELPER" select --role worker 2>/dev/null || true
+)
+if [[ "$config_selected" == "openai/gpt-5.4" ]]; then
+	pass "Deprecated AIDEVOPS_HEADLESS_MODELS env var override is respected"
+else
+	fail "Deprecated AIDEVOPS_HEADLESS_MODELS env var override is respected" "got: $config_selected"
+fi
+
+section "Metrics Review Signals"
+METRICS_PATH="$HOME/.aidevops/logs"
+mkdir -p "$METRICS_PATH"
+cat >"$METRICS_PATH/headless-runtime-metrics.jsonl" <<'JSONL'
+{"ts":4102444800,"role":"worker","model":"openai/gpt-5.4","result":"success","activity":true,"duration_ms":45000,"exit_code":0}
+{"ts":4102444800,"role":"worker","model":"anthropic/claude-sonnet-4-6","result":"success","activity":true,"duration_ms":240000,"exit_code":0}
+JSONL
+metrics_output=$(bash "$HELPER" metrics --role worker --hours 24 2>/dev/null || true)
+if [[ "$metrics_output" == *"fast_productive=1 (<=120s)"* && "$metrics_output" == *"Review candidates:"* && "$metrics_output" == *"openai/gpt-5.4"* ]]; then
+	pass "metrics flags fast successful expensive-model runs for review"
+else
+	fail "metrics flags fast successful expensive-model runs for review" "got: $metrics_output"
 fi
 
 echo ""

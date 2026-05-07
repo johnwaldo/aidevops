@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # test-pr-task-check.sh — Local test harness for PR task ID CI check (t318.5)
 #
 # Validates the logic from the pr-task-check job in code-quality.yml
@@ -13,11 +15,11 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
+# Colors (Pattern C — prefixed names, test harness only)
+readonly TEST_RED=$'\033[0;31m'
+readonly TEST_GREEN=$'\033[0;32m'
+readonly TEST_YELLOW=$'\033[0;33m'
+readonly TEST_RESET=$'\033[0m'
 
 log() {
 	echo -e "$1"
@@ -25,7 +27,7 @@ log() {
 }
 verbose() {
 	if [[ "$VERBOSE" == "--verbose" ]]; then
-		echo -e "  ${YELLOW}$1${NC}"
+		printf "  %s\n" "${TEST_YELLOW}$1${TEST_RESET}"
 	fi
 	return 0
 }
@@ -108,10 +110,10 @@ check_pr_task_id() {
 
 	if [[ "$result" == "$expected" ]]; then
 		PASS=$((PASS + 1))
-		log "${GREEN}PASS${NC} [$result] title='$pr_title' branch='$pr_branch'"
+		log "${TEST_GREEN}PASS${TEST_RESET} [$result] title='$pr_title' branch='$pr_branch'"
 	else
 		FAIL=$((FAIL + 1))
-		log "${RED}FAIL${NC} expected=$expected got=$result title='$pr_title' branch='$pr_branch'"
+		log "${TEST_RED}FAIL${TEST_RESET} expected=$expected got=$result title='$pr_title' branch='$pr_branch'"
 	fi
 	return 0
 }
@@ -126,7 +128,7 @@ log ""
 TODO_FILE="TODO.md"
 
 if [[ ! -f "$TODO_FILE" ]]; then
-	log "${RED}ERROR: TODO.md not found. Run from repo root.${NC}"
+	log "${TEST_RED}ERROR: TODO.md not found. Run from repo root.${TEST_RESET}"
 	exit 1
 fi
 
@@ -323,13 +325,13 @@ check_pr_task_id \
 # --- Summary ---
 log ""
 log "======================================"
-log "Results: ${GREEN}${PASS} passed${NC}, ${RED}${FAIL} failed${NC}, ${TOTAL} total"
+log "Results: ${TEST_GREEN}${PASS} passed${TEST_RESET}, ${TEST_RED}${FAIL} failed${TEST_RESET}, ${TOTAL} total"
 log ""
 
 if [[ "$FAIL" -gt 0 ]]; then
-	log "${RED}SOME TESTS FAILED${NC}"
+	log "${TEST_RED}SOME TESTS FAILED${TEST_RESET}"
 	exit 1
 else
-	log "${GREEN}ALL TESTS PASSED${NC}"
+	log "${TEST_GREEN}ALL TESTS PASSED${TEST_RESET}"
 	exit 0
 fi

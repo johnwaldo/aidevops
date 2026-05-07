@@ -5,9 +5,14 @@ metadata:
   tags: video, status, polling, download, webhook
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Video Status and Polling
 
-HeyGen processes videos asynchronously. After generating, poll until complete.
+HeyGen video generation is asynchronous: store the `video_id`, poll until terminal state, then download or hand off to a webhook flow.
+
+**Production:** Prefer webhooks over polling; see [rules-webhooks.md](rules-webhooks.md). Cache `video_url` — values expire.
 
 ## Check Status
 
@@ -28,16 +33,14 @@ async function getVideoStatus(videoId: string) {
 }
 ```
 
-## Status Types
+## States and Response Shape
 
-| Status | Description |
-|--------|-------------|
+| Status | Meaning |
+|--------|---------|
 | `pending` | Queued for processing |
 | `processing` | Being generated |
 | `completed` | Ready for download |
 | `failed` | Generation failed |
-
-## Response Format
 
 ```json
 // completed
@@ -50,22 +53,18 @@ async function getVideoStatus(videoId: string) {
   "error": "Script too long for selected avatar" } }
 ```
 
-## Generation Times
+## Timing
 
-Typically **5-15 min**; 20+ min at peak load or for long scripts. Set timeout to **15-20 min** (900,000-1,200,000 ms).
+Typical: **5-15 min**. Peak load, long scripts, or 1080p: **20+ min**. Timeout: **15-20 min** (`900000-1200000` ms).
 
-| Factor | Impact |
-|--------|--------|
-| Script length | Longer = significantly more time |
-| Resolution | 1080p > 720p |
-| Queue load | Peak hours add 15-20+ min |
+## Polling Pattern
 
-## Polling
+Poll every few seconds with exponential backoff. For UI feedback, add `onProgress?: (status: string, elapsed: number) => void` on each iteration.
 
 ```typescript
 async function waitForVideo(
   videoId: string,
-  maxWaitMs = 900000,   // 15 min
+  maxWaitMs = 900000,
   pollIntervalMs = 5000
 ): Promise<string> {
   const start = Date.now();
@@ -79,11 +78,9 @@ async function waitForVideo(
 }
 ```
 
-For progress reporting, pass `onProgress?: (status: string, elapsed: number) => void` and call it each iteration. Use exponential backoff for long-running jobs.
+## Download With Retry
 
-## Download (with retry)
-
-URL may not be immediately accessible after `completed`. Use exponential backoff.
+`completed` means metadata is ready; the file URL may still take a moment to serve. Use exponential backoff.
 
 ```typescript
 import fs from "fs";
@@ -103,9 +100,9 @@ async function downloadVideo(videoUrl: string, outputPath: string, maxRetries = 
 }
 ```
 
-## Resumable Pattern
+## Resumable Workflow
 
-For long generations, save `video_id` and check later rather than blocking.
+Persist `video_id` to disk; don't hold an idle process open for long generations.
 
 ```typescript
 // generate-video.ts — start and exit
@@ -120,9 +117,3 @@ if (process.argv.includes("--wait")) {
   console.log("Status:", status.status, status.video_url ?? "");
 }
 ```
-
-## Webhooks
-
-For production, prefer webhooks over polling — no idle connections. See [webhooks.md](webhooks.md).
-
-Cache video URLs — they expire. Don't re-fetch unnecessarily.

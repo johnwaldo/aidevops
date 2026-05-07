@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # tabby-helper.sh — Generate and sync Tabby terminal profiles from repos.json
 #
 # Creates a Tabby profile for each repo in repos.json with:
@@ -11,6 +13,7 @@
 #   tabby-helper.sh sync          # Sync profiles from repos.json (default)
 #   tabby-helper.sh status        # Show current profile status
 #   tabby-helper.sh zshrc         # Install TABBY_AUTORUN hook in .zshrc
+#   tabby-helper.sh fix-shell     # Ensure default local profile uses /bin/zsh (macOS)
 #   tabby-helper.sh help          # Show usage
 #
 # Requires: python3 (ships with macOS), repos.json
@@ -21,6 +24,8 @@ set -euo pipefail
 
 # --- Constants ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=shared-constants.sh
+[[ -f "${SCRIPT_DIR}/shared-constants.sh" ]] && source "${SCRIPT_DIR}/shared-constants.sh"
 REPOS_JSON="${HOME}/.config/aidevops/repos.json"
 
 # Tabby config path (platform-aware)
@@ -29,13 +34,6 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 else
 	TABBY_CONFIG="${HOME}/.config/tabby-terminal/config.yaml"
 fi
-
-# --- Colours ---
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
 
 _info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 _success() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -138,14 +136,230 @@ ZSHRC_BLOCK
 	return 0
 }
 
+_fix_shell_check_prereqs() {
+	# macOS only: after OS updates, Tabby may fall back to /bin/bash when
+	# profileDefaults.local.options.command is unset. This ensures the default
+	# local profile uses /bin/zsh (the macOS default shell since Catalina).
+	if [[ "$(uname -s)" != "Darwin" ]]; then
+		_info "fix-shell is macOS-only (zsh is the default shell since Catalina)"
+		return 1
+	fi
+
+	if [[ ! -f "$TABBY_CONFIG" ]]; then
+		return 1
+	fi
+
+	return 0
+}
+
+_fix_shell_patch_config() {
+	# Parses the Tabby YAML with a targeted state machine and inserts
+	# /bin/zsh as the default shell while preserving the existing file shape.
+	# Prints a single status token: OK, FIXED, SKIP:<shell>, WARN, or INVALID.
+	local config_path="$1"
+	local current_cmd=""
+	current_cmd=$(awk '
+		function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+		function key_is(str, key) { return str ~ ("^" key ":[[:space:]]*($|#)") }
+		BEGIN { state="seek_pd"; found_options=0; found_command=0 }
+		{
+			line=$0
+			stripped=line
+			sub(/^[[:space:]]+/, "", stripped)
+			indent=length(line)-length(stripped)
+
+			if (state=="seek_pd" && key_is(stripped, "profileDefaults")) { state="seek_local"; next }
+			if (state=="seek_local" && key_is(stripped, "local")) { state="seek_options"; next }
+			if (state=="seek_options" && key_is(stripped, "options")) {
+				state="in_options"
+				found_options=1
+				options_indent=indent
+				next
+			}
+
+			if (state=="in_options") {
+				if (stripped !~ /^($|#)/ && indent <= options_indent) {
+					state="done"
+				}
+				if (state=="in_options" && indent == options_indent + 2 && stripped ~ /^command:[[:space:]]*/) {
+					value = stripped
+					sub(/^command:[[:space:]]*/, "", value)
+					sub(/[[:space:]]+#.*$/, "", value)
+					value = trim(value)
+					if ((value ~ /^\047.*\047$/) || (value ~ /^\".*\"$/)) {
+						value = substr(value, 2, length(value)-2)
+					}
+					print value
+					found_command=1
+					exit
+				}
+			}
+		}
+		END {
+			if (found_command==1) {
+				exit 0
+			}
+			if (found_options==1) {
+				print "__MISSING__"
+			} else {
+				print "__WARN__"
+			}
+		}
+	' "$config_path" 2>/dev/null || printf '%s\n' "__WARN__")
+
+	case "$current_cmd" in
+	"__WARN__")
+		echo "WARN"
+		return 0
+		;;
+	"/bin/zsh")
+		echo "OK"
+		return 0
+		;;
+	"" | "__MISSING__" | "null" | "~" | "''" | '""') ;;
+	*)
+		echo "SKIP:$current_cmd"
+		return 0
+		;;
+	esac
+
+	local tmp_file="${config_path}.tmp.$$"
+	if ! awk '
+		function key_is(str, key) { return str ~ ("^" key ":[[:space:]]*($|#)") }
+		BEGIN {
+			state="seek_pd"
+			inserted=0
+			skip_args=0
+		}
+		{
+			line=$0
+			stripped=line
+			sub(/^[[:space:]]+/, "", stripped)
+			indent=length(line)-length(stripped)
+
+			if (skip_args==1) {
+				if (stripped ~ /^($|#)/ || indent > args_indent) {
+					next
+				}
+				skip_args=0
+			}
+
+			if (state=="seek_pd" && key_is(stripped, "profileDefaults")) {
+				state="seek_local"
+				print line
+				next
+			}
+
+			if (state=="seek_local" && key_is(stripped, "local")) {
+				state="seek_options"
+				print line
+				next
+			}
+
+			if (state=="seek_options" && key_is(stripped, "options")) {
+				state="in_options"
+				options_indent=indent
+				child_indent=sprintf("%*s", indent + 2, "")
+				print line
+				print child_indent "command: /bin/zsh"
+				print child_indent "args:"
+				print child_indent "  - '\''-l'\''"
+				inserted=1
+				next
+			}
+
+			if (state=="in_options") {
+				if (stripped !~ /^($|#)/ && indent <= options_indent) {
+					state="done"
+					print line
+					next
+				}
+				if (indent == options_indent + 2 && stripped ~ /^command:[[:space:]]*/) {
+					next
+				}
+				if (indent == options_indent + 2 && key_is(stripped, "args")) {
+					skip_args=1
+					args_indent=indent
+					next
+				}
+			}
+
+			print line
+		}
+		END {
+			if (inserted != 1) {
+				exit 2
+			}
+		}
+	' "$config_path" >"$tmp_file"; then
+		rm -f "$tmp_file"
+		echo "WARN"
+		return 0
+	fi
+
+	if ! mv "$tmp_file" "$config_path"; then
+		rm -f "$tmp_file"
+		echo "INVALID:write-failed"
+		return 0
+	fi
+
+	echo "FIXED"
+	return 0
+}
+
+_fix_shell_report_result() {
+	# Interprets the status token from _fix_shell_patch_config and prints
+	# a user-friendly message.
+	local result="$1"
+
+	case "$result" in
+	OK)
+		_success "Tabby default profile already uses /bin/zsh"
+		;;
+	FIXED)
+		_success "Set Tabby default profile shell to /bin/zsh (restart Tabby to apply)"
+		;;
+	SKIP:*)
+		local other_shell="${result#SKIP:}"
+		_info "Tabby default profile uses $other_shell — not overriding"
+		;;
+	WARN)
+		_warn "Could not find profileDefaults.local.options in Tabby config"
+		;;
+	INVALID:*)
+		_error "Generated invalid YAML — config not modified"
+		;;
+	*)
+		_warn "Unexpected result from fix-shell: $result"
+		;;
+	esac
+
+	return 0
+}
+
+cmd_fix_shell() {
+	# Orchestrator: check prereqs, patch config, report result.
+	# Uses targeted text insertion (not full YAML rewrite) to preserve formatting.
+	if ! _fix_shell_check_prereqs; then
+		return 0
+	fi
+
+	local result
+	result=$(_fix_shell_patch_config "$TABBY_CONFIG")
+	_fix_shell_report_result "$result"
+
+	return 0
+}
+
 cmd_help() {
 	echo "tabby-helper.sh — Generate Tabby profiles from repos.json"
 	echo ""
 	echo "Usage:"
-	echo "  tabby-helper.sh sync     Sync profiles from repos.json (create new, skip existing)"
-	echo "  tabby-helper.sh status   Show profile status (which repos have profiles)"
-	echo "  tabby-helper.sh zshrc    Install TABBY_AUTORUN hook in .zshrc"
-	echo "  tabby-helper.sh help     Show this help"
+	echo "  tabby-helper.sh sync       Sync profiles from repos.json (create new, skip existing)"
+	echo "  tabby-helper.sh status     Show profile status (which repos have profiles)"
+	echo "  tabby-helper.sh zshrc      Install TABBY_AUTORUN hook in .zshrc"
+	echo "  tabby-helper.sh fix-shell  Ensure default local profile uses /bin/zsh (macOS)"
+	echo "  tabby-helper.sh help       Show this help"
 	echo ""
 	echo "Profiles are created with:"
 	echo "  - Random bright tab colour (dark-mode friendly, HSL L:50-70%, S:60-90%)"
@@ -165,6 +379,7 @@ main() {
 	sync) cmd_sync ;;
 	status) cmd_status ;;
 	zshrc) cmd_zshrc ;;
+	fix-shell) cmd_fix_shell ;;
 	help | --help | -h) cmd_help ;;
 	*)
 		_error "Unknown command: $cmd"

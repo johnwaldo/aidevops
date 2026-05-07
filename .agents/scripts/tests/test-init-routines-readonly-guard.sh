@@ -1,0 +1,368 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+# shellcheck disable=SC1090
+#
+# Regression test: GH#18702 — init-routines-helper.sh must not fail with
+# `readonly variable` when sourced from a shell where shared-constants.sh
+# has already been sourced (which declares RED/GREEN/YELLOW/BLUE/NC as
+# readonly). Before the fix, setup.sh was being killed by this collision,
+# blocking auto-update deploys since 2026-04-09 and causing the 18693/18702
+# stale-recovery cascade.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+REPO_SCRIPTS="${SCRIPT_DIR}/.."
+SHARED_CONSTANTS="${REPO_SCRIPTS}/shared-constants.sh"
+INIT_ROUTINES="${REPO_SCRIPTS}/init-routines-helper.sh"
+COMMON_HELPER="${REPO_SCRIPTS}/setup/_common.sh"
+ROUTINES_MODULE="${REPO_SCRIPTS}/setup/_routines.sh"
+
+readonly TEST_RED='\033[0;31m'
+readonly TEST_GREEN='\033[0;32m'
+readonly TEST_RESET='\033[0m'
+
+TESTS_RUN=0
+TESTS_FAILED=0
+
+print_result() {
+	local test_name="$1"
+	local passed="$2"
+	local message="${3:-}"
+	TESTS_RUN=$((TESTS_RUN + 1))
+
+	if [[ "$passed" -eq 0 ]]; then
+		printf '%bPASS%b %s\n' "$TEST_GREEN" "$TEST_RESET" "$test_name"
+		return 0
+	fi
+
+	printf '%bFAIL%b %s\n' "$TEST_RED" "$TEST_RESET" "$test_name"
+	if [[ -n "$message" ]]; then
+		printf '       %s\n' "$message"
+	fi
+	TESTS_FAILED=$((TESTS_FAILED + 1))
+	return 0
+}
+
+configure_test_git_identity() {
+	local repo_path="$1"
+	git -C "$repo_path" config user.email "test@example.invalid"
+	git -C "$repo_path" config user.name "Test User"
+	git -C "$repo_path" config commit.gpgsign false
+	return 0
+}
+
+# The original bug: setup.sh sources shared-constants.sh (readonly colors),
+# then sources _routines.sh which sources init-routines-helper.sh. The helper
+# previously did unconditional `GREEN='\033[0;32m'` which failed under
+# `set -Eeuo pipefail` and killed the whole setup.sh run.
+test_init_routines_sources_after_shared_constants() {
+	local output=""
+	local exit_code=0
+
+	output=$(
+		bash -c "
+			set -Eeuo pipefail
+			source '${SHARED_CONSTANTS}'
+			source '${INIT_ROUTINES}'
+			echo 'INIT_OK'
+		" 2>&1
+	) || exit_code=$?
+
+	if [[ "$exit_code" -eq 0 && "$output" == *"INIT_OK"* ]]; then
+		print_result "init-routines-helper.sh sources cleanly after shared-constants.sh (GH#18702)" 0
+		return 0
+	fi
+
+	print_result "init-routines-helper.sh sources cleanly after shared-constants.sh (GH#18702)" 1 \
+		"exit=${exit_code} output=${output}"
+	return 0
+}
+
+# Belt-and-braces: _common.sh should also tolerate pre-existing readonly colors,
+# so reordering the setup.sh sourcing sequence can't regress the bug.
+test_common_tolerates_readonly_colors() {
+	local output=""
+	local exit_code=0
+
+	output=$(
+		bash -c "
+			set -Eeuo pipefail
+			source '${SHARED_CONSTANTS}'
+			source '${COMMON_HELPER}'
+			echo 'COMMON_OK'
+		" 2>&1
+	) || exit_code=$?
+
+	if [[ "$exit_code" -eq 0 && "$output" == *"COMMON_OK"* ]]; then
+		print_result "setup/_common.sh tolerates pre-existing readonly colors (GH#18702)" 0
+		return 0
+	fi
+
+	print_result "setup/_common.sh tolerates pre-existing readonly colors (GH#18702)" 1 \
+		"exit=${exit_code} output=${output}"
+	return 0
+}
+
+# End-to-end defensive check: _routines.sh's _load_init_routines_helper must
+# isolate errors so any future helper-level failure cannot propagate and
+# kill setup.sh. This is the second line of defense from GH#18702.
+test_routines_loader_isolates_errors() {
+	local output=""
+	local exit_code=0
+
+	output=$(
+		bash -c "
+			set -Eeuo pipefail
+			source '${COMMON_HELPER}'
+			source '${SHARED_CONSTANTS}'
+			source '${ROUTINES_MODULE}'
+			if _load_init_routines_helper; then
+				echo 'LOADER_OK'
+			else
+				echo 'LOADER_FAILED_BUT_DID_NOT_KILL_SETUP'
+			fi
+		" 2>&1
+	) || exit_code=$?
+
+	if [[ "$exit_code" -eq 0 && ("$output" == *"LOADER_OK"* || "$output" == *"LOADER_FAILED_BUT_DID_NOT_KILL_SETUP"*) ]]; then
+		print_result "_load_init_routines_helper isolates source errors (GH#18702)" 0
+		return 0
+	fi
+
+	print_result "_load_init_routines_helper isolates source errors (GH#18702)" 1 \
+		"exit=${exit_code} output=${output}"
+	return 0
+}
+
+# Regression: GH#22199 — when the routines remote advances between clone and
+# setup_routines, the scaffold commit must be rebased before push instead of
+# leaving a local-only "chore: scaffold aidevops-routines repo" commit behind.
+test_commit_and_push_syncs_remote_ahead_repo() {
+	local tmp_dir=""
+	tmp_dir=$(mktemp -d)
+	local remote_repo="${tmp_dir}/remote.git"
+	local local_repo="${tmp_dir}/local"
+	local advancer_repo="${tmp_dir}/advancer"
+
+	git -c init.defaultBranch=main init --bare "$remote_repo" >/dev/null
+	git clone "$remote_repo" "$local_repo" >/dev/null 2>&1
+	git -C "$local_repo" checkout -b main >/dev/null 2>&1
+	configure_test_git_identity "$local_repo"
+	printf 'base\n' >"${local_repo}/README.md"
+	git -C "$local_repo" add README.md
+	git -C "$local_repo" commit -m "initial" >/dev/null
+	git -C "$local_repo" push -u origin main >/dev/null 2>&1
+
+	git clone "$remote_repo" "$advancer_repo" >/dev/null 2>&1
+	configure_test_git_identity "$advancer_repo"
+	printf 'remote-ahead\n' >>"${advancer_repo}/README.md"
+	git -C "$advancer_repo" commit -am "remote ahead" >/dev/null
+	git -C "$advancer_repo" push origin main >/dev/null 2>&1
+
+	printf 'scaffold\n' >"${local_repo}/TODO.md"
+	# shellcheck disable=SC1090  # dynamic repo-relative helper path
+	source "$INIT_ROUTINES"
+	_commit_and_push "$local_repo"
+	git -C "$local_repo" fetch origin main >/dev/null 2>&1
+
+	local ahead_count=""
+	ahead_count=$(git -C "$local_repo" rev-list --count '@{u}..HEAD')
+	local scaffold_commit_count=""
+	scaffold_commit_count=$(git -C "$local_repo" log --oneline origin/main --grep 'chore: scaffold aidevops-routines repo' | wc -l | tr -d ' ')
+	local status_output=""
+	status_output=$(git -C "$local_repo" status --porcelain)
+
+	rm -rf "$tmp_dir"
+
+	if [[ "$ahead_count" == "0" && "$scaffold_commit_count" == "1" && -z "$status_output" ]]; then
+		print_result "_commit_and_push rebases before push when routines remote is ahead (GH#22199)" 0
+		return 0
+	fi
+
+	print_result "_commit_and_push rebases before push when routines remote is ahead (GH#22199)" 1 \
+		"ahead=${ahead_count} scaffold_commits=${scaffold_commit_count} status=${status_output}"
+	return 0
+}
+
+# Regression: GH#22205 — when git pull --rebase conflicts during routines
+# remote sync, the helper must abort the failed rebase and skip creating the
+# scaffold commit rather than leaving the routines repo mid-rebase.
+test_commit_and_push_aborts_failed_remote_sync_rebase() {
+	local tmp_dir=""
+	tmp_dir=$(mktemp -d)
+	local remote_repo="${tmp_dir}/remote.git"
+	local local_repo="${tmp_dir}/local"
+	local advancer_repo="${tmp_dir}/advancer"
+
+	git -c init.defaultBranch=main init --bare "$remote_repo" >/dev/null
+	git clone "$remote_repo" "$local_repo" >/dev/null 2>&1
+	git -C "$local_repo" checkout -b main >/dev/null 2>&1
+	configure_test_git_identity "$local_repo"
+	printf 'base\n' >"${local_repo}/README.md"
+	git -C "$local_repo" add README.md
+	git -C "$local_repo" commit -m "initial" >/dev/null
+	git -C "$local_repo" push -u origin main >/dev/null 2>&1
+
+	git clone "$remote_repo" "$advancer_repo" >/dev/null 2>&1
+	configure_test_git_identity "$advancer_repo"
+	printf 'remote-change\n' >"${advancer_repo}/README.md"
+	git -C "$advancer_repo" commit -am "remote conflicting change" >/dev/null
+	git -C "$advancer_repo" push origin main >/dev/null 2>&1
+
+	printf 'local-change\n' >"${local_repo}/README.md"
+	git -C "$local_repo" commit -am "local conflicting change" >/dev/null
+	printf 'scaffold\n' >"${local_repo}/TODO.md"
+	# shellcheck disable=SC1090  # dynamic repo-relative helper path
+	source "$INIT_ROUTINES"
+	_commit_and_push "$local_repo"
+
+	local rebase_merge_path=""
+	rebase_merge_path=$(git -C "$local_repo" rev-parse --git-path rebase-merge)
+	local rebase_apply_path=""
+	rebase_apply_path=$(git -C "$local_repo" rev-parse --git-path rebase-apply)
+	local rebase_state_present=0
+	if [[ -d "$rebase_merge_path" || -d "$rebase_apply_path" ]]; then
+		rebase_state_present=1
+	fi
+	local scaffold_commit_count=""
+	scaffold_commit_count=$(git -C "$local_repo" log --oneline --grep 'chore: scaffold aidevops-routines repo' | wc -l | tr -d ' ')
+	local scaffold_preserved=1
+	if [[ -f "${local_repo}/TODO.md" ]] && [[ "$(<"${local_repo}/TODO.md")" == "scaffold" ]]; then
+		scaffold_preserved=0
+	fi
+
+	rm -rf "$tmp_dir"
+
+	if [[ "$rebase_state_present" -eq 0 && "$scaffold_commit_count" == "0" && "$scaffold_preserved" -eq 0 ]]; then
+		print_result "_commit_and_push aborts conflicted routines remote-sync rebase (GH#22205)" 0
+		return 0
+	fi
+
+	print_result "_commit_and_push aborts conflicted routines remote-sync rebase (GH#22205)" 1 \
+		"rebase_state=${rebase_state_present} scaffold_commits=${scaffold_commit_count} scaffold_preserved=${scaffold_preserved}"
+	return 0
+}
+
+# Regression: GH#22235 — detached/stale routines worktrees must not push a raw
+# HEAD destination. The helper should derive origin/HEAD and push with a fully
+# qualified branch ref so setup_routines avoids Git's "destination provided is
+# not a full refname" error.
+test_commit_and_push_uses_full_refspec_when_head_detached() {
+	local tmp_dir=""
+	tmp_dir=$(mktemp -d)
+	local remote_repo="${tmp_dir}/remote.git"
+	local local_repo="${tmp_dir}/local"
+
+	git -c init.defaultBranch=main init --bare "$remote_repo" >/dev/null
+	git clone "$remote_repo" "$local_repo" >/dev/null 2>&1
+	git -C "$local_repo" checkout -b main >/dev/null 2>&1
+	configure_test_git_identity "$local_repo"
+	printf 'base\n' >"${local_repo}/README.md"
+	git -C "$local_repo" add README.md
+	git -C "$local_repo" commit -m "initial" >/dev/null
+	git -C "$local_repo" push -u origin main >/dev/null 2>&1
+	git -C "$local_repo" remote set-head origin main >/dev/null 2>&1
+	git -C "$local_repo" checkout --detach HEAD >/dev/null 2>&1
+
+	printf 'scaffold\n' >"${local_repo}/TODO.md"
+	# shellcheck disable=SC1090  # dynamic repo-relative helper path
+	source "$INIT_ROUTINES"
+	local output=""
+	output=$(_commit_and_push "$local_repo" 2>&1)
+	git -C "$local_repo" fetch origin main >/dev/null 2>&1
+
+	local scaffold_commit_count=""
+	scaffold_commit_count=$(git -C "$local_repo" log --oneline origin/main --grep 'chore: scaffold aidevops-routines repo' | wc -l | tr -d ' ')
+	local status_output=""
+	status_output=$(git -C "$local_repo" status --porcelain)
+
+	rm -rf "$tmp_dir"
+
+	if [[ "$scaffold_commit_count" == "1" && -z "$status_output" && "$output" != *"destination provided is not a full refname"* ]]; then
+		print_result "_commit_and_push uses full refspec when routines HEAD is detached (GH#22235)" 0
+		return 0
+	fi
+
+	print_result "_commit_and_push uses full refspec when routines HEAD is detached (GH#22235)" 1 \
+		"scaffold_commits=${scaffold_commit_count} status=${status_output} output=${output}"
+	return 0
+}
+
+# Regression: GH#22235 — if a push fails while scaffold changes are already
+# unstaged, retry must not run git pull --rebase over those local changes.
+test_commit_and_push_skips_rebase_retry_with_unstaged_scaffold() {
+	local tmp_dir=""
+	tmp_dir=$(mktemp -d)
+	local remote_repo="${tmp_dir}/remote.git"
+	local local_repo="${tmp_dir}/local"
+	local fake_bin="${tmp_dir}/bin"
+	local push_failed_marker="${tmp_dir}/push-failed"
+	mkdir -p "$fake_bin"
+
+	git -c init.defaultBranch=main init --bare "$remote_repo" >/dev/null
+	git clone "$remote_repo" "$local_repo" >/dev/null 2>&1
+	git -C "$local_repo" checkout -b main >/dev/null 2>&1
+	configure_test_git_identity "$local_repo"
+	printf 'base\n' >"${local_repo}/README.md"
+	git -C "$local_repo" add README.md
+	git -C "$local_repo" commit -m "initial" >/dev/null
+	git -C "$local_repo" push -u origin main >/dev/null 2>&1
+
+	local real_git=""
+	real_git=$(command -v git)
+	cat >"${fake_bin}/git" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\$1" == "push" ]]; then
+  "${real_git}" reset --soft HEAD~1 >/dev/null
+  : >"${push_failed_marker}"
+  exit 1
+fi
+if [[ "\$1" == "pull" && -f "${push_failed_marker}" ]]; then
+  printf 'unexpected pull --rebase with unstaged scaffold changes\\n' >&2
+  exit 42
+fi
+exec "${real_git}" "\$@"
+EOF
+	chmod +x "${fake_bin}/git"
+
+	printf 'scaffold\n' >"${local_repo}/TODO.md"
+	# shellcheck disable=SC1090  # dynamic repo-relative helper path
+	source "$INIT_ROUTINES"
+	local output=""
+	PATH="${fake_bin}:$PATH" output=$(_commit_and_push "$local_repo" 2>&1)
+	local status_output=""
+	status_output=$(git -C "$local_repo" status --porcelain)
+
+	rm -rf "$tmp_dir"
+
+	if [[ "$status_output" == *"TODO.md"* && "$output" == *"Push retry skipped"* && "$output" != *"unexpected pull --rebase"* ]]; then
+		print_result "_commit_and_push skips rebase retry with unstaged scaffold changes (GH#22235)" 0
+		return 0
+	fi
+
+	print_result "_commit_and_push skips rebase retry with unstaged scaffold changes (GH#22235)" 1 \
+		"status=${status_output} output=${output}"
+	return 0
+}
+
+main() {
+	test_init_routines_sources_after_shared_constants
+	test_common_tolerates_readonly_colors
+	test_routines_loader_isolates_errors
+	test_commit_and_push_syncs_remote_ahead_repo
+	test_commit_and_push_aborts_failed_remote_sync_rebase
+	test_commit_and_push_uses_full_refspec_when_head_detached
+	test_commit_and_push_skips_rebase_retry_with_unstaged_scaffold
+
+	printf '\nRan %s tests, %s failed\n' "$TESTS_RUN" "$TESTS_FAILED"
+	if [[ "$TESTS_FAILED" -ne 0 ]]; then
+		exit 1
+	fi
+
+	return 0
+}
+
+main "$@"

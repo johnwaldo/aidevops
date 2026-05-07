@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # contribution-watch-helper.sh — Monitor external issues/PRs for new activity (t1419)
 #
 # Auto-discovers and monitors external GitHub issues/PRs where the
@@ -18,6 +20,8 @@
 #   contribution-watch-helper.sh scan [--auto-draft]       Also create draft replies for items needing attention
 #                                                         Drafts stored in ~/.aidevops/.agent-workspace/draft-responses/
 #                                                         Use draft-response-helper.sh to review and approve (t1555)
+#   contribution-watch-helper.sh stop                      Stop a running scan (via PID file)
+#   contribution-watch-helper.sh restart                   Stop existing scan and start a new one
 #   contribution-watch-helper.sh status                    Show watched items and their state
 #   contribution-watch-helper.sh install                   Install launchd plist
 #   contribution-watch-helper.sh uninstall                 Remove launchd plist
@@ -29,7 +33,12 @@
 set -euo pipefail
 
 # PATH normalisation for launchd/MCP environments
-export PATH="/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:${PATH}"
+_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/bin:/usr/bin"
+if [[ "$(uname -s 2>/dev/null || true)" != "Darwin" && -d "/home/linuxbrew/.linuxbrew/bin" ]]; then
+	_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/bin:/usr/bin"
+fi
+export PATH="${_aidevops_path_prefix}:${PATH}"
+unset _aidevops_path_prefix
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 
@@ -51,6 +60,7 @@ source "${SCRIPT_DIR}/shared-constants.sh" 2>/dev/null || true
 STATE_FILE="${HOME}/.aidevops/cache/contribution-watch.json"
 REPOS_JSON="${REPOS_JSON:-${HOME}/.config/aidevops/repos.json}"
 LOGFILE="${HOME}/.aidevops/logs/contribution-watch.log"
+PID_FILE="${HOME}/.aidevops/.pid/contribution-watch.pid"
 PLIST_LABEL="sh.aidevops.contribution-watch"
 PLIST_PATH="${HOME}/Library/LaunchAgents/${PLIST_LABEL}.plist"
 
@@ -142,12 +152,33 @@ _ensure_state_file() {
 	local state_dir
 	state_dir=$(dirname "$STATE_FILE")
 	mkdir -p "$state_dir" 2>/dev/null || true
+	mkdir -p "$(dirname "$PID_FILE")" 2>/dev/null || true
 
 	if [[ ! -f "$STATE_FILE" ]]; then
 		echo '{"last_scan":"","items":{}}' >"$STATE_FILE"
 		_log_info "Created new state file: $STATE_FILE"
 	fi
 	return 0
+}
+
+# Check whether a scan is already running via the PID file.
+# Returns 0 if a scan is running, 1 if not (stale PID file is cleaned up).
+_is_scan_running() {
+	if [[ ! -f "$PID_FILE" ]]; then
+		return 1
+	fi
+
+	local old_pid
+	old_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
+	# t2421: command-aware liveness — bare kill -0 lies on macOS PID reuse
+	if [[ -n "$old_pid" ]] && [[ "$old_pid" =~ ^[0-9]+$ ]] && \
+	   _is_process_alive_and_matches "$old_pid" "contribution-watch-helper"; then
+		return 0
+	fi
+
+	# Stale PID file — remove it
+	rm -f "$PID_FILE"
+	return 1
 }
 
 _read_state() {
@@ -175,16 +206,21 @@ _now_iso() {
 	return 0
 }
 
+# Parse an ISO 8601 UTC timestamp to epoch seconds on macOS.
+# TZ=UTC is required: macOS date -j -f interprets the input as local time without it (GH#17699).
+_parse_iso_macos_utc() {
+	local iso_date="$1"
+	local clean_date
+	clean_date="${iso_date%Z}"
+	clean_date="${clean_date%+00:00}"
+	TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$clean_date" "+%s" 2>/dev/null || echo "0"
+	return 0
+}
+
 _epoch_from_iso() {
 	local iso_date="$1"
-	# macOS date -j -f for parsing ISO 8601
 	if [[ "$(uname)" == "Darwin" ]]; then
-		# Handle both Z and +00:00 suffixes
-		local clean_date
-		clean_date="${iso_date%Z}"
-		clean_date="${clean_date%+00:00}"
-		# Try multiple formats
-		date -j -f "%Y-%m-%dT%H:%M:%S" "$clean_date" "+%s" 2>/dev/null || echo "0"
+		_parse_iso_macos_utc "$iso_date"
 	else
 		date -d "$iso_date" "+%s" 2>/dev/null || echo "0"
 	fi
@@ -578,6 +614,7 @@ _scan_alert_item() {
 _scan_process_notifications() {
 	local notifications="$1"
 	local managed_slugs="$2"
+	local username="$3"
 
 	while IFS= read -r row; do
 		[[ -z "$row" ]] && continue
@@ -599,6 +636,44 @@ _scan_process_notifications() {
 		title=$(echo "$row" | jq -r '.subject.title // "unknown"')
 		updated=$(echo "$row" | jq -r '.updated_at // ""')
 		[[ -z "$updated" ]] && continue
+
+		# For comment-driven notifications, resolve latest comment metadata so we can
+		# detect self activity by aidevops signature footer, not only by username.
+		if [[ "$reason" == "comment" || "$reason" == "mention" ]]; then
+			local number latest_meta latest_author latest_time latest_is_aidevops
+			number="${item_key##*#}"
+			latest_author=""
+			latest_time=""
+			latest_is_aidevops="false"
+
+			if [[ "$number" =~ ^[0-9]+$ ]]; then
+				latest_meta=$(_scan_backfill_fetch_latest_comment "$repo_slug" "$number" "$item_key")
+				if [[ -n "$latest_meta" && "$latest_meta" != "null" ]]; then
+					latest_author=$(echo "$latest_meta" | jq -r '.author // ""')
+					latest_time=$(echo "$latest_meta" | jq -r '.created // ""')
+					latest_is_aidevops=$(echo "$latest_meta" | jq -r '.is_aidevops // false')
+				fi
+			fi
+
+			if [[ -n "$latest_time" && "$latest_time" > "$updated" ]]; then
+				updated="$latest_time"
+			fi
+
+			if [[ "$latest_author" == "$username" || "$latest_is_aidevops" == "true" ]]; then
+				_SCAN_STATE=$(echo "$_SCAN_STATE" | jq \
+					--arg key "$item_key" \
+					--arg type "$item_type" \
+					--arg title "$title" \
+					--arg updated "$updated" \
+					'.items[$key] = ((.items[$key] // {type: $type, role: "participant", title: $title, last_our_comment: "", last_any_comment: "", last_notified: "", hot_until: ""})
+						| .type = $type
+						| .title = $title
+						| .last_any_comment = (if .last_any_comment == "" or $updated > .last_any_comment then $updated else .last_any_comment end)
+						| .last_our_comment = (if .last_our_comment == "" or $updated > .last_our_comment then $updated else .last_our_comment end)
+					)')
+				continue
+			fi
+		fi
 
 		_SCAN_STATE=$(echo "$_SCAN_STATE" | jq \
 			--arg key "$item_key" \
@@ -625,14 +700,14 @@ _scan_backfill_fetch_latest_comment() {
 
 	local issue_comments="[]"
 	if ! issue_comments=$(gh api --paginate "repos/${repo_slug}/issues/${number}/comments" \
-		--jq '[.[] | {author: .user.login, created: .created_at}]' 2>/dev/null); then
+		--jq '[.[] | {author: .user.login, created: .created_at, body: (.body // "")}]' 2>/dev/null); then
 		_log_warn "Backfill issue comments API failed for ${repo_slug}#${number}"
 		issue_comments="[]"
 	fi
 
 	local pr_review_comments="[]"
 	if ! pr_review_comments=$(gh api --paginate "repos/${repo_slug}/pulls/${number}/comments" \
-		--jq '[.[] | {author: .user.login, created: .created_at}]' 2>/dev/null); then
+		--jq '[.[] | {author: .user.login, created: .created_at, body: (.body // "")}]' 2>/dev/null); then
 		local tracked_type
 		tracked_type=$(echo "$_SCAN_STATE" | jq -r --arg key "$key" '.items[$key].type // "issue"')
 		if [[ "$tracked_type" == "pr" ]]; then
@@ -641,7 +716,11 @@ _scan_backfill_fetch_latest_comment() {
 		pr_review_comments="[]"
 	fi
 
-	jq -s 'add | sort_by(.created) | reverse | .[0]' \
+	jq -s 'add | sort_by(.created) | reverse | .[0] | {
+		author: (.author // ""),
+		created: (.created // ""),
+		is_aidevops: ((.body // "") | test("aidevops\\.sh"))
+	}' \
 		<(echo "$issue_comments") <(echo "$pr_review_comments") 2>/dev/null || echo ""
 	return 0
 }
@@ -665,9 +744,10 @@ _scan_backfill_process_item() {
 	comments_meta=$(_scan_backfill_fetch_latest_comment "$repo_slug" "$number" "$key")
 	[[ -z "$comments_meta" || "$comments_meta" == "null" ]] && return 0
 
-	local latest_comment_author latest_comment_time
+	local latest_comment_author latest_comment_time latest_comment_is_aidevops
 	latest_comment_author=$(echo "$comments_meta" | jq -r '.author // ""')
 	latest_comment_time=$(echo "$comments_meta" | jq -r '.created // ""')
+	latest_comment_is_aidevops=$(echo "$comments_meta" | jq -r '.is_aidevops // false')
 	[[ -z "$latest_comment_time" ]] && return 0
 
 	_SCAN_STATE=$(echo "$_SCAN_STATE" | jq \
@@ -675,7 +755,7 @@ _scan_backfill_process_item() {
 		--arg time "$latest_comment_time" \
 		'.items[$key].last_any_comment = (if .items[$key].last_any_comment == "" or $time > .items[$key].last_any_comment then $time else .items[$key].last_any_comment end)')
 
-	if [[ "$latest_comment_author" == "$username" ]]; then
+	if [[ "$latest_comment_author" == "$username" || "$latest_comment_is_aidevops" == "true" ]]; then
 		_SCAN_STATE=$(echo "$_SCAN_STATE" | jq --arg key "$key" --arg time "$latest_comment_time" '.items[$key].last_our_comment = $time')
 		return 0
 	fi
@@ -787,10 +867,12 @@ _scan_print_results() {
 	if [[ "$needs_attention" -gt 0 ]]; then
 		echo -e "${YELLOW}${needs_attention} external contribution(s) need your reply:${NC}"
 		echo -e "$attention_items"
-		# macOS notification (for launchd runs)
-		if [[ ! -t 0 ]] && command -v osascript &>/dev/null; then
-			osascript -e "display notification \"${needs_attention} contribution(s) need reply\" with title \"aidevops\"" 2>/dev/null || true
-		fi
+		# macOS notification disabled — Notification Center alert sounds
+		# cannot be suppressed per-notification; they cause system beeps.
+		# Re-enable: uncomment the osascript line below.
+		# if [[ ! -t 0 ]] && command -v osascript &>/dev/null; then
+		# 	osascript -e "display notification \"${needs_attention} contribution(s) need reply\" with title \"aidevops\"" 2>/dev/null || true
+		# fi
 	else
 		echo -e "${GREEN}All caught up — no external contributions need attention${NC}"
 	fi
@@ -822,6 +904,7 @@ _scan_init_globals() {
 _scan_fetch_and_process() {
 	local last_scan="$1"
 	local managed_slugs="$2"
+	local username="$3"
 
 	local since_arg=""
 	[[ -n "$last_scan" ]] && since_arg="&since=${last_scan}"
@@ -829,7 +912,7 @@ _scan_fetch_and_process() {
 	local notifications
 	notifications=$(gh api --paginate "notifications?participating=true&all=true&per_page=${API_PAGE_SIZE}${since_arg}" 2>/dev/null) || notifications=""
 
-	_scan_process_notifications "$notifications" "$managed_slugs"
+	_scan_process_notifications "$notifications" "$managed_slugs" "$username"
 	return 0
 }
 
@@ -907,12 +990,29 @@ _scan_maybe_auto_backfill() {
 cmd_scan() {
 	_scan_parse_args "$@"
 
+	_ensure_state_file
+
+	# Guard: prevent multiple concurrent scan instances (GH#17415).
+	# Check before prerequisites so the "already running" message is always shown.
+	if _is_scan_running; then
+		local running_pid
+		running_pid=$(cat "$PID_FILE" 2>/dev/null || echo "unknown")
+		echo -e "${YELLOW}[contribution-watch] Scan already running (PID ${running_pid}). Use 'stop' or 'restart' to control it.${NC}" >&2
+		_log_warn "Scan skipped — already running (PID ${running_pid})"
+		return 1
+	fi
+
 	_check_prerequisites || return 1
 
 	local username
 	username=$(_get_username) || return 1
 
-	_ensure_state_file
+	# Write our PID before starting work
+	echo $$ >"$PID_FILE"
+
+	# Remove PID file on exit (normal, Ctrl+C, or SIGTERM)
+	trap 'rm -f "$PID_FILE"; trap - EXIT INT TERM' EXIT INT TERM
+
 	_scan_init_globals
 
 	local last_scan
@@ -930,7 +1030,7 @@ cmd_scan() {
 	local managed_slugs
 	managed_slugs=$(_get_managed_repo_slugs)
 
-	_scan_fetch_and_process "$last_scan" "$managed_slugs"
+	_scan_fetch_and_process "$last_scan" "$managed_slugs" "$username"
 
 	if [[ "$_SCAN_ARG_BACKFILL" == "true" ]]; then
 		_scan_run_backfill "$managed_slugs" "$username"
@@ -940,6 +1040,64 @@ cmd_scan() {
 	_scan_post_actions "$_SCAN_ARG_AUTO_DRAFT" "$_SCAN_ARG_BACKFILL" "$_SCAN_ARG_AUTO_BACKFILL"
 
 	return 0
+}
+
+# =============================================================================
+# Stop: stop a running scan via PID file
+# =============================================================================
+
+cmd_stop() {
+	mkdir -p "$(dirname "$PID_FILE")" 2>/dev/null || true
+
+	if [[ ! -f "$PID_FILE" ]]; then
+		echo "[contribution-watch] No PID file found. Is a scan running?" >&2
+		return 1
+	fi
+
+	local pid
+	pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
+	if [[ -z "$pid" ]] || ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+		echo "[contribution-watch] PID file is invalid. Removing stale file." >&2
+		rm -f "$PID_FILE"
+		return 1
+	fi
+
+	if ! kill -0 "$pid" 2>/dev/null; then
+		echo "[contribution-watch] No running scan found (PID ${pid} is gone). Removing stale PID file."
+		rm -f "$PID_FILE"
+		return 0
+	fi
+
+	echo "[contribution-watch] Stopping scan (PID ${pid})..."
+	kill -TERM "$pid" 2>/dev/null || true
+
+	# Wait up to 5 seconds for the process to exit
+	local waited=0
+	while kill -0 "$pid" 2>/dev/null && [[ "$waited" -lt 5 ]]; do
+		sleep 1
+		waited=$((waited + 1))
+	done
+
+	if kill -0 "$pid" 2>/dev/null; then
+		echo "[contribution-watch] Scan did not stop after SIGTERM, sending SIGKILL..."
+		kill -KILL "$pid" 2>/dev/null || true
+	fi
+
+	rm -f "$PID_FILE"
+	echo "[contribution-watch] Scan stopped."
+	return 0
+}
+
+# =============================================================================
+# Restart: stop any running scan and start a new one
+# =============================================================================
+
+cmd_restart() {
+	local stop_rc=0
+	cmd_stop 2>/dev/null || stop_rc=$?
+	# stop_rc=1 is acceptable (no scan was running)
+	cmd_scan "$@"
+	return $?
 }
 
 # Classify a single status item into activity tiers and check if it needs reply.
@@ -1163,6 +1321,13 @@ cmd_uninstall() {
 	else
 		echo "No plist found at ${PLIST_PATH}"
 	fi
+
+	# Stop any running scan and clean up PID file
+	if [[ -f "$PID_FILE" ]]; then
+		cmd_stop 2>/dev/null || true
+		rm -f "$PID_FILE"
+	fi
+
 	return 0
 }
 
@@ -1180,6 +1345,8 @@ cmd_help() {
 	echo "  contribution-watch-helper.sh scan [--auto-draft]           Also create draft replies for items needing attention"
 	echo "                                                             Drafts stored in ~/.aidevops/.agent-workspace/draft-responses/"
 	echo "                                                             Use draft-response-helper.sh to review and approve"
+	echo "  contribution-watch-helper.sh stop                          Stop a running scan (via PID file)"
+	echo "  contribution-watch-helper.sh restart                       Stop existing scan and start a new one"
 	echo "  contribution-watch-helper.sh status                        Show watched items and their state"
 	echo "  contribution-watch-helper.sh install                       Install launchd plist"
 	echo "  contribution-watch-helper.sh uninstall                     Remove launchd plist"
@@ -1220,6 +1387,8 @@ main() {
 	case "$cmd" in
 	seed) cmd_seed "$@" ;;
 	scan) cmd_scan "$@" ;;
+	stop) cmd_stop "$@" ;;
+	restart) cmd_restart "$@" ;;
 	status) cmd_status "$@" ;;
 	install) cmd_install "$@" ;;
 	uninstall) cmd_uninstall "$@" ;;

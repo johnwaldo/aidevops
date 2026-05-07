@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # detect-app-type.sh — Infer app_type from repo root marker files (t1698)
 #
 # Scans a repository directory for well-known marker files and returns the
@@ -27,7 +29,12 @@
 
 set -euo pipefail
 
-export PATH="/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:${PATH}"
+_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/bin:/usr/bin"
+if [[ "$(uname -s 2>/dev/null || true)" != "Darwin" && -d "/home/linuxbrew/.linuxbrew/bin" ]]; then
+	_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/bin:/usr/bin"
+fi
+export PATH="${_aidevops_path_prefix}:${PATH}"
+unset _aidevops_path_prefix
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
 
@@ -163,9 +170,15 @@ write_cache_to_repos_json() {
 	# Write app_type into the matching entry
 	local tmp_file
 	tmp_file="$(mktemp)"
-	jq --arg slug "$slug" --arg app_type "$app_type" \
+	if jq --arg slug "$slug" --arg app_type "$app_type" \
 		'map(if .slug == $slug then . + {"app_type": $app_type} else . end)' \
-		"$repos_json" >"$tmp_file" && mv "$tmp_file" "$repos_json"
+		"$repos_json" >"$tmp_file" && jq empty "$tmp_file" 2>/dev/null; then
+		mv "$tmp_file" "$repos_json"
+	else
+		echo "ERROR: repos.json write produced invalid JSON — aborting (GH#16746)" >&2
+		rm -f "$tmp_file"
+		return 1
+	fi
 
 	printf "${GREEN}Cached app_type=%s for %s in repos.json${NC}\n" "$app_type" "$slug" >&2
 	return 0

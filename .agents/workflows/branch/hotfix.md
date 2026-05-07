@@ -6,9 +6,10 @@ tools:
   write: true
   edit: true
   bash: true
-  glob: true
-  grep: true
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Hotfix Branch
 
@@ -19,8 +20,8 @@ tools:
 | **Prefix** | `hotfix/` |
 | **Commit** | `fix: [HOTFIX] description` |
 | **Version** | Patch bump (1.0.0 → 1.0.1) |
-| **Create from** | **Latest tag** (not main) |
-| **Urgency** | Immediate - bypasses normal review if needed |
+| **Create from** | **Latest tag** (not `main`) — fix matches production, not unreleased changes |
+| **Urgency** | Immediate; can bypass normal review if authorized |
 
 ```bash
 git fetch --tags
@@ -32,39 +33,27 @@ git checkout -b hotfix/{description}
 
 ## When to Use
 
-- Critical production bugs
-- Security vulnerabilities
-- Data corruption issues
-- Service outages
+- Critical production bugs, security vulnerabilities, data corruption, service outages
 
-**If it can wait for normal release cycle**, use `bugfix/` instead.
+If it can wait for the normal release cycle, use `bugfix/` instead.
 
-## Unique Guidance
+## Workflow
 
-### Create from Latest Tag (Not Main)
-
-This ensures the hotfix applies to what's actually in production:
+1. Apply the minimal fix only.
+2. Test immediately.
+3. Fast-track review, or deploy directly if authorized.
+4. Merge back to `main` and push.
 
 ```bash
-git fetch --tags
-git checkout $(git describe --tags --abbrev=0)
-git checkout -b hotfix/critical-issue
+git checkout main && git pull origin main
+git merge hotfix/critical-issue && git push origin main
 ```
 
-### Expedited Process
+### After Deployment
 
-1. Apply **minimal fix** - only what's needed
-2. Test immediately
-3. Fast-track review (or deploy directly if authorized)
-4. **Merge back to main** after deployment
-
-### Post-Hotfix Checklist
-
-After deploying:
-- [ ] Ensure fix is merged to `main`
-- [ ] Create proper regression tests
-- [ ] Document incident
-- [ ] Review how issue was missed
+- [ ] Add regression tests
+- [ ] Document the incident
+- [ ] Review how the issue escaped
 
 ## Examples
 
@@ -74,8 +63,6 @@ hotfix/production-database-lock
 hotfix/payment-processing-failure
 ```
 
-## Commit Example
-
 ```bash
 fix: [HOTFIX] prevent authentication bypass
 
@@ -84,15 +71,4 @@ CRITICAL SECURITY FIX
 - Validate session token
 
 Deploy immediately. Full audit to follow.
-```
-
-## Merge Back to Main
-
-After deployment:
-
-```bash
-git checkout main
-git pull origin main
-git merge hotfix/critical-issue
-git push origin main
 ```

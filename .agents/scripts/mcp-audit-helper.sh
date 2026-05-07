@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # mcp-audit-helper.sh — MCP tool description runtime scanning for prompt injection (t1428.2)
 #
 # Fetches all configured MCP server tool descriptions via mcporter, runs
@@ -514,9 +516,9 @@ cmd_report() {
 
 	if command -v jq &>/dev/null; then
 		local flagged_scans
-		flagged_scans=$(grep -c '"result":"FLAGGED"' "$log_file" 2>/dev/null || echo "0")
+		flagged_scans=$(safe_grep_count '"result":"FLAGGED"' "$log_file")
 		local clean_scans
-		clean_scans=$(grep -c '"result":"CLEAN"' "$log_file" 2>/dev/null || echo "0")
+		clean_scans=$(safe_grep_count '"result":"CLEAN"' "$log_file")
 
 		echo "  Clean scans:   $clean_scans"
 		echo "  Flagged scans: $flagged_scans"

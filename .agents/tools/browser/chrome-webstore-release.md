@@ -5,6 +5,9 @@ model: sonnet
 tools: [bash, read, write]
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Chrome Web Store Release Automation
 
 ## Quick Start
@@ -25,70 +28,35 @@ chrome-webstore-helper.sh upload-secrets  # Upload to GitHub via gh CLI
 
 ## Credential Setup
 
-Collect before starting: manifest path, build command, zip command, output path, CI platform, release policy.
+**1. Enable API:** `https://console.cloud.google.com/apis/library/chromewebstore.googleapis.com` → Enable
 
-### 1. Enable Chrome Web Store API
+**2. OAuth Consent Screen:** `https://console.cloud.google.com/apis/credentials/consent` → External → fill app name + emails → add test user if in Testing mode. Move to Production for stable refresh tokens.
 
-`https://console.cloud.google.com/apis/library/chromewebstore.googleapis.com` → Enable
+**3. Create OAuth Client:** `https://console.cloud.google.com/apis/credentials` → Create Credentials → OAuth client ID → Web application → redirect URI: `https://developers.google.com/oauthplayground` → Capture: `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`
 
-### 2. OAuth Consent Screen
+**4. Generate Refresh Token:** `https://developers.google.com/oauthplayground/` → settings gear → Use your own OAuth credentials → paste client ID/secret → scope: `https://www.googleapis.com/auth/chromewebstore` → Authorize APIs → sign in → Exchange authorization code for tokens → Capture: `CWS_REFRESH_TOKEN`
 
-`https://console.cloud.google.com/apis/credentials/consent` → External → fill app name + emails → add test user if in Testing mode. Move to Production for stable refresh tokens.
+**5. Store IDs:** Chrome Web Store Developer Dashboard → copy extension item ID and publisher ID → Capture: `CWS_EXTENSION_ID`, `CWS_PUBLISHER_ID`
 
-### 3. Create OAuth Client
-
-`https://console.cloud.google.com/apis/credentials` → Create Credentials → OAuth client ID → Web application → add redirect URI: `https://developers.google.com/oauthplayground`
-
-Capture: `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`
-
-### 4. Generate Refresh Token
-
-`https://developers.google.com/oauthplayground/` → settings gear → Use your own OAuth credentials → paste client ID/secret → scope: `https://www.googleapis.com/auth/chromewebstore` → Authorize APIs → sign in → Exchange authorization code for tokens
-
-Capture: `CWS_REFRESH_TOKEN`
-
-### 5. Store IDs
-
-Chrome Web Store Developer Dashboard → copy extension item ID and publisher ID.
-
-Capture: `CWS_EXTENSION_ID`, `CWS_PUBLISHER_ID`
-
-### Credential Checklist
-
-All five required before proceeding: `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`, `CWS_PUBLISHER_ID`, `CWS_EXTENSION_ID`
+All five required: `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`, `CWS_PUBLISHER_ID`, `CWS_EXTENSION_ID`
 
 ## Secret Storage
 
 ```bash
-# aidevops encrypted storage (preferred)
 aidevops secret set CWS_CLIENT_ID
 aidevops secret set CWS_CLIENT_SECRET
 aidevops secret set CWS_REFRESH_TOKEN
 aidevops secret set CWS_PUBLISHER_ID
 aidevops secret set CWS_EXTENSION_ID
 
-# Upload to GitHub Actions
-chrome-webstore-helper.sh upload-secrets  # reads local env, validates, uploads via gh secret set
+chrome-webstore-helper.sh upload-secrets  # push to GitHub Actions secrets
 ```
 
-Local template (no real values committed):
-
-```env
-CWS_CLIENT_ID=
-CWS_CLIENT_SECRET=
-CWS_REFRESH_TOKEN=
-CWS_PUBLISHER_ID=
-CWS_EXTENSION_ID=
-```
-
-## Release Workflow (Version-Triggered)
+## Release Workflow
 
 1. Read local version from `manifest.json`
-2. Exchange refresh token: `POST https://oauth2.googleapis.com/token`
-3. Fetch CWS status: `GET https://chromewebstore.googleapis.com/v2/publishers/<publisherId>/items/<extensionId>:fetchStatus`
-4. Extract published version from `publishedItemRevisionStatus.distributionChannels[0].crxVersion`
-5. If local == published → skip (no-op)
-6. If version changed → build zip → upload → publish
+2. Exchange refresh token → fetch CWS status → compare versions
+3. local == published → skip; version changed → build zip → upload → publish
 
 Success states: `PENDING_REVIEW`, `PUBLISHED`, `PUBLISHED_TO_TESTERS`, `STAGED`
 
@@ -108,8 +76,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm ci
-      - run: npm run build
+      - run: npm ci && npm run build
       - name: Publish to Chrome Web Store
         env:
           CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
@@ -124,37 +91,30 @@ jobs:
 
 ```bash
 chrome-webstore-helper.sh status --manifest src/manifest.json
-chrome-webstore-helper.sh status --json  # machine-readable
+chrome-webstore-helper.sh status --json  # machine-readable: itemId, localVersion, publishedVersion, publishedState, upToDate
 ```
 
-Outputs: `itemId`, `localVersion`, `publishedVersion`, `publishedState`, `upToDate`. Exits non-zero on auth/API errors.
+Exits non-zero on auth/API errors.
 
-## API Reference
+## API Reference (curl)
 
 ```bash
 # Token exchange
 curl -X POST https://oauth2.googleapis.com/token \
-  -d "client_id=$CWS_CLIENT_ID" \
-  -d "client_secret=$CWS_CLIENT_SECRET" \
-  -d "refresh_token=$CWS_REFRESH_TOKEN" \
-  -d "grant_type=refresh_token"
+  -d "client_id=$CWS_CLIENT_ID&client_secret=$CWS_CLIENT_SECRET&refresh_token=$CWS_REFRESH_TOKEN&grant_type=refresh_token"
 
 # Fetch status
-curl -X GET \
-  "https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:fetchStatus" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:fetchStatus"
 
 # Upload
-curl -X POST \
-  "https://chromewebstore.googleapis.com/upload/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:upload" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/zip" \
-  --data-binary @extension.zip
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/zip" \
+  --data-binary @extension.zip \
+  "https://chromewebstore.googleapis.com/upload/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:upload"
 
 # Publish
-curl -X POST \
-  "https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:publish" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  "https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:publish"
 ```
 
 ## Troubleshooting
@@ -176,7 +136,5 @@ curl -X POST \
 
 ## Links
 
-- API overview: `https://developer.chrome.com/docs/webstore/using-api`
-- OAuth Playground: `https://developers.google.com/oauthplayground/`
-- API enablement: `https://console.cloud.google.com/apis/library/chromewebstore.googleapis.com`
-- Credentials: `https://console.cloud.google.com/apis/credentials`
+- [Chrome Web Store API](https://developer.chrome.com/docs/webstore/using-api)
+- [OAuth Playground](https://developers.google.com/oauthplayground/)

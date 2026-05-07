@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # ip-rep-blocklistde.sh — Blocklist.de provider for ip-reputation-helper.sh
 # Interface: check <ip> → JSON result on stdout
 # Free tier: No key required, open API
@@ -59,17 +61,11 @@ attacks_to_score() {
 
 score_to_risk() {
 	local score="$1"
-	if [[ "$score" -ge 75 ]]; then
-		echo "critical"
-	elif [[ "$score" -ge 50 ]]; then
-		echo "high"
-	elif [[ "$score" -ge 25 ]]; then
-		echo "medium"
-	elif [[ "$score" -ge 5 ]]; then
-		echo "low"
-	else
-		echo "clean"
-	fi
+	[[ "$score" -ge 75 ]] && echo "critical" && return 0
+	[[ "$score" -ge 50 ]] && echo "high" && return 0
+	[[ "$score" -ge 25 ]] && echo "medium" && return 0
+	[[ "$score" -ge 5 ]] && echo "low" && return 0
+	echo "clean"
 	return 0
 }
 
@@ -123,11 +119,9 @@ cmd_check() {
 		reports=$(echo "$normalized" | grep -oE 'reports:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' || echo "0")
 		attacks="${attacks:-0}"
 		reports="${reports:-0}"
-		if [[ "$attacks" -gt 0 || "$reports" -gt 0 ]]; then
-			is_listed=true
-		else
-			is_listed=false
-		fi
+		# Determine listing status based on attack/report counts
+		is_listed=false
+		[[ "$attacks" -gt 0 || "$reports" -gt 0 ]] && is_listed=true
 	else
 		# Unexpected response format — treat as error
 		error_json "$ip" "unexpected response format: ${response:0:100}"

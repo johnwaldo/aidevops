@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # Shannon AI Pentester Helper Script
 # Autonomous exploit-driven web application security testing
@@ -417,7 +419,7 @@ show_status() {
             echo "$reports" | while IFS= read -r report; do
                 local dir
                 dir=$(dirname "$(dirname "$report")")
-                print_info "$(basename "$dir") - $(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$report" 2>/dev/null || stat -c '%y' "$report" 2>/dev/null | cut -d. -f1)"
+                print_info "$(basename "$dir") - $(_stat_batch '%y' "$report" | cut -d. -f1)"
             done
         else
             print_info "No reports found"

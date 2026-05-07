@@ -1,86 +1,75 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Bot Management Patterns
 
-## E-commerce Protection
+WAF custom rules, rate limiting, and Workers patterns. Enterprise-only features (granular scores, JA3/JA4) noted inline.
+
+## WAF Rule Patterns
+
+### Sensitive flows
 
 ```txt
-# High security for checkout
 (cf.bot_management.score lt 50 and http.request.uri.path in {"/checkout" "/cart/add"} and not cf.bot_management.verified_bot and not cf.bot_management.corporate_proxy)
 Action: Managed Challenge
 ```
 
-## API Protection
+### APIs
 
 ```txt
-# Protect API with JS detection + score
 (http.request.uri.path matches "^/api/" and (cf.bot_management.score lt 30 or not cf.bot_management.js_detection.passed) and not cf.bot_management.verified_bot)
 Action: Block
 ```
 
-## SEO-Friendly Bot Handling
+### Search engine access
 
 ```txt
-# Allow search engine crawlers
 (cf.bot_management.score lt 30 and not cf.verified_bot_category in {"Search Engine Crawler"})
 Action: Managed Challenge
 ```
 
-## Block AI Scrapers
+### AI crawlers
 
 ```txt
-# Block AI training bots
 (cf.verified_bot_category eq "AI Crawler")
 Action: Block
-
-# Or use dashboard: Security > Settings > Bot Management > Block AI Bots
 ```
 
-## Rate Limiting by Bot Score
+Dashboard alternative: Security > Settings > Bot Management > Block AI Bots.
+
+### Mobile apps (Enterprise)
 
 ```txt
-# Stricter limits for suspicious traffic
-(cf.bot_management.score lt 50)
-Rate: 10 requests per 10 seconds
-
-(cf.bot_management.score ge 50)
-Rate: 100 requests per 10 seconds
-```
-
-## Mobile App Allowlisting
-
-```txt
-# Identify mobile app by JA3/JA4
 (cf.bot_management.ja4 in {"fingerprint1" "fingerprint2"})
 Action: Skip (all remaining rules)
 ```
 
-## Layered Defense
+## Thresholds and Layering
+
+| Context | Threshold | Notes |
+|---------|-----------|-------|
+| Public content | score < 10 | High tolerance |
+| Authenticated | score < 30 | Standard threshold |
+| Sensitive (checkout, login) | score < 50 | Add JavaScript Detections |
+
+Enforcement order: Bot Management (score-based) → JavaScript Detections → Rate Limiting → WAF Managed Rules (OWASP).
+
+Zero-trust baseline: deny lower-score traffic first, then allowlist verified bots, mobile apps (JA3/JA4), corporate proxies, and static resources.
+
+## Rate Limiting
 
 ```txt
-1. Bot Management (score-based)
-2. JavaScript Detections (for JS-capable clients)
-3. Rate Limiting (fallback protection)
-4. WAF Managed Rules (OWASP, etc.)
+# Score-based rate limits
+(cf.bot_management.score lt 50) → 10 req/10s
+(cf.bot_management.score ge 50) → 100 req/10s
+
+# Per-user JWT rate limiting (Custom rules > Rate Limiting)
+Field: lookup_json_string(http.request.jwt.claims["{config_id}"][0], "sub")
+Matches: user ID claim
+Additional condition: cf.bot_management.score lt 50
 ```
 
-## Progressive Enhancement
-
-```txt
-Public content: High threshold (score < 10)
-Authenticated: Medium threshold (score < 30)
-Sensitive: Low threshold (score < 50) + JSD
-```
-
-## Zero Trust for Bots
-
-```txt
-1. Default deny (all scores < 30)
-2. Allowlist verified bots
-3. Allowlist mobile apps (JA3/JA4)
-4. Allowlist corporate proxies
-5. Allowlist static resources
-```
-
-## Workers: Score + JS Detection
+## Workers
 
 ```typescript
 export default {
@@ -88,38 +77,27 @@ export default {
     const cf = request.cf as any;
     const botMgmt = cf?.botManagement;
     const url = new URL(request.url);
-    
-    if (botMgmt?.staticResource) return fetch(request); // Skip static
-    
-    // API endpoints: require JS detection + good score
+
+    if (botMgmt?.staticResource) return fetch(request);
+
     if (url.pathname.startsWith('/api/')) {
       const jsDetectionPassed = botMgmt?.jsDetection?.passed ?? false;
       const score = botMgmt?.score ?? 100;
-      
+
       if (!jsDetectionPassed || score < 30) {
         return new Response('Unauthorized', { status: 401 });
       }
     }
-    
+
     return fetch(request);
   }
 };
 ```
 
-## Rate Limiting by JWT Claim + Bot Score
+## Integration Points
 
-```txt
-# Enterprise: Combine bot score with JWT validation
-Rate limiting > Custom rules
-- Field: lookup_json_string(http.request.jwt.claims["{config_id}"][0], "sub")
-- Matches: user ID claim
-- Additional condition: cf.bot_management.score lt 50
-```
-
-## WAF Integration Points
-
-- **WAF Custom Rules**: Primary enforcement mechanism
-- **Rate Limiting Rules**: Bot score as dimension, stricter limits for low scores
-- **Transform Rules**: Pass score to origin via custom header
-- **Workers**: Programmatic bot logic, custom scoring algorithms
-- **Page Rules / Configuration Rules**: Zone-level overrides, path-specific settings
+- **WAF Custom Rules** — primary enforcement point
+- **Rate Limiting Rules** — stricter quotas for lower bot scores
+- **Transform Rules** — forward score to origin in a custom header
+- **Workers** — programmatic enforcement and custom scoring
+- **Configuration Rules** — zone-level or path-specific overrides

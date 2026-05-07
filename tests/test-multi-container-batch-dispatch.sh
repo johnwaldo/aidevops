@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC1090,SC2317,SC2329
 # SC2034: Variables set for sourced scripts (BLUE, SUPERVISOR_DB, etc.)
 # SC1090: Non-constant source paths (test harness pattern)
@@ -983,7 +985,7 @@ total_state_entries=$(test_db "SELECT count(*) FROM state_log;")
 if [[ "$total_state_entries" -ge 30 ]]; then
 	pass "State log: $total_state_entries entries (comprehensive audit trail)"
 else
-	fail "State log: only $total_state_entries entries (expected >= 30 for 6 tasks)"
+	fail "State log: only $total_state_entries entries (expected >= 30 across 6 tasks)"
 fi
 
 # Verify each task has at least 5 state transitions (queued->dispatched->running->evaluating->complete)

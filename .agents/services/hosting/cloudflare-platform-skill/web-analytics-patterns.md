@@ -1,52 +1,22 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 ## Common Use Cases
 
-### 1. Performance Monitoring
+1. **LCP triage** — open Core Web Vitals → LCP → Debug View, inspect the reported selector, then optimize that element.
 
-Track Core Web Vitals to identify slow-loading elements:
+   ```typescript
+   document.querySelector('.hero-image') // Selector copied from Debug View
+   ```
 
-```typescript
-// Debug poor LCP scores
-// 1. Enable Web Analytics
-// 2. Dashboard → Core Web Vitals → LCP section
-// 3. Debug View shows top 5 problematic elements
-// 4. Use element CSS selector in browser console:
-document.querySelector('.hero-image') // Example element
-// 5. Optimize identified elements (lazy loading, compression, etc.)
-```
+2. **Human-only reporting** — set `Exclude Bots: Yes` before comparing traffic or engagement trends.
 
-### 2. Bot Traffic Filtering
+3. **Multi-site comparisons** — use the `Site` dimension to compare proxied properties (unlimited) and up to 10 non-proxied sites.
 
-Exclude bots to see real user metrics:
+   ```text
+   Site:
+   - example.com
+   - blog.example.com
+   ```
 
-```
-Dashboard filters:
-- Exclude Bots: Yes
-→ Shows human traffic only
-```
-
-### 3. Multi-Site Analytics
-
-Track multiple properties under one account:
-
-```
-Proxied sites: Unlimited
-Non-proxied: Up to 10 sites
-
-View by dimension:
-- Site: example.com
-- Site: blog.example.com
-→ Compare traffic across properties
-```
-
-### 4. Geographic Analysis
-
-Understand visitor distribution:
-
-```
-Filter by:
-- Country: United States
-- Device type: Mobile
-→ Mobile traffic from US
-```
-
-### 5.
+4. **Segment analysis** — combine filters such as `Country: United States` and `Device type: Mobile` before investigating behavior.

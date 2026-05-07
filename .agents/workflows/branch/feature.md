@@ -10,6 +10,9 @@ tools:
   grep: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Feature Branch
 
 <!-- AI-CONTEXT-START -->
@@ -24,36 +27,19 @@ tools:
 ```bash
 git checkout main && git pull origin main
 git checkout -b feature/{description}
+# e.g. feature/user-dashboard, feat: add user authentication
 ```
 
 <!-- AI-CONTEXT-END -->
 
 ## When to Use
 
-- New functionality or capabilities
-- New integrations
-- Significant enhancements
+- New functionality or integrations
+- Significant capability expansion
 
-## Unique Guidance
+**Not for** bug fixes, refactors, or docs/config-only work.
 
-For detailed feature implementation patterns, see `workflows/feature-development.md`.
+## Guidance
 
-## Examples
-
-```bash
-feature/user-dashboard
-feature/123-api-rate-limiting
-feature/export-to-csv
-```
-
-## Commit Example
-
-```bash
-feat: add user authentication
-
-- Implement OAuth2 flow
-- Add session management
-- Create login/logout endpoints
-
-Closes #123
-```
+- Minor-version bump applies when the branch ships user-visible capability, not internal-only maintenance.
+- For implementation patterns, see `workflows/feature-development.md`.

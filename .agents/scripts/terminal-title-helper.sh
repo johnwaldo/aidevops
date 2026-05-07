@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # terminal-title-helper.sh - Terminal tab/window title integration for aidevops
 # Part of aidevops framework: https://aidevops.sh
 #
@@ -24,6 +26,7 @@
 #   TERMINAL_TITLE_ENABLED   Set to "false" to disable terminal title integration
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
+# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/shared-constants.sh"
 
 set -euo pipefail
@@ -230,7 +233,33 @@ cmd_rename() {
 	log_success "Tab title set to: $title"
 }
 
+# Check whether the current branch is a default (non-feature) branch.
+# Default branches (main/master/HEAD) are not meaningful terminal titles:
+# emitting "main" or "aidevops/main" into the OSC title clobbers the
+# meaningful session-level title set earlier (e.g. by session-rename or a
+# user-provided title). Called by cmd_sync only — cmd_rename with an
+# explicit title remains unguarded (manual override).
+# Mirrors `_is_meaningful_branch_title` in session-rename-helper.sh (t2252).
+# Returns: 0 if current branch is a default branch, 1 otherwise
+_is_default_branch() {
+	local branch
+	branch=$(get_branch_name) || return 1
+	case "$branch" in
+	"" | HEAD | main | master) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
 cmd_sync() {
+	# Guard: skip silently when on a default branch. This prevents auto-sync
+	# triggers (pre-edit-check.sh, precmd hooks) from clobbering meaningful
+	# terminal titles with "main"/"master"/"aidevops/main" when the canonical
+	# repo sits on main per t1990. Returns 0 to keep best-effort callers quiet.
+	if _is_default_branch; then
+		log_info "Skipping terminal title sync: on default branch"
+		return 0
+	fi
+
 	local title
 	title=$(generate_title)
 
@@ -320,7 +349,7 @@ EXAMPLES:
 
 ENVIRONMENT VARIABLES:
     TERMINAL_TITLE_FORMAT
-        Format for auto-generated titles. Options:
+        Auto-generated title format. Options:
         - "repo/branch" (default): "aidevops/feature/xyz"
         - "branch": "feature/xyz"
         - "repo": "aidevops"
@@ -330,7 +359,7 @@ ENVIRONMENT VARIABLES:
         Set to "false" to disable terminal title integration
 
 SHELL INTEGRATION:
-    Add to ~/.bashrc or ~/.zshrc for automatic sync on directory change:
+    To enable automatic sync on directory change, add to ~/.bashrc or ~/.zshrc:
 
     # Bash
     PROMPT_COMMAND='~/.aidevops/agents/scripts/terminal-title-helper.sh sync 2>/dev/null'

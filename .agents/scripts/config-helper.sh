@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # config-helper.sh - JSONC configuration reader/writer for aidevops
 #
 # Provides get/set/list/reset/migrate operations on the aidevops JSONC config.
@@ -70,7 +72,7 @@ OLD_CONF_USER="${OLD_CONF_USER:-${HOME}/.config/aidevops/feature-toggles.conf}"
 OLD_CONF_DEFAULTS="${OLD_CONF_DEFAULTS:-${HOME}/.aidevops/agents/configs/feature-toggles.conf.defaults}"
 MIGRATE_FAILED_FLAG="${MIGRATE_FAILED_FLAG:-${HOME}/.aidevops/migrate_failed}"
 
-# Cache for merged config (avoid re-parsing on every call)
+# nice — cache avoids re-parsing on every call
 _JSONC_MERGED_CACHE=""
 _JSONC_CACHE_MTIME=""
 
@@ -219,11 +221,11 @@ _get_merged_config() {
 	# Check if cache is still valid (based on file mtimes)
 	local current_mtime=""
 	if [[ -f "$JSONC_DEFAULTS" ]]; then
-		current_mtime=$(stat -c %Y "$JSONC_DEFAULTS" 2>/dev/null || stat -f %m "$JSONC_DEFAULTS" 2>/dev/null || echo "0")
+		current_mtime=$(_file_mtime_epoch "$JSONC_DEFAULTS")
 	fi
 	if [[ -f "$JSONC_USER" ]]; then
 		local user_mtime
-		user_mtime=$(stat -c %Y "$JSONC_USER" 2>/dev/null || stat -f %m "$JSONC_USER" 2>/dev/null || echo "0")
+		user_mtime=$(_file_mtime_epoch "$JSONC_USER")
 		current_mtime="${current_mtime}:${user_mtime}"
 	fi
 
@@ -310,6 +312,7 @@ _config_env_map() {
 	updates.upstream_watch_hours) echo "AIDEVOPS_UPSTREAM_WATCH_HOURS" ;;
 	orchestration.supervisor_pulse) echo "AIDEVOPS_SUPERVISOR_PULSE" ;;
 	orchestration.repo_sync) echo "AIDEVOPS_REPO_SYNC" ;;
+	orchestration.repo_aidevops_health) echo "AIDEVOPS_REPO_HEALTH" ;;
 	orchestration.max_workers_cap) echo "AIDEVOPS_MAX_WORKERS_CAP" ;;
 	orchestration.quality_debt_cap_pct) echo "AIDEVOPS_QUALITY_DEBT_CAP_PCT" ;;
 	*) echo "" ;;
@@ -381,6 +384,7 @@ _legacy_key_to_dotpath() {
 	manage_claude_config) echo "integrations.manage_claude_config" ;;
 	supervisor_pulse) echo "orchestration.supervisor_pulse" ;;
 	repo_sync) echo "orchestration.repo_sync" ;;
+	repo_aidevops_health) echo "orchestration.repo_aidevops_health" ;;
 	session_greeting) echo "ui.session_greeting" ;;
 	safety_hooks) echo "safety.hooks_enabled" ;;
 	shell_aliases) echo "ui.shell_aliases" ;;
@@ -812,7 +816,19 @@ cmd_set() {
 
 	echo "[OK] Set ${dotpath}=${value}" >&2
 	_cmd_set_warn_env_override "$dotpath"
+	# cool — persisted to user config, picks up on next run
 	echo "  Change takes effect on next setup.sh run or script invocation." >&2
+
+	# Print pulse default-on guidance when supervisor_pulse is first enabled (t1892)
+	if [[ "$dotpath" == "orchestration.supervisor_pulse" ]]; then
+		local lower_val
+		lower_val=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+		if [[ "$lower_val" == "true" ]]; then
+			echo "[INFO] Pulse enabled — runs every ~2 minutes by default (24/7)." >&2
+			echo "[INFO] Run 'aidevops pulse stop' to switch to manual start/stop mode (persistent across reboots)." >&2
+		fi
+	fi
+
 	return 0
 }
 

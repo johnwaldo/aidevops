@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # Common helper functions for setup.sh
 # Sourced by all setup modules
 
-# Colors for output
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-GRAY='\033[0;90m'
-NC='\033[0m' # No Color
+# Colors for output (guarded — GH#18702)
+# setup.sh sources shared-constants.sh later in the flow, which declares
+# these as readonly. If this module is ever re-sourced after that, unguarded
+# assignment would fail under `set -Eeuo pipefail`. Use the `${VAR+x}` guard.
+[[ -z "${GREEN+x}" ]] && GREEN='\033[0;32m'
+[[ -z "${BLUE+x}" ]] && BLUE='\033[0;34m'
+[[ -z "${YELLOW+x}" ]] && YELLOW='\033[1;33m'
+[[ -z "${RED+x}" ]] && RED='\033[0;31m'
+[[ -z "${GRAY+x}" ]] && GRAY='\033[0;90m'
+[[ -z "${NC+x}" ]] && NC='\033[0m' # No Color
 
 # Print functions
 print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -182,7 +187,9 @@ verified_install() {
 
 	# Create secure temp file
 	local tmp_script
-	tmp_script=$(mktemp "${TMPDIR:-/tmp}/aidevops-install-XXXXXX.sh") || {
+	# t2997: drop .sh — XXXXXX must be at end for BSD mktemp; bash executes by
+	# content, not extension.
+	tmp_script=$(mktemp "${TMPDIR:-/tmp}/aidevops-install-XXXXXX") || {
 		print_error "Failed to create temp file for $description"
 		return 1
 	}
@@ -369,6 +376,10 @@ ensure_homebrew() {
 	print_info "Homebrew (Linuxbrew) is not installed."
 	print_info "Several optional tools (Beads CLI, Worktrunk, bv) install via Homebrew taps."
 	echo ""
+	# Declare before setup_prompt so shellcheck can track it (SC2154).
+	# setup_prompt assigns via `printf -v $var_name`, which shellcheck
+	# cannot follow across the function boundary.
+	local install_brew=""
 	setup_prompt install_brew "Install Homebrew for Linux? [Y/n]: " "Y"
 
 	if [[ ! "$install_brew" =~ ^[Yy]?$ ]]; then
@@ -583,6 +594,10 @@ offer_python_brew_install() {
 		return 1
 	fi
 
+	# Declare before setup_prompt so shellcheck can track it (SC2154).
+	# setup_prompt assigns via `printf -v $var_name`, which shellcheck
+	# cannot follow across the function boundary.
+	local install_python=""
 	setup_prompt install_python "${prompt_verb} Python via Homebrew now? [Y/n]: " "Y"
 	if [[ "$install_python" =~ ^[Yy]?$ ]]; then
 		if run_with_spinner "Installing $recommended_formula" brew install "$recommended_formula"; then

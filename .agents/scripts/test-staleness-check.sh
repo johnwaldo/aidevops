@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # Test script for t312: Pre-dispatch staleness check
 # Verifies that check_task_staleness() detects outdated tasks before dispatch.
 #
@@ -484,7 +486,7 @@ echo "--- Test Group 2: Current tasks should NOT be flagged ---"
 assert_current \
 	"t311: Modularise oversized shell scripts is current" \
 	"t311" \
-	"Modularise oversized shell scripts — supervisor-helper.sh is 14644 lines" \
+	"Modularise oversized shell scripts — pulse-wrapper.sh is large" \
 	"$REPO_ROOT"
 
 assert_current \
@@ -508,7 +510,7 @@ assert_current \
 assert_current \
 	"Task referencing existing file is current" \
 	"t999" \
-	"Fix bug in supervisor-helper.sh line 5140" \
+	"Fix bug in pulse-wrapper.sh dispatch logic" \
 	"$REPO_ROOT"
 
 # ============================================================

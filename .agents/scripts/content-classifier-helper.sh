@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # content-classifier-helper.sh — Intelligence-layer prompt injection classifier (t1412.7)
 #
 # Haiku-tier LLM call to classify content from non-collaborators before it
@@ -128,11 +130,7 @@ _cc_cache_get() {
 	local file_age
 	local now
 	now=$(date +%s)
-	if [[ "$(uname)" == "Darwin" ]]; then
-		file_age=$(stat -f %m "$cache_file" 2>/dev/null || echo "0")
-	else
-		file_age=$(stat -c %Y "$cache_file" 2>/dev/null || echo "0")
-	fi
+	file_age=$(_file_mtime_epoch "$cache_file")
 
 	local age=$((now - file_age))
 	if [[ "$age" -gt "$CONTENT_CLASSIFIER_CACHE_TTL" ]]; then
@@ -171,11 +169,7 @@ _cc_collab_cache_get() {
 	local now
 	now=$(date +%s)
 	local file_age
-	if [[ "$(uname)" == "Darwin" ]]; then
-		file_age=$(stat -f %m "$cache_file" 2>/dev/null || echo "0")
-	else
-		file_age=$(stat -c %Y "$cache_file" 2>/dev/null || echo "0")
-	fi
+	file_age=$(_file_mtime_epoch "$cache_file")
 
 	local age=$((now - file_age))
 	if [[ "$age" -gt "$COLLAB_CACHE_TTL" ]]; then

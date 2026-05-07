@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 set -euo pipefail
 
@@ -67,72 +69,35 @@ require_pattern() {
 }
 
 check_generator_rules() {
+	# The deny/allow rules live in the Python settings updater.
+	# Check the extracted file first (GH#17559), fall back to the
+	# legacy inline heredoc in generate-claude-agents.sh.
+	local settings_py="${SCRIPT_DIR}/update-claude-settings.py"
 	local generator_file="${SCRIPT_DIR}/generate-claude-agents.sh"
-	if [[ ! -f "$generator_file" ]]; then
-		echo "FAIL: generator file missing: $generator_file" >&2
+	local target_file=""
+
+	if [[ -f "$settings_py" ]]; then
+		target_file="$settings_py"
+	elif [[ -f "$generator_file" ]]; then
+		target_file="$generator_file"
+	else
+		echo "FAIL: neither update-claude-settings.py nor generate-claude-agents.sh found" >&2
 		return 1
 	fi
 
-	python3 - "$generator_file" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8", errors="replace")
-
-def extract_block(name: str) -> str:
-    m = re.search(rf"{name}\s*=\s*\[(.*?)\]\n", text, re.S)
-    return m.group(1) if m else ""
-
-allow_block = extract_block("allow_rules")
-deny_block = extract_block("deny_rules")
-
-forbidden_in_allow = [
-    "Bash(gopass show *)",
-    "Bash(pass show *)",
-    "Bash(op read *)",
-    "Bash(cat ~/.config/aidevops/credentials.sh)",
-    "Read(~/.config/aidevops/credentials.sh)",
-]
-
-required_in_deny = [
-    "Bash(gopass show *)",
-    "Bash(pass show *)",
-    "Bash(op read *)",
-    "Bash(cat ~/.config/aidevops/credentials.sh)",
-    "Read(~/.config/aidevops/credentials.sh)",
-]
-
-errors = []
-for rule in forbidden_in_allow:
-    if rule in allow_block:
-        errors.append(f"forbidden rule in allow_rules: {rule}")
-
-for rule in required_in_deny:
-    if rule not in deny_block:
-        errors.append(f"required deny rule missing: {rule}")
-
-if errors:
-    for err in errors:
-        print(f"FAIL: {err}", file=sys.stderr)
-    sys.exit(1)
-
-print("PASS: generator deny/allow secret rules")
-PY
-
+	python3 "${SCRIPT_DIR}/check-generator-rules.py" "$target_file"
 	return $?
 }
 
 check_policy_markers() {
-	local build_prompt="${SCRIPT_DIR}/../prompts/build.txt"
+	local agents_guide="${SCRIPT_DIR}/../AGENTS.md"
 	local sandbox_helper="${SCRIPT_DIR}/sandbox-exec-helper.sh"
 	local secret_handling_ref="${SCRIPT_DIR}/../reference/secret-handling.md"
 
 	# Explicit readability checks before marker checks — avoids misleading
 	# "marker missing" errors when the file itself is absent or unreadable.
-	if [[ ! -r "$build_prompt" ]]; then
-		echo "FAIL: build prompt not readable: $build_prompt" >&2
+	if [[ ! -r "$agents_guide" ]]; then
+		echo "FAIL: AGENTS guide not readable: $agents_guide" >&2
 		return 1
 	fi
 
@@ -141,37 +106,38 @@ check_policy_markers() {
 		return 1
 	fi
 
-	# build.txt must reference transcript exposure policy (inline or via pointer)
-	if ! require_pattern "transcript exposure" "$build_prompt" \
-		"transcript exposure policy missing from build prompt"; then
+	# AGENTS.md must reference transcript exposure policy (inline or via pointer)
+	if ! require_pattern "transcript exposure" "$agents_guide" \
+		"transcript exposure policy missing from AGENTS guide"; then
 		return 1
 	fi
 
-	# build.txt must contain the transcript-visible rule
-	if ! require_pattern "transcript-visible" "$build_prompt" \
-		"transcript-visible rule missing from build prompt"; then
+	# AGENTS.md must contain the transcript-visible rule
+	if ! require_pattern "transcript-visible" "$agents_guide" \
+		"transcript-visible rule missing from AGENTS guide"; then
 		return 1
 	fi
 
-	# Detailed secret handling rules must exist (either inline in build.txt
+	# Detailed secret handling rules must exist (either inline in AGENTS.md
 	# or in the extracted reference file)
+	local secret_check_target="$agents_guide"
 	if [[ -f "$secret_handling_ref" ]]; then
-		if [[ ! -r "$secret_handling_ref" ]]; then
+		[[ ! -r "$secret_handling_ref" ]] && {
 			echo "FAIL: secret-handling reference not readable: $secret_handling_ref" >&2
 			return 1
-		fi
-		if ! require_pattern "Never paste secret values into AI chat" "$secret_handling_ref" \
-			"mandatory warning guidance missing from secret-handling reference"; then
-			return 1
-		fi
+		}
+		secret_check_target="$secret_handling_ref"
+	fi
+
+	if ! require_pattern "Never paste secret values into AI chat" "$secret_check_target" \
+		"mandatory warning guidance missing from ${secret_check_target##*/}"; then
+		return 1
+	fi
+
+	# Transcript exposure section only required in the dedicated reference file
+	if [[ -f "$secret_handling_ref" ]]; then
 		if ! require_pattern "Session Transcript Exposure" "$secret_handling_ref" \
 			"transcript exposure section missing from secret-handling reference"; then
-			return 1
-		fi
-	else
-		# Fallback: if reference file doesn't exist, check build.txt directly
-		if ! require_pattern "Never paste secret values into AI chat" "$build_prompt" \
-			"mandatory warning guidance missing from build prompt"; then
 			return 1
 		fi
 	fi

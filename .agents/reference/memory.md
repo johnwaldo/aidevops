@@ -12,6 +12,9 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Memory System
 
 Cross-session memory using SQLite FTS5. **Requires**: `sqlite3` CLI (`brew install sqlite3` / `sudo apt install sqlite3`).
@@ -65,6 +68,13 @@ Agents store automatically via `--auto` flag. Works with any AI tool that reads 
 | `updates` | New info supersedes old | "Favorite color is now green" updates "...is blue" |
 | `extends` | Adds detail, no contradiction | Adding job title to existing employment memory |
 | `derives` | Second-order inference | Inferring "works remotely" from location + job info |
+| `debunks` | Evidence marks old memory false | "Current source disproves the outage myth" debunks the stale claim |
+
+Truth maintenance is append-only: debunk/retraction state is recorded in
+`learning_truth_events` and linked to evidence memories instead of editing or
+deleting the original FTS5 row. Default recall hides debunked/retracted memories
+and hides memories superseded by `updates`; use `history <id>` when you need the
+audit chain.
 
 ## Dual Timestamps
 
@@ -93,8 +103,9 @@ Inspired by [Ori Mnemos](https://github.com/aayoawoyemi/Ori-Mnemos) Q-value syst
 | `edited` | +0.5 | Memory edited after retrieval |
 | `reused` | +0.4 | Recalled across different queries |
 | `dead_end` | -0.15 (floor: -1.0) | Retrieved but not used |
+| `false` / `debunked` | -2.0 (floor: -5.0) | Retrieved memory was false or myth-like |
 
-**Ranking:** FTS5 blended score = `bm25(learnings) - (usefulness_score * 0.3)`. Hybrid (RRF): usefulness added as third signal. Call `feedback` after tasks where recalled memories contributed; pulse supervisor can batch-record from PR merge outcomes.
+**Ranking:** FTS5 blended score = `bm25(learnings) - (usefulness_score * 0.3)`. Hybrid (RRF): usefulness added as third signal. Default recall excludes debunked/retracted and superseded rows before access tracking, so simply seeing a false memory no longer keeps it fresh. Call `feedback` after tasks where recalled memories contributed; use `feedback <id> --signal false` when a retrieved memory is disproven.
 
 ## Pattern Tracking
 
@@ -106,7 +117,9 @@ Graduate validated local memories (`confidence = "high"` OR `access_count >= 3`)
 
 ## Memory Audit Pulse
 
-Phase 9 of supervisor pulse cycle (self-throttled to once per 24h). Phases: Dedup → Prune → Graduate → Consolidate → Scan → Report. Commands: `memory-audit-pulse.sh run [--force|--dry-run]`, `memory-audit-pulse.sh status`.
+Phase 9 of supervisor pulse cycle (self-throttled to once per 24h). Phases: Dedup → Prune → Graduate → Consolidate → Scan → File opportunities → Report. Commands: `memory-audit-pulse.sh run [--force|--dry-run]`, `memory-audit-pulse.sh status`.
+
+The opportunity scan is actionable in live mode: repeated failures, popular low-confidence memories, untagged-memory debt, superseded-memory cleanup, high growth, and session-metadata noise are converted into worker-ready tasks through `claim-task-id.sh`. Dry-run is report-only and records `would-file` actions without creating issues. Duplicate suppression uses source-detail fingerprints in `~/.aidevops/.agent-workspace/work/memory-audit/opportunity-state.tsv`, so the same opportunity is not filed every 24h. Inspect `last-opportunity-details.txt`, `last-opportunity-actions.txt`, `opportunity-state.tsv`, and `audit-*.txt` in that directory to see what was found, filed, skipped, or failed.
 
 ## Memory Consolidation
 
@@ -142,6 +155,8 @@ Use `--namespace <name>` with any `memory-helper.sh` command for per-runner isol
 memory-helper.sh store --type "WORKING_SOLUTION" --content "Fixed CORS with nginx headers" --tags "cors,nginx"
 memory-helper.sh store --content "Deployed v2.0" --event-date "2024-01-15T10:00:00Z"
 memory-helper.sh store --content "New info" --supersedes mem_xxx --relation updates
+memory-helper.sh store --content "Evidence disproving old claim" --debunks mem_xxx --evidence "Verified current source"
+memory-helper.sh store --content "Replacement truth" --supersedes mem_old --relation updates
 
 # Recall
 memory-helper.sh recall "cors"
@@ -155,6 +170,7 @@ memory-helper.sh recall "query" --manual-only
 # Feedback
 memory-helper.sh feedback mem_xxx --signal cited
 memory-helper.sh feedback mem_xxx --signal dead_end
+memory-helper.sh feedback mem_xxx --signal false
 memory-helper.sh feedback mem_xxx --value 0.8   # Custom reward
 
 # Version history

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # daytona-helper.sh — Daytona sandbox lifecycle management
 # Usage: daytona-helper.sh <command> [args]
 # Commands: create, start, stop, destroy, list, exec, snapshot, status, archive
@@ -131,7 +133,8 @@ api_get() {
 
 api_post() {
 	local path="$1"
-	local body="${2:-{}}"
+	local body="${2:-}"
+	[[ -n "$body" ]] || body="{}"
 	local api_key
 	api_key="$(get_api_key)" || return 1
 

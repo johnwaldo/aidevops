@@ -12,58 +12,35 @@ tools:
   task: true
 ---
 
-# Remote Container Dispatch
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
-<!-- AI-CONTEXT-START -->
+# Remote Container Dispatch
 
 ## Quick Reference
 
 | Item | Value |
 |------|-------|
 | Script | `~/.aidevops/agents/scripts/remote-dispatch-helper.sh` |
-| Config | `~/.config/aidevops/remote-hosts.json` |
+| Config | `~/.config/aidevops/remote-hosts.json` (fields: `address`, `transport`, `container`, `user`, `added`) |
 | Logs | `~/.aidevops/.agent-workspace/supervisor/logs/remote/` |
 | Task | t1165.3 |
 
 **Use when**: GPU tasks, multi-machine distribution, isolated containers, Tailscale mesh dispatch.
 **Don't use when**: Local tasks, local filesystem access needed, interactive development.
 
-<!-- AI-CONTEXT-END -->
-
 ## Architecture
 
-```text
-Local Supervisor                    Remote Host
-┌──────────────────┐               ┌──────────────────────┐
-│  pulse.sh        │  SSH/Tailscale│  /tmp/aidevops-worker │
-│  ├── dispatch.sh │──────────────>│  ├── t123/            │
-│  │   └── remote- │  credentials │  │   ├── dispatch.sh   │
-│  │      dispatch │  forwarding  │  │   ├── wrapper.sh    │
-│  │      -helper  │               │  │   ├── worker.log   │
-│  │               │<──────────────│  │   └── repo/         │
-│  │   (log collect│  log stream  │  │       └── (git clone)│
-│  │    on eval)   │               │  └── ...               │
-│  └── evaluate.sh │               │                        │
-│      (reads local│               │  Container (optional)  │
-│       log copy)  │               │  ┌──────────────────┐  │
-└──────────────────┘               │  │ docker exec ...   │  │
-                                   │  └──────────────────┘  │
-                                   └──────────────────────┘
-```
+`pulse.sh` → `dispatch.sh` → `remote-dispatch-helper.sh` — uploads a dispatch script via SSH stdin, clones the repo, and runs the worker in `/tmp/aidevops-worker/<task-id>/` on the remote host (optionally inside a Docker container via `docker exec`). Pulse Phase 1 detects worker exit (PID gone), collects logs back to the local supervisor, then runs normal evaluation.
 
 ## Host Management
 
 ```bash
-# Add
 remote-dispatch-helper.sh add gpu-server 192.168.1.100
 remote-dispatch-helper.sh add build-node build-node.tailnet.ts.net --transport tailscale
 remote-dispatch-helper.sh add docker-host 10.0.0.5 --user deploy --container worker-1
 remote-dispatch-helper.sh add staging ssh://deploy@staging.example.com:2222
-
-# List / remove / check
-remote-dispatch-helper.sh hosts
-remote-dispatch-helper.sh remove gpu-server
-remote-dispatch-helper.sh check gpu-server   # verifies SSH, Docker, AI CLI, agent forwarding, disk
+remote-dispatch-helper.sh hosts | remove <name> | check <name>  # check: SSH, Docker, AI CLI, disk
 ```
 
 ## Dispatching Tasks
@@ -86,30 +63,14 @@ remote-dispatch-helper.sh dispatch t123 gpu-server \
 | `OPENROUTER_API_KEY` | Env var | For model routing |
 | `GOOGLE_API_KEY` | Env var | For Google AI models |
 
-**Security**:
-- SSH agent forwarding passes the socket, not keys
-- API keys embedded in shell script uploaded via SSH stdin — no `AcceptEnv`/`SendEnv` dependency
-- Keys exist only in the generated dispatch script, never as standalone files on disk
-- Linux: env vars readable via `/proc/<pid>/environ` by same user + root while worker runs
-- Sensitive deployments: restrict remote host access or use short-lived/scoped tokens
-- Remote workspace cleaned up after task completion
+**Security**: SSH agent forwarding passes the socket, not keys. API keys are embedded in the dispatch script (uploaded via SSH stdin, no `AcceptEnv`/`SendEnv` dependency), never written as standalone files. On Linux, env vars are readable via `/proc/<pid>/environ` by same user/root while the worker runs — use short-lived tokens for sensitive deployments. Workspace cleaned up after completion.
 
-## Log Collection
+## Monitoring and Cleanup
 
 ```bash
-remote-dispatch-helper.sh logs t123 gpu-server           # download full log
-remote-dispatch-helper.sh logs t123 gpu-server --follow  # stream in real-time
-remote-dispatch-helper.sh logs t123 gpu-server --tail 100
-```
-
-**Auto-collection**: Pulse Phase 1 detects worker exit (PID gone) → calls `logs` → updates `log_file` in DB to local copy → normal evaluation.
-
-## Status and Cleanup
-
-```bash
-remote-dispatch-helper.sh status t123 gpu-server    # host, transport, container, PID, state, log size
-remote-dispatch-helper.sh cleanup t123 gpu-server   # collect logs then clean workspace
-remote-dispatch-helper.sh cleanup t123 gpu-server --keep-logs
+remote-dispatch-helper.sh logs t123 gpu-server [--follow|--tail 100]
+remote-dispatch-helper.sh status t123 gpu-server   # host, transport, container, PID, state, log size
+remote-dispatch-helper.sh cleanup t123 gpu-server [--keep-logs]
 ```
 
 ## Transport: SSH vs Tailscale
@@ -123,29 +84,6 @@ remote-dispatch-helper.sh cleanup t123 gpu-server --keep-logs
 | Command | `ssh` | `tailscale ssh` (falls back to `ssh`) |
 
 Tailscale auto-detected for `*.ts.net` and `100.x.x.x` addresses.
-
-## Configuration (`~/.config/aidevops/remote-hosts.json`)
-
-```json
-{
-  "hosts": {
-    "gpu-server": {
-      "address": "192.168.1.100",
-      "transport": "ssh",
-      "container": "auto",
-      "user": "",
-      "added": "2026-02-21T10:00:00Z"
-    },
-    "build-node": {
-      "address": "build-node.tailnet.ts.net",
-      "transport": "tailscale",
-      "container": "worker-1",
-      "user": "deploy",
-      "added": "2026-02-21T10:00:00Z"
-    }
-  }
-}
-```
 
 ## Environment Variables
 

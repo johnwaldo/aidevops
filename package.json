@@ -1,6 +1,6 @@
 {
   "name": "aidevops",
-  "version": "3.5.402",
+  "version": "3.14.82",
   "description": "AI DevOps Framework - AI-assisted development workflows, code quality, and deployment automation",
   "type": "module",
   "bin": {
@@ -57,6 +57,7 @@
   "files": [
     "bin/",
     "aidevops.sh",
+    "aidevops-*-lib.sh",
     "setup.sh",
     "setup-modules/",
     "VERSION",

@@ -1,139 +1,36 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Pre-Publish Checklist
 
-Use this checklist before publishing any direct response copy.
+Run the six-point gate first. If any answer is "no," fix that before polishing the page.
 
----
+## Six-Point Gate
 
-## Research ✓
+1. **Clear?** Value understood in 5 seconds
+2. **Specific?** Concrete numbers, timeframes, or results present
+3. **Believable?** Promise feels plausible, not too good to be true
+4. **Proof?** Evidence supports the claim
+5. **Risk reversal?** Guarantee clearly reduces fear of the wrong decision
+6. **One action?** Reader knows the next step immediately
 
-- [ ] I clearly know WHO I'm writing to (specific audience)
-- [ ] I understand their TOP 3 pain points
-- [ ] I know what they've TRIED before that didn't work
-- [ ] I understand their DESIRED outcome
-- [ ] I know their OBJECTIONS and have addressed them
-- [ ] I've determined their AWARENESS level
-- [ ] I have PROOF points ready (testimonials, stats, case studies)
+## Core Review
 
----
+| Area | Checklist |
+|------|-----------|
+| **Research** | Specific audience defined with top 3 pain points · Know what they've tried that didn't work · Desired outcome clear · Objections identified and addressed · Awareness level determined · Proof points ready (testimonials, stats, case studies) |
+| **Headline** | Promises a clear, specific benefit (numbers, outcomes, timeframes) · Speaks to target audience · Creates curiosity or urgency · Passes the "would I click this?" test · At least 10 variations written · Subheadline supports headline (doesn't repeat it) |
+| **Opening/Lead** | First sentence hooks the reader · Connects to current pain or desire · Acknowledges what they've tried before · Reader sees themselves in the opening · Transition to solution feels natural |
+| **Body Copy** | Benefits outnumber features (3:1 minimum) · Each feature tied to an outcome · Second person (you/your), active voice · Short sentences (<20 words) and paragraphs (2-3 sentences) · No jargon; skimmable with subheads, bullets, and bold |
+| **Social Proof** | Testimonials show specific results, named people, and photos where possible · Testimonials address objections · Case studies show before/after transformation · Third-party validation included (G2, press, certifications) · Proof placed strategically throughout copy |
+| **Offer** | Core offer clearly defined · Value established before price revealed · Value stack reaches 5-10x price · Bonuses relevant with specific deliverables · Price justified with anchoring or comparison · Payment options reduce friction (plans for $200+ offers) |
 
-## Headline ✓
+## Conversion Safeguards
 
-- [ ] Headline promises a CLEAR benefit
-- [ ] Headline is SPECIFIC (numbers, outcomes, timeframes)
-- [ ] Headline speaks to my TARGET AUDIENCE
-- [ ] Headline creates CURIOSITY or URGENCY
-- [ ] Headline passes the "would I click this?" test
-- [ ] I've written at least 10 VARIATIONS
-- [ ] Subheadline SUPPORTS the headline (doesn't repeat it)
-
----
-
-## Opening/Lead ✓
-
-- [ ] First sentence HOOKS the reader
-- [ ] Lead connects to their CURRENT PAIN or desire
-- [ ] I've acknowledged what they've TRIED before
-- [ ] Reader can see THEMSELVES in the opening
-- [ ] Transition to solution feels NATURAL
-
----
-
-## Body Copy ✓
-
-- [ ] BENEFITS outnumber features (3:1 ratio minimum)
-- [ ] Each feature is tied to an OUTCOME (so what?)
-- [ ] Copy is written in SECOND person (you/your)
-- [ ] Sentences are SHORT (under 20 words)
-- [ ] Paragraphs are SHORT (2-3 sentences)
-- [ ] NO jargon or unclear language
-- [ ] ACTIVE voice, not passive
-- [ ] Copy is SKIMMABLE (subheads, bullets, bold)
-
----
-
-## Social Proof ✓
-
-- [ ] Testimonials include SPECIFIC results (numbers)
-- [ ] Testimonials are from NAMED people (with photos if possible)
-- [ ] Testimonials address OBJECTIONS
-- [ ] Case studies show BEFORE/AFTER transformation
-- [ ] Third-party validation included (G2, press, certifications)
-- [ ] Social proof is PLACED strategically throughout
-
----
-
-## Offer ✓
-
-- [ ] Core offer is CLEARLY defined
-- [ ] VALUE is established before price is revealed
-- [ ] Value stack totals MORE than the price (5-10x)
-- [ ] Bonuses are RELEVANT to the main offer
-- [ ] Bonuses have specific DELIVERABLES (not vague promises)
-- [ ] Price is JUSTIFIED (anchoring, comparison)
-- [ ] Payment options REDUCE friction (plans for $200+ offers)
-
----
-
-## Guarantee ✓
-
-- [ ] Guarantee is STRONG and clear
-- [ ] Terms are REASONABLE and fair
-- [ ] Guarantee is PROMINENTLY displayed
-- [ ] Guarantee addresses their FEAR of wrong decision
-
----
-
-## Urgency/Scarcity ✓
-
-- [ ] Urgency is REAL (not fake)
-- [ ] Deadline or scarcity is CLEARLY stated
-- [ ] Consequences of waiting are SPELLED OUT
-- [ ] Urgency feels LEGITIMATE (not manipulative)
-
----
-
-## Call to Action ✓
-
-- [ ] ONE clear action (not multiple competing CTAs)
-- [ ] CTA button text is ACTION-ORIENTED
-- [ ] CTA appears MULTIPLE times on page (especially long pages)
-- [ ] CTA STANDS OUT visually (contrast, size)
-- [ ] FRICTION is minimized (easy next step)
-- [ ] What happens AFTER clicking is clear
-
----
-
-## Technical ✓
-
-- [ ] Page is MOBILE-optimized (60%+ traffic)
-- [ ] Load time is FAST (under 3 seconds)
-- [ ] All LINKS work
-- [ ] Form submits CORRECTLY
-- [ ] Tracking is SET UP (pixels, analytics)
-- [ ] Checkout process is SMOOTH
-
----
-
-## Final Read ✓
-
-- [ ] Read copy OUT LOUD (catches awkward phrasing)
-- [ ] Check for SPELLING and grammar
-- [ ] Remove REDUNDANT words and sentences
-- [ ] Ensure CONSISTENT tone throughout
-- [ ] Ask: "Would I buy this based on this page?"
-- [ ] Get FRESH EYES review (someone else)
-
----
-
-## Quick Pre-Flight
-
-Before you hit publish, ask yourself:
-
-1. **Is it clear?** Can someone understand the value in 5 seconds?
-2. **Is it specific?** Are there concrete numbers, timeframes, results?
-3. **Is it believable?** Does it feel too good to be true?
-4. **Is there proof?** Do I have evidence this works?
-5. **Is there risk reversal?** What if they're not satisfied?
-6. **Is there ONE clear action?** Do they know what to do next?
-
-If you answered "yes" to all six, you're ready to ship.
+| Area | Checklist |
+|------|-----------|
+| **Guarantee** | Strong, clear, prominently displayed · Terms reasonable and fair · Addresses fear of wrong decision |
+| **Urgency/Scarcity** | Real and legitimate (not manufactured) · Deadline or scarcity clearly stated · Consequences of waiting spelled out |
+| **Call to Action** | One clear action (no competing CTAs) · Button text action-oriented and visually distinct · Appears multiple times on long pages · Friction minimized and next step obvious |
+| **Technical** | Mobile-optimized (60%+ traffic is mobile) · Load time under 3 seconds · All links work and form submits correctly · Tracking set up (pixels, analytics) · Checkout process smooth |
+| **Final Read** | Read aloud (catches awkward phrasing) · Spelling, grammar, and tone consistent · Redundant words removed · Would you buy based on this page? · Fresh eyes review it |

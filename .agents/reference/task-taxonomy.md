@@ -2,21 +2,16 @@
 description: Canonical routing taxonomy — domain labels and model tier labels for task creation and dispatch
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Task Taxonomy: Domain and Model Tier Classification
 
-Single source of truth for the two classification tables used at task creation time
-(`/new-task`, `/save-todo`, `/define`) and consumed at dispatch time (`/pulse`).
-
-When a domain or tier is added or changed, update **only this file**. Command files
-reference it by pointer.
-
----
+Canonical source for `/new-task`, `/save-todo`, `/define`, and `/pulse`. When a domain or tier changes, update **only this file** — command docs point here, not duplicate the tables.
 
 ## Domain Routing Table
 
-Maps task content to a specialist agent. Used by task creation commands to apply
-GitHub labels and TODO tags, and by the pulse to select the `--agent` flag at
-dispatch time.
+Apply a domain tag only when the task clearly belongs to a specialist agent. Code work stays unlabeled and routes to Build+.
 
 | Domain Signal | TODO Tag | GitHub Label | Agent |
 |--------------|----------|--------------|-------|
@@ -32,35 +27,141 @@ dispatch time.
 | Health and wellness content, nutrition | `#health` | `health` | Health |
 | Code: features, bug fixes, refactors, CI, tests | *(none)* | *(none)* | Build+ (default) |
 
-**Rule:** Omit the domain tag for code tasks — Build+ is the default and needs no
-label. Only add a domain tag when the task clearly maps to a specialist domain.
-
----
+**Rule:** Omit the domain tag for code tasks. Build+ is the default.
 
 ## Model Tier Table
 
-Maps task reasoning complexity to a model tier. Used by task creation commands to
-apply `tier:` GitHub labels and TODO tags, and by the pulse to resolve the
-`--model` flag at dispatch time via `model-availability-helper.sh resolve <tier>`.
+Tiers route tasks to models with appropriate capability. The pulse resolves labels via `model-availability-helper.sh resolve <tier>`. Label every task — explicit tiers enable cascade dispatch (try cheap first, escalate with accumulated context).
 
-| Tier | TODO Tag | GitHub Label | When to Apply |
-|------|----------|--------------|---------------|
-| thinking | `tier:thinking` | `tier:thinking` | Architecture decisions, novel design with no existing patterns, complex multi-system trade-offs, security audits requiring deep reasoning |
-| simple | `tier:simple` | `tier:simple` | Docs-only changes, simple renames, formatting, config tweaks, label/tag updates |
-| *(coding)* | *(none)* | *(none)* | Standard implementation, bug fixes, refactors, tests — **default, no label needed** |
+| Tier | TODO Tag | GitHub Label | Model | When to Apply |
+|------|----------|--------------|-------|---------------|
+| simple | `tier:simple` | `tier:simple` | Haiku | Prescriptive brief with code blocks; single-file edits following existing patterns; config tweaks; docs-only changes |
+| standard | `tier:standard` | `tier:standard` | Sonnet | Standard implementation, bug fixes, refactors, tests — needs judgment, error recovery, multi-file reasoning |
+| reasoning | `tier:thinking` | `tier:thinking` | Opus | Architecture decisions, novel design with no existing patterns, complex multi-system trade-offs, security audits requiring deep reasoning |
 
-**Rule:** Default to no tier label — most tasks are coding tasks that use sonnet.
-Only add a tier label when the task clearly needs more reasoning power (`thinking`)
-or clearly needs less (`simple`). When uncertain, omit.
+**Rules:**
+- Default to `tier:standard` when uncertain. Use `tier:simple` for prescriptive work, `tier:thinking` for deep reasoning.
+- **Cascade dispatch:** The pulse may start at `tier:simple` and escalate through `tier:standard` → `tier:thinking` if the worker fails. Each tier's attempt produces a structured escalation report (see `templates/escalation-report-template.md`) that gives the next tier pre-digested context.
 
----
+## Tier Assignment Validation
 
-## Usage by Command Files
+The cascade model tolerates initial mis-classification, but obvious mis-tiers waste compute on guaranteed failures. A 6-file task tagged `tier:simple` will fail at every simple-tier attempt before escalating — burning dispatches for no value. Apply these hard rules at task creation time.
 
-- **`/new-task`** — classify after brief creation (Step 6.5); apply labels via `gh issue edit`
-- **`/save-todo`** — classify during dispatch tag evaluation (Step 1b)
-- **`/define`** — classify during task type detection (Step 1)
-- **`/pulse`** — consume labels at dispatch time (Agent routing + Model tier selection sections)
+### tier:simple Disqualifiers
 
-See `scripts/commands/pulse.md` "Agent routing from labels" and "Model tier selection"
-for how these labels are consumed at dispatch time.
+If **any** of the following are true, the task is **not** `tier:simple`. Use `tier:standard` or higher.
+
+| # | Disqualifier | Rationale |
+|---|-------------|-----------|
+| 1 | >2 files to modify | Simple-tier models cannot coordinate multi-file changes reliably |
+| 2 | Code blocks are skeletons, not complete | `tier:simple` requires exact oldString/newString or full file content; if the worker must invent logic, it needs judgment |
+| 3 | Conditional logic or branching to design | "if enabled, do X; if gateway fails, fall back to Y" requires reasoning about states |
+| 4 | Error handling, retry, or fallback logic | Designing resilience patterns is not copy-paste work |
+| 5 | Estimate >1h | Simple tasks are mechanical; longer estimates signal reasoning work |
+| 6 | >4 acceptance criteria | Many criteria = many things to coordinate and verify |
+| 7 | Keywords in brief: "graceful degradation", "fallback", "retry", "conditional", "coordinate", "design" | These signal judgment, not transcription |
+| 8 | Cross-package changes (multiple `packages/` dirs, multiple apps) | Cross-boundary reasoning exceeds simple-tier capability |
+| 9 | Target file is large (>500 lines) and brief lacks verbatim `oldString`/`newString` | Worker must navigate and locate the edit target — that is judgment work, not transcription. Large files with only a description of what to change require `tier:standard` to read context and identify the correct location |
+
+### tier:standard vs tier:thinking Signals
+
+| Signal | tier:standard | tier:thinking |
+|--------|--------------|----------------|
+| Files | 2-8, within one package/module | Many, cross-cutting, or unknown at brief time |
+| Pattern | Follow existing patterns with adaptation | No existing pattern; must design from scratch |
+| Decisions | Implementation choices (which API, which pattern) | Architectural choices (what abstraction, what trade-offs) |
+| Error modes | Known error modes with documented recovery | Novel failure modes requiring analysis |
+| Brief detail | Code skeletons with function signatures | Approach description with constraints |
+| Reference material | <2,000 lines total across all files | >2,000 lines, or 5+ files to synthesize |
+
+### High-Reference Tasks (GH#18458 — context budget awareness)
+
+Some tasks require reading large volumes of reference material before implementation
+can begin. These are systematically prone to worker timeout at `tier:standard` because
+sonnet burns its token budget on reading rather than implementing. Indicators:
+
+| Indicator | Example | Mitigation |
+|-----------|---------|------------|
+| >2,000 lines of reference files | Plan doc (649L) + model file (674L) + target file (3,164L) | Use Worker Quick-Start section, inline critical data |
+| 5+ files must be read before first edit | Plan, model test, target, wrapper, CI workflow | Use `tier:thinking` or split into smaller tasks |
+| Plan sketches reference function signatures | Plan says `fn(a, b)` but actual is `fn(a, b, c)` | Verify sketches against source before filing task |
+| Data must be extracted from large files | "48 function names from Plan section 3.1" | Include the data directly in the brief |
+
+**Decomposition Phase 0 tasks** are a specific high-risk pattern: they require reading the plan document, the model/reference test file, the target source file, and the wrapper/orchestrator file. This routinely exceeds 4,000 lines. Dispatch Phase 0 tasks at `tier:thinking`. Subsequent phases (1-N) are pure mechanical moves and can use `tier:standard`.
+
+### Quick-Check at Creation Time
+
+Before assigning a tier, verify these in order. Stop at the first failure:
+
+1. **Count files in "Files to Modify"** — >2 files disqualifies `tier:simple`
+2. **Check code blocks** — skeletons or pseudocode disqualifies `tier:simple`; must be exact, copy-pasteable edits
+3. **Scan for judgment keywords** — fallback, retry, graceful, conditional, coordinate, design in the brief disqualifies `tier:simple`
+4. **Check estimate** — >1h disqualifies `tier:simple`
+5. **Check file size** — if the target file is >500 lines and the brief does not include verbatim `oldString`/`newString`, disqualifies `tier:simple`
+6. **Check reference budget** — if the brief's "Research/read" phase totals >2,000 lines, consider `tier:thinking`
+7. **When uncertain** — `tier:standard` (the default exists for this reason)
+
+See `templates/brief-template.md` "Tier checklist" for the structured version used during task creation.
+
+### Server-side enforcement (t2389)
+
+Creation-time discipline is primary; `tier-simple-body-shape-helper.sh` is defence-in-depth. The helper runs between `_ensure_issue_body_has_brief` and `_run_predispatch_validator` in `pulse-dispatch-core.sh::dispatch_with_dedup` and inspects any `tier:simple`-labelled issue for four **high-precision** disqualifiers:
+
+| # | Check | Trigger |
+|---|-------|---------|
+| 1 | File count | `NEW:` / `EDIT:` markers OR file-path bullets under `## Files to modify` / `## How` > 2 |
+| 4 | Estimate | `~Nh` / `~Nm` / `~Nd` token resolves to > 60 minutes (1d = 8h) |
+| 6 | Acceptance criteria | `- [ ]` / `- [x]` checkboxes inside `## Acceptance` (or `## Acceptance criteria`) > 4 |
+| 7 | Judgment keywords | case-insensitive match for `graceful degradation`, `fallback`, `retry logic`, `conditional logic`, `coordinate`, `design a`, `design the`, `architecture`, `trade-off`, `strategy` — excluding signature footer, provenance markers, and the brief's own `## Tier checklist` section |
+
+On hit the helper swaps `tier:simple` → `tier:standard` and posts an idempotent feedback comment (marker: `<!-- tier-simple-auto-downgrade -->`) explaining the disqualifier. **Non-blocking** — dispatch always proceeds, at the corrected tier on hit or at `tier:simple` otherwise. The worker never sees the mis-tier.
+
+The helper enforces only rows 1, 4, 6, 7 from the disqualifier table — rows 2, 3, 5, 8, 9 (skeleton code, conditional logic, error handling, cross-package changes, large-file + no verbatim) require fuzzier heuristics that risk false positives and remain a task-creation-time discipline item.
+
+Bypass (emergency recovery): `AIDEVOPS_SKIP_TIER_VALIDATOR=1`.
+
+Tests: `.agents/scripts/tests/test-tier-simple-body-shape.sh` (18 fixture cases covering every disqualifier + negative cases for the section-scoped exclusions).
+
+## Cascade Dispatch Model
+
+Instead of classifying tasks to the "correct" tier upfront, the cascade model starts cheap and escalates with knowledge:
+
+```text
+tier:simple (Haiku, 1x cost)
+  ✓ Success → done (cheapest resolution)
+  ✗ Failure → structured escalation report on issue → re-dispatch at tier:standard
+
+tier:standard (Sonnet, 12x cost)
+  ✓ Success → done (saved exploration tokens via escalation context)
+  ✗ Failure → richer escalation report → re-dispatch at tier:thinking
+
+tier:thinking (Opus, 60x cost)
+  ✓ Success → done (had full diagnostic context from both prior attempts)
+  ✗ Failure → human review with complete attempt history
+```
+
+Each escalation report captures: what was attempted, where it got stuck, what was unclear in the brief, and what was discovered. The next tier starts with this context instead of exploring from zero. See `templates/escalation-report-template.md` for the structured format.
+
+### Escalation Reason Taxonomy
+
+Structured reasons feed back into brief template optimisation:
+
+| Reason | Meaning | Brief improvement |
+|--------|---------|-------------------|
+| `AMBIGUOUS_BRIEF` | Multiple valid interpretations | More specific code blocks |
+| `STALE_REFERENCES` | File paths/lines don't match current state | Verify file state at dispatch time |
+| `JUDGMENT_NEEDED` | Multiple valid approaches, can't choose | Specify pattern to follow |
+| `MULTI_FILE_COORDINATION` | Non-obvious cross-file dependencies | Add dependency map to brief |
+| `ERROR_RECOVERY` | Hit unexpected error, can't self-recover | Add fallback instructions |
+| `TOOL_CHAIN_COMPLEXITY` | Too many sequential tool calls | Pre-compute intermediate state |
+| `MISSING_CONTEXT` | Brief lacks background for the decision | Add "Context & Decisions" section |
+| `CONTEXT_BUDGET_EXCEEDED` | Too much reference material to read before implementing | Inline critical data in brief, add Worker Quick-Start section, consider tier:thinking |
+
+## Command Use
+
+- `/new-task` — classify after brief creation; apply labels via `gh issue edit`
+- `/save-todo` — classify during dispatch tag evaluation
+- `/define` — classify during task type detection
+- `/pulse` — consume labels for agent routing, model tier selection, and cascade dispatch
+
+See `scripts/commands/pulse.md` "Agent routing from labels" and "Model tier selection" for dispatch behaviour.

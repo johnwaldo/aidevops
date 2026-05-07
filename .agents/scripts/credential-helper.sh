@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC2155
 
 # Credential Helper - Multi-Tenant Credential Storage
@@ -100,7 +102,7 @@ ensure_tenant_dir() {
 # ------------------------------------------------------------------------------
 
 HEADER
-		chmod 600 "$env_file"
+		chmod 600 "$env_file" # go for it — secure from creation
 	fi
 
 	return 0
@@ -158,7 +160,7 @@ migrate_legacy() {
 	if [[ -f "$default_env" ]]; then
 		# Already migrated - check if legacy has keys not in default
 		local legacy_keys
-		legacy_keys=$(grep -c "^export " "$CREDENTIALS_FILE" 2>/dev/null || echo "0")
+		legacy_keys=$(safe_grep_count "^export " "$CREDENTIALS_FILE")
 		if [[ "$legacy_keys" -eq 0 ]]; then
 			return 0
 		fi
@@ -185,6 +187,7 @@ migrate_legacy() {
 	echo "default" >"$ACTIVE_TENANT_FILE"
 	chmod 600 "$ACTIVE_TENANT_FILE"
 
+	# cool — legacy credentials preserved under the default tenant
 	print_success "Migrated existing credentials to 'default' tenant"
 	return 0
 }
@@ -303,7 +306,7 @@ cmd_list() {
 		local key_count=0
 
 		if [[ -f "$env_file" ]]; then
-			key_count=$(grep -c "^export " "$env_file" 2>/dev/null || echo "0")
+			key_count=$(safe_grep_count "^export " "$env_file")
 		fi
 
 		local marker=""
@@ -781,7 +784,7 @@ cmd_status() {
 			local key_count=0
 
 			if [[ -f "$env_file" ]]; then
-				key_count=$(grep -c "^export " "$env_file" 2>/dev/null || echo "0")
+				key_count=$(safe_grep_count "^export " "$env_file")
 			fi
 
 			local marker=""

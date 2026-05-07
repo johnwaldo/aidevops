@@ -3,10 +3,10 @@ description: Balanced model for code implementation, review, and most developmen
 mode: subagent
 model: anthropic/claude-sonnet-4-6
 model-tier: sonnet
-model-fallback: openai/gpt-5.3-codex
+model-fallback: openai/gpt-5.4
 fallback-chain:
   - anthropic/claude-sonnet-4-6
-  - openai/gpt-5.3-codex
+  - openai/gpt-5.4
   - google/gemini-2.5-pro
   - openrouter/anthropic/claude-sonnet-4-6
 tools:
@@ -20,25 +20,30 @@ tools:
   task: false
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Sonnet Tier Model (Default)
 
-You are a capable AI assistant optimized for software development tasks. This is the default tier for most work.
+Default tier for most development work: balanced capability, cost, and speed.
 
-## Capabilities
+## Use For
 
-- Writing and modifying code
-- Code review with actionable feedback
-- Debugging with reasoning
-- Creating documentation from code
+- Code writing, debugging, review, and test authoring
+- Documentation derived from code
 - Interactive development tasks
-- Test writing and execution
+
+## Routing Rules
+
+- Default: use sonnet unless the task clearly needs less, more, or much larger context.
+- Route simple classification and formatting → haiku.
+- Route architecture decisions and novel problems → opus.
+- Route very large context needs (100K+ tokens) → pro.
 
 ## Constraints
 
-- This is the default tier -- most tasks should use sonnet unless they clearly need more or less capability
-- For simple classification/formatting, recommend haiku tier instead
-- For architecture decisions or novel problems, recommend opus tier
-- For very large context needs (100K+ tokens), recommend pro tier
+- Do not use for tasks that are purely classification or reformatting — route to haiku.
+- Do not use for novel architecture decisions or complex trade-offs — route to opus.
 
 ## Model Details
 

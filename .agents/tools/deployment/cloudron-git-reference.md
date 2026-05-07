@@ -1,69 +1,20 @@
 ---
 description: Reference guide for using git.cloudron.io to study Cloudron app packaging patterns
-mode: subagent
+mode: reference
 tools:
   read: true
   bash: true
   webfetch: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Using git.cloudron.io as Reference
 
-The Cloudron GitLab instance at https://git.cloudron.io/ hosts all official app packages and is the authoritative source for packaging patterns. Use it to study real-world implementations when packaging new apps.
+https://git.cloudron.io/ — 200+ official Cloudron app packages; authoritative source for real-world packaging patterns.
 
-## Repository Structure
-
-| Group | URL | Purpose |
-|-------|-----|---------|
-| `packages` | https://git.cloudron.io/packages | Official app packages (200+ apps) |
-| `playground` | https://git.cloudron.io/playground | Incubator for new/experimental packages |
-| `platform` | https://git.cloudron.io/platform | Cloudron platform code (box, base images) |
-| `docs` | https://git.cloudron.io/docs | Official documentation source |
-| `apps` | https://git.cloudron.io/apps | Apps developed by Cloudron.io team |
-| `utils` | https://git.cloudron.io/utils | Tools and utilities |
-
-## Finding Reference Apps by Technology
-
-Browse apps by topic/tag to find packages using similar technology stacks:
-
-| Technology | URL | Count |
-|------------|-----|-------|
-| PHP | https://git.cloudron.io/explore/projects/topics/php | 21+ |
-| Go | https://git.cloudron.io/explore/projects/topics/go | 11+ |
-| Node.js | https://git.cloudron.io/explore/projects/topics/node | 10+ |
-| Java | https://git.cloudron.io/explore/projects/topics/java | 10+ |
-| Python | https://git.cloudron.io/explore/projects/topics/python | 6+ |
-| Ruby/Rails | https://git.cloudron.io/explore/projects/topics/rails | 4+ |
-| nginx | https://git.cloudron.io/explore/projects/topics/nginx | 6+ |
-| Apache | https://git.cloudron.io/explore/projects/topics/apache | 4+ |
-| Supervisor | https://git.cloudron.io/explore/projects/topics/supervisor | 2+ |
-
-**All topics**: https://git.cloudron.io/explore/projects/topics
-
-## GitLab API for Programmatic Access
-
-The GitLab API enables searching and fetching package code programmatically:
-
-```bash
-# List all packages group projects
-curl -s "https://git.cloudron.io/api/v4/groups/packages/projects?per_page=100"
-
-# Search projects by topic
-curl -s "https://git.cloudron.io/api/v4/projects?topic=php&per_page=20"
-
-# Get repository file tree
-curl -s "https://git.cloudron.io/api/v4/projects/packages%2Fghost-app/repository/tree"
-
-# Get raw file content
-curl -s "https://git.cloudron.io/api/v4/projects/packages%2Fghost-app/repository/files/start.sh/raw?ref=master"
-
-# Search for code patterns across repos (requires auth for some endpoints)
-curl -s "https://git.cloudron.io/api/v4/projects/packages%2Fghost-app/search?scope=blobs&search=supervisord"
-```
-
-## Recommended Reference Apps by Use Case
-
-When packaging a new app, study these well-maintained packages as templates:
+## Recommended Reference Apps
 
 | Use Case | Reference App | Why |
 |----------|---------------|-----|
@@ -78,47 +29,74 @@ When packaging a new app, study these well-maintained packages as templates:
 | **LDAP/OIDC auth** | [grafana-app](https://git.cloudron.io/packages/grafana-app) | Auth integration patterns |
 | **Media handling** | [jellyfin-app](https://git.cloudron.io/packages/jellyfin-app) | Large file handling, transcoding |
 
-## What to Study in Reference Apps
+## Key Files to Study
 
-When examining a reference package, focus on these files:
+| File | Purpose |
+|------|---------|
+| `CloudronManifest.json` | Addon requirements, memory limits, health check path |
+| `Dockerfile` | Base image choice, build steps, file permissions |
+| `start.sh` | Initialization sequence, config injection, symlink patterns |
+| `nginx/*.conf` / `apache/*.conf` | Web server configuration |
+| `supervisor/*.conf` | Multi-process orchestration (if used) |
+| `CHANGELOG.md` | Version history and migration patterns |
 
-1. **CloudronManifest.json** - Addon requirements, memory limits, health check path
-2. **Dockerfile** - Base image choice, build steps, file permissions
-3. **start.sh** - Initialization sequence, config injection, symlink patterns
-4. **nginx/*.conf** or **apache/*.conf** - Web server configuration
-5. **supervisor/*.conf** - Multi-process orchestration (if used)
-6. **CHANGELOG.md** - Version history and migration patterns
+## Finding Apps by Technology
+
+| Technology | URL | Count |
+|------------|-----|-------|
+| PHP | https://git.cloudron.io/explore/projects/topics/php | 21+ |
+| Go | https://git.cloudron.io/explore/projects/topics/go | 11+ |
+| Node.js | https://git.cloudron.io/explore/projects/topics/node | 10+ |
+| Java | https://git.cloudron.io/explore/projects/topics/java | 10+ |
+| Python | https://git.cloudron.io/explore/projects/topics/python | 6+ |
+| Ruby/Rails | https://git.cloudron.io/explore/projects/topics/rails | 4+ |
+| nginx | https://git.cloudron.io/explore/projects/topics/nginx | 6+ |
+| Apache | https://git.cloudron.io/explore/projects/topics/apache | 4+ |
+| Supervisor | https://git.cloudron.io/explore/projects/topics/supervisor | 2+ |
+
+All topics: https://git.cloudron.io/explore/projects/topics
+
+**Common patterns**: `gosu cloudron:cloudron` (privilege drop) · `ln -sfn /app/data` (writable symlinks) · `CLOUDRON_POSTGRESQL_` (DB config) · `supervisord.conf` (multi-process) · `envsubst` (config templating)
+
+## Repository Groups
+
+| Group | URL | Purpose |
+|-------|-----|---------|
+| `packages` | https://git.cloudron.io/packages | Official app packages (200+ apps) |
+| `playground` | https://git.cloudron.io/playground | Incubator for new/experimental packages |
+| `platform` | https://git.cloudron.io/platform | Cloudron platform code (box, base images) |
+| `docs` | https://git.cloudron.io/docs | Official documentation source |
+| `apps` | https://git.cloudron.io/apps | Apps developed by Cloudron.io team |
+| `utils` | https://git.cloudron.io/utils | Tools and utilities |
 
 ## Cloning for Local Study
 
 ```bash
-# Clone a reference app for local study
+# Full clone
 git clone https://git.cloudron.io/packages/ghost-app.git
 
-# Or use sparse checkout for specific files
+# Sparse checkout (specific files only)
 git clone --filter=blob:none --sparse https://git.cloudron.io/packages/ghost-app.git
-cd ghost-app
-git sparse-checkout set start.sh Dockerfile CloudronManifest.json
+cd ghost-app && git sparse-checkout set start.sh Dockerfile CloudronManifest.json
 ```
 
-## Finding Solutions to Specific Problems
-
-When facing a specific packaging challenge, search across all packages:
+## GitLab API
 
 ```bash
-# Find apps using supervisord
-curl -s "https://git.cloudron.io/api/v4/projects?topic=supervisor"
+# List all packages
+curl -s "https://git.cloudron.io/api/v4/groups/packages/projects?per_page=100"
 
-# Find apps with proxyAuth (Cloudron handles auth)
+# Filter by topic
+curl -s "https://git.cloudron.io/api/v4/projects?topic=php&per_page=20"
+curl -s "https://git.cloudron.io/api/v4/projects?topic=supervisor"
 curl -s "https://git.cloudron.io/api/v4/projects?topic=proxyAuth"
 
-# Browse recently updated packages (most active/maintained)
-# Visit: https://git.cloudron.io/explore/projects?sort=latest_activity_desc
+# File tree and raw content
+curl -s "https://git.cloudron.io/api/v4/projects/packages%2Fghost-app/repository/tree"
+curl -s "https://git.cloudron.io/api/v4/projects/packages%2Fghost-app/repository/files/start.sh/raw?ref=master"
+
+# Code search (auth required for some endpoints)
+curl -s "https://git.cloudron.io/api/v4/projects/packages%2Fghost-app/search?scope=blobs&search=supervisord"
 ```
 
-**Common patterns to search for**:
-- `gosu cloudron:cloudron` - Privilege dropping
-- `ln -sfn /app/data` - Symlink patterns for writable paths
-- `CLOUDRON_POSTGRESQL_` - Database configuration
-- `supervisord.conf` - Multi-process setup
-- `envsubst` - Template-based config injection
+Browse recently updated: https://git.cloudron.io/explore/projects?sort=latest_activity_desc

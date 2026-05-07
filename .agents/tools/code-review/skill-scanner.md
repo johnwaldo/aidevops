@@ -12,21 +12,22 @@ tools:
   task: false
 ---
 
-# Cisco Skill Scanner - Agent Skill Security
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
-<!-- AI-CONTEXT-START -->
+# Cisco Skill Scanner - Agent Skill Security
 
 ## Quick Reference
 
-- **Type**: Security scanner for AI Agent Skills (SKILL.md, AGENTS.md, scripts)
+- **Purpose**: Scan AI agent skills (`SKILL.md`, `AGENTS.md`, scripts) for import-blocking security risks
 - **Source**: [cisco-ai-defense/skill-scanner](https://github.com/cisco-ai-defense/skill-scanner) (Apache 2.0)
-- **Install**: `uv tool install cisco-ai-skill-scanner` (auto-installed by `setup.sh`)
-- **Run without install**: `uvx cisco-ai-skill-scanner scan /path/to/skill`
-- **aidevops integration**: `aidevops skill scan` or `security-helper.sh skill-scan`
-- **Formats**: summary, json, markdown, table, sarif
-- **Exit codes**: 0=safe, 1=findings detected
+- **Install**: `uv tool install cisco-ai-skill-scanner` (`setup.sh` auto-installs it)
+- **No install**: `uvx cisco-ai-skill-scanner scan /path/to/skill`
+- **Entry points**: `aidevops skill scan`, `security-helper.sh skill-scan`, `add-skill-helper.sh`
+- **Formats**: `summary`, `json`, `markdown`, `table`, `sarif`
+- **Exit codes**: `0` safe, `1` findings
 
-## Threat Detection
+## Threat Coverage
 
 | Category | AITech Code | Severity | Detection |
 |----------|-------------|----------|-----------|
@@ -41,78 +42,48 @@ tools:
 | Autonomy abuse | AITech-13.1 | MEDIUM-HIGH | YAML + YARA + LLM |
 | Tool chaining | AITech-8.2.3 | HIGH | YARA + LLM |
 
-## Analysis Engines
+## Engines
 
 | Engine | Cost | Speed | Requirements |
 |--------|------|-------|-------------|
 | Static (YAML + YARA) | Free | ~150ms | None |
-| Behavioral (AST dataflow) | Free | ~150ms | None |
+| Behavioral (AST/dataflow) | Free | ~150ms | None |
 | LLM-as-judge | API cost | ~2s | `SKILL_SCANNER_LLM_API_KEY` |
 | Meta-analyzer (FP filter) | API cost | ~1s | `SKILL_SCANNER_LLM_API_KEY` |
-| VirusTotal | Free tier | ~16s/req | `VIRUSTOTAL_MARCUSQUINN` or `VIRUSTOTAL_API_KEY` (gopass) |
+| VirusTotal | Free tier | ~16s/request | `VIRUSTOTAL_MARCUSQUINN` or `VIRUSTOTAL_API_KEY` |
 | Cisco AI Defense | Enterprise | ~1s | `AI_DEFENSE_API_KEY` |
+
+Keys: `~/.config/aidevops/credentials.sh` (600 perms) or `aidevops secret set <KEY_NAME>`.
 
 ## aidevops Integration
 
-- **Import-time** (automatic): `add-skill-helper.sh` scans on import; CRITICAL/HIGH blocks unless `--force`
-- **Batch**: `aidevops skill scan` / `security-helper.sh skill-scan all`
-- **Setup-time**: `setup.sh` scans all skills on `aidevops update` (non-blocking)
-- **Update-time**: `skill-update-helper.sh update` re-imports via `add-skill-helper.sh --force`
-- **Results log**: `.agents/configs/configs/SKILL-SCAN-RESULTS.md` (latest summary + audit history)
+- **Import gate**: `add-skill-helper.sh` — `CRITICAL`/`HIGH` blocks unless `--skip-security` (or explicit interactive override)
+- **Batch scans**: `aidevops skill scan`, `security-helper.sh skill-scan all`
+- **Update path**: `setup.sh` scans all skills during `aidevops update` (non-blocking); `skill-update-helper.sh update` re-imports with `--force`
+- **Audit log**: `.agents/configs/SKILL-SCAN-RESULTS.md`
+- **VirusTotal layer**: advisory scan for file hashes and embedded domains/URLs; never replaces the import gate. Limits: 4 req/min, 500/day, max 8 per skill scan.
 
-## CLI Usage
-
-```bash
-skill-scanner scan /path/to/skill                                          # static only (fast)
-skill-scanner scan /path/to/skill --use-behavioral                        # + AST dataflow
-skill-scanner scan /path/to/skill --use-behavioral --use-llm              # full scan
-skill-scanner scan /path/to/skill --use-llm --enable-meta                 # + FP filtering
-skill-scanner scan-all /path/to/skills --recursive                        # batch
-skill-scanner scan-all ./skills --fail-on-findings --format sarif --output results.sarif  # CI/CD
-skill-scanner scan /path/to/skill --custom-rules /path/to/rules/          # custom YARA
-skill-scanner scan /path/to/skill --disable-rule YARA_script_injection    # suppress rule
-skill-scanner scan /path/to/skill --yara-mode permissive                  # fewer findings
-```
-
-## VirusTotal Integration
-
-Advisory second layer alongside Cisco scanner. Checks file hashes (SHA256) against 70+ AV engines and scans domains/URLs in skill content. **VT is advisory only** — Cisco scanner remains the import gate.
-
-- Rate limit: 16s between requests (free tier: 4 req/min, 500 req/day); max 8 requests per skill scan
+## CLI
 
 ```bash
+skill-scanner scan /path/to/skill                                    # static only
+skill-scanner scan /path/to/skill --use-behavioral --use-llm         # full scan
+skill-scanner scan-all /path/to/skills --recursive                   # batch scan
+skill-scanner scan-all ./skills --fail-on-findings --format sarif    # CI/CD gate
+
 virustotal-helper.sh scan-skill /path/to/skill/
 virustotal-helper.sh scan-file /path/to/file.md
 virustotal-helper.sh scan-domain example.com
-virustotal-helper.sh scan-url https://example.com/payload
-virustotal-helper.sh status
-
-security-helper.sh vt-scan skill /path/to/skill/   # via security-helper
-security-helper.sh vt-scan file /path/to/file.md
-security-helper.sh vt-scan status
-# Runs automatically (advisory) after Cisco scanner in: security-helper.sh skill-scan all, add-skill-helper.sh
+security-helper.sh vt-scan skill /path/to/skill/                     # runs after Cisco scanner
 ```
 
-**API key**: `aidevops secret set VIRUSTOTAL_MARCUSQUINN` (gopass preferred) or add to `~/.config/aidevops/credentials.sh`.
-
-## Environment Variables
-
-```bash
-export SKILL_SCANNER_LLM_API_KEY="your_api_key"   # LLM analyzer (optional)
-export SKILL_SCANNER_LLM_MODEL="claude-sonnet-4-6"
-export VIRUSTOTAL_API_KEY="your_key"               # prefer gopass: aidevops secret set VIRUSTOTAL_MARCUSQUINN
-export AI_DEFENSE_API_KEY="your_key"               # Cisco AI Defense (optional)
-```
-
-Store in `~/.config/aidevops/credentials.sh` (600 permissions).
+Useful flags: `--enable-meta` (false-positive filter), `--custom-rules /path/`, `--disable-rule RULE_NAME`, `--yara-mode permissive`.
 
 ## Response Guidelines
 
 | Severity | Action |
 |----------|--------|
 | CRITICAL | Do not import. Remove if already imported. |
-| HIGH | Block import. Review before allowing with `--force`. |
-| MEDIUM | Warn. Review findings and plan fixes. |
+| HIGH | Block import. Allow only with `--skip-security` + explicit interactive override. |
+| MEDIUM | Warn. Review and plan fixes. |
 | LOW | Informational. Address in future. |
-
-<!-- AI-CONTEXT-END -->

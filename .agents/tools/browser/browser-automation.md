@@ -8,6 +8,9 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Browser Automation - Tool Selection Guide
 
 <!-- AI-CONTEXT-START -->
@@ -24,6 +27,9 @@ EXTRACT?
 AUTOMATE?
   Password manager/extensions:
     Already unlocked → Playwriter | Unlock once → dev-browser | Programmatic → Playwright + Bitwarden CLI
+  Live already-open Chromium/Chrome session:
+    Inspect current state / understand workflow first → chromium-debug-use
+    Flow understood, need repeatable automation → Playwright / dev-browser / Playwriter / Stagehand
   Parallel sessions: speed → Playwright | CLI → playwright-cli/agent-browser --session
   Persistent login: with extensions → dev-browser | without → playwright-cli/storageState
   Proxy: direct → Playwright/Crawl4AI | via extension → Playwriter
@@ -55,9 +61,9 @@ const elements = await page.evaluate(() =>
 );
 ```
 
-## Benchmarks (2026-01-24, macOS ARM64, headless, warm daemon)
+## Benchmarks (2026-01-24, macOS ARM64, headless, warm daemon — reproduce: `browser-benchmark.md`)
 
-Reproduce: `browser-benchmark.md`. Overhead: dev-browser +0.1-0.4s | agent-browser +0.5-1.5s (cold) | Stagehand +1-5s (AI) | Playwriter +1-2s (CDP).
+Overhead: dev-browser +0.1-0.4s | agent-browser +0.5-1.5s (cold) | Stagehand +1-5s (AI) | Playwriter +1-2s (CDP).
 
 | Test | Playwright | dev-browser | agent-browser | Crawl4AI | Playwriter | Stagehand |
 |------|-----------|-------------|---------------|----------|------------|-----------|
@@ -77,6 +83,19 @@ Reproduce: `browser-benchmark.md`. Overhead: dev-browser +0.1-0.4s | agent-brows
 | Self-healing/NL | No | No | No | No | LLM only | No | Yes |
 | Setup | npm install | npm install -g | Server running | npm install | pip/Docker | Extension click | npm + API key |
 
+## Inspect First, Then Formalize
+
+Use `chromium-debug-use` when the fastest path is to inspect a browser session that is already open, confirm what the user is doing now, or learn a flow before deciding how to automate it long-term.
+
+| If you learned... | Stay or hand off to... | Why |
+|-------------------|------------------------|-----|
+| You just need to inspect the live session, read DOM state, click lightly, or capture the current flow | `chromium-debug-use` | Fastest path to what is already open |
+| The flow should become reproducible, isolated, parallel, or CI-friendly | `tools/browser/playwright.md` | Fresh contexts are better for repeatable automation |
+| The flow needs a managed persistent profile that aidevops can keep reusing | `tools/browser/dev-browser.md` | Better long-lived state than a user-owned live browser |
+| The user wants tab-by-tab consent in their everyday browser instead of a debug-enabled profile | `tools/browser/playwriter.md` | Extension click keeps the consent boundary narrower |
+| The page structure is still fuzzy and you want natural-language exploration before hardening selectors | `tools/browser/stagehand.md` | Better when the next step is exploratory automation |
+| The goal is console, network, performance, or general DevTools inspection against the same live browser | `tools/browser/chrome-devtools.md` | Better debugging surface than automation-first CDP commands |
+
 ## Parallel Sessions
 
 | Tool | Method | Speed | Isolation |
@@ -86,9 +105,7 @@ Reproduce: `browser-benchmark.md`. Overhead: dev-browser +0.1-0.4s | agent-brows
 | Crawl4AI | `arun_many(urls)` | 5 pages: 3.0s (1.7x) | Shared or isolated |
 | dev-browser | `client.page("name")` | Fast | Shared profile |
 
-## Extensions
-
-uBlock Origin in Playwright/dev-browser:
+## Extensions (uBlock Origin example — Playwright/dev-browser)
 
 ```javascript
 const context = await chromium.launchPersistentContext('/tmp/browser-profile', {
@@ -105,18 +122,17 @@ Brave/Edge/Chrome/Mullvad: Playwright, Playwriter, Crawl4AI, Stagehand. Bundled 
 ## Debugging
 
 ```bash
-# Chrome DevTools MCP
-npx chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222  # dev-browser
-npx chrome-devtools-mcp@latest --headless                           # own Chrome
+# Chrome DevTools MCP (dev-browser :9222 or headless)
+npx chrome-devtools-mcp@latest --browserUrl http://127.0.0.1:9222
+npx chrome-devtools-mcp@latest --headless
 
-# Visual debugging
 agent-browser screenshot /tmp/debug.png && agent-browser errors && agent-browser snapshot -i
 ```
 
 **NEVER use curl to verify frontend fixes** — server returns 200 even when React crashes client-side. Diagnose: screenshot → errors/console → snapshot/URL → analyze → retry → ask user if stuck.
 
-> **Screenshot limit**: Never `fullPage: true` for AI vision — can exceed 8000px (hard-rejected). Resize: `magick screenshot.png -resize "1568x1568>" out.png`. See `prompts/build.txt`.
+> **Screenshot limit**: Never `fullPage: true` for AI vision — can exceed 8000px (hard-rejected). Resize: `magick screenshot.png -resize "1568x1568>" out.png`. See `reference/screenshot-limits.md`.
 
 <!-- AI-CONTEXT-END -->
 
-Per-tool docs: `playwright.md` · `playwright-cli.md` · `dev-browser.md` · `agent-browser.md` · `crawl4ai.md` · `playwriter.md` · `stagehand.md`. Ethics: respect ToS, rate limit (2-5s delays), no spam, legitimate use only, no personal data without consent.
+Per-tool docs: `playwright.md` · `playwright-cli.md` · `chromium-debug-use.md` · `dev-browser.md` · `agent-browser.md` · `crawl4ai.md` · `playwriter.md` · `stagehand.md`. Ethics: respect ToS, rate limit (2-5s delays), no spam, legitimate use only, no personal data without consent.

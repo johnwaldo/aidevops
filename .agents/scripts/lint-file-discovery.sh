@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # =============================================================================
 # Lint File Discovery - Shared file collection for quality checks
 # =============================================================================
@@ -7,15 +9,13 @@
 #
 # Exclusion policy (single source of truth):
 #   _archive/            - local archive directories
-#   archived/            - archived code (versioned for reference, not maintained)
-#   supervisor-archived/ - archived supervisor modules
 #
 # Usage (CI — git-based):
 #   source .agents/scripts/lint-file-discovery.sh
 #   lint_shell_files      # populates LINT_SH_FILES (newline-separated)
 #   lint_python_files     # populates LINT_PY_FILES (newline-separated)
 #
-# Usage (local — find-based, includes setup-modules/ and setup.sh):
+# Usage (local — find-based, includes .agents/scripts/setup/modules/ and setup.sh):
 #   source .agents/scripts/lint-file-discovery.sh
 #   lint_shell_files_local   # populates LINT_SH_FILES (null-separated array)
 #   lint_python_files_local  # populates LINT_PY_FILES_LOCAL (null-separated array)
@@ -29,7 +29,7 @@ _LINT_FILE_DISCOVERY_LOADED=1
 
 # Exclusion pattern for grep -v (pipe-separated, used with grep -E)
 # Single source of truth for all archive/excluded directories.
-readonly LINT_EXCLUDE_PATTERN='_archive/|archived/|supervisor-archived/'
+readonly LINT_EXCLUDE_PATTERN='_archive/'
 
 # -----------------------------------------------------------------------------
 # Git-based discovery (CI mode)
@@ -55,28 +55,26 @@ lint_python_files() {
 # -----------------------------------------------------------------------------
 # Find-based discovery (local mode)
 # -----------------------------------------------------------------------------
-# Uses find — includes setup-modules/ and setup.sh from repo root.
+# Uses find — includes .agents/scripts/setup/modules/ and setup.sh from repo root.
 # Results populate bash arrays for safe iteration over paths with spaces.
 
 LINT_SH_FILES_LOCAL=()
 LINT_PY_FILES_LOCAL=()
 
 # Populate LINT_SH_FILES_LOCAL array with shell files from .agents/scripts/,
-# setup-modules/, and setup.sh — excluding archived directories.
+# .agents/scripts/setup/modules/, and setup.sh — excluding archived directories.
 lint_shell_files_local() {
 	LINT_SH_FILES_LOCAL=()
 	while IFS= read -r -d '' f; do
 		LINT_SH_FILES_LOCAL+=("$f")
 	done < <(find .agents/scripts -name "*.sh" \
 		-not -path "*/_archive/*" \
-		-not -path "*/archived/*" \
-		-not -path "*/supervisor-archived/*" \
 		-print0 2>/dev/null | sort -z)
 
-	# Include setup-modules/ (extracted setup.sh modules) if present
+	# Include .agents/scripts/setup/modules/ (extracted setup.sh modules) if present
 	while IFS= read -r -d '' f; do
 		LINT_SH_FILES_LOCAL+=("$f")
-	done < <(find setup-modules -name "*.sh" -print0 2>/dev/null | sort -z)
+	done < <(find .agents/scripts/setup/modules -name "*.sh" -print0 2>/dev/null | sort -z)
 
 	# Include setup.sh entry point itself
 	if [[ -f "setup.sh" ]]; then
@@ -93,8 +91,6 @@ lint_python_files_local() {
 		LINT_PY_FILES_LOCAL+=("$f")
 	done < <(find .agents/scripts -name "*.py" \
 		-not -path "*/_archive/*" \
-		-not -path "*/archived/*" \
-		-not -path "*/supervisor-archived/*" \
 		-print0 2>/dev/null | sort -z)
 	return 0
 }

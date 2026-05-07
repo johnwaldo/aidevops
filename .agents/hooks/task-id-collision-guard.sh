@@ -1,0 +1,724 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+#
+# task-id-collision-guard.sh — git commit-msg hook and CI check.
+#
+# Scans commit subjects (and bodies) for t\d+ references and rejects commits
+# where a referenced t-ID appears to be invented — i.e., greater than the
+# current .task-counter on the merge base AND not cross-referenced via a
+# linked GitHub issue title that confirms the ID was claimed by someone else.
+#
+# Modes:
+#   Default (commit-msg hook):
+#     Called with arg1 = path to the commit message file.
+#     Exits 0 (allow) or 1 (reject with actionable error).
+#
+#   check-pr <PR_NUMBER>:
+#     Scans every commit in the PR range (merge-base..HEAD) AND the PR title.
+#     A worker can open a PR whose title advertises a tNNN not in any commit —
+#     the title scan closes that gap (GH#19987).
+#     Used by CI to catch commits authored outside the hook.
+#     Exits 0 (all clean) or 1 (one or more violations).
+#
+# Environment:
+#   TASK_ID_GUARD_DISABLE=1   — bypass for this invocation (equivalent to --no-verify)
+#   TASK_ID_GUARD_DEBUG=1     — verbose stderr trace
+#
+# Fail-open cases (exit 0 with warning):
+#   - gh CLI unavailable or unauthenticated
+#   - .task-counter not present on merge base
+#   - offline state
+#   - git command failures
+
+set -u
+
+# ---------------------------------------------------------------------------
+# Bypass
+# ---------------------------------------------------------------------------
+
+if [[ "${TASK_ID_GUARD_DISABLE:-0}" == "1" ]]; then
+	printf '[task-id-guard][INFO] TASK_ID_GUARD_DISABLE=1 — bypassing\n' >&2
+	exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_debug() {
+	local msg="$1"
+	[[ "${TASK_ID_GUARD_DEBUG:-0}" == "1" ]] && printf '[task-id-guard][DEBUG] %s\n' "$msg" >&2
+	return 0
+}
+
+_warn() {
+	local msg="$1"
+	printf '[task-id-guard][WARN] %s\n' "$msg" >&2
+	return 0
+}
+
+_info() {
+	local msg="$1"
+	printf '[task-id-guard][INFO] %s\n' "$msg" >&2
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Read the .task-counter value at a given git ref.
+# Returns the integer or empty string on failure.
+# ---------------------------------------------------------------------------
+_read_counter_at_ref() {
+	local ref="${1:-}"
+	if [[ -z "$ref" ]]; then
+		return 1
+	fi
+	local val
+	val=$(git show "${ref}:.task-counter" 2>/dev/null | tr -d '[:space:]')
+	if [[ "$val" =~ ^[0-9]+$ ]]; then
+		printf '%s' "$val"
+		return 0
+	fi
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Resolve the current task counter by taking the MAX across multiple known-good
+# sources. .task-counter is monotonically increasing so max == most current.
+#
+# This prevents stale-worktree false positives: when a worktree is created
+# before a subsequent claim-task-id.sh run bumps the counter on origin/main,
+# the merge-base holds a stale value. Reading from origin/main tip directly
+# returns the authoritative counter, regardless of merge-base age.
+#
+# Returns the integer counter string (no newline), or empty string on failure.
+# ---------------------------------------------------------------------------
+_resolve_current_counter() {
+	local best=""
+	local val ref
+	# Priority sources, highest-freshness first. We take the MAX across all,
+	# not the first — .task-counter is monotonic so max == most current.
+	for ref in "origin/main" "origin/master" "main" "master" "HEAD"; do
+		if git rev-parse --verify "$ref" >/dev/null 2>&1; then
+			val=$(git show "${ref}:.task-counter" 2>/dev/null | tr -d '[:space:]')
+			if [[ "$val" =~ ^[0-9]+$ ]]; then
+				# Force base-10 (10#) so leading-zero values like "008" don't trip
+				# bash's octal parser — same root cause as the line 290 comparison
+				# fixed in GH#19620. The ^[0-9]+$ guard above makes 10# safe.
+				if [[ -z "$best" ]] || ((10#$val > 10#$best)); then
+					best="$val"
+				fi
+			fi
+		fi
+	done
+	# Also consider working copy (covers detached-HEAD / no-remote edge cases)
+	if [[ -f .task-counter ]]; then
+		val=$(tr -d '[:space:]' <.task-counter)
+		if [[ "$val" =~ ^[0-9]+$ ]]; then
+			# Force base-10 (10#) — same octal-trap fix as above.
+			if [[ -z "$best" ]] || ((10#$val > 10#$best)); then
+				best="$val"
+			fi
+		fi
+	fi
+	[[ -n "$best" ]] && printf '%s' "$best"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Determine the merge base between HEAD and the default branch (main/master).
+# Falls back to the root commit.
+# ---------------------------------------------------------------------------
+_find_merge_base() {
+	if [[ -n "${_TASK_ID_GUARD_MERGE_BASE_CACHE:-}" ]]; then
+		printf '%s' "$_TASK_ID_GUARD_MERGE_BASE_CACHE"
+		return 0
+	fi
+
+	local base="" ref
+	# Try main first, then master
+	for branch in main master; do
+		ref="origin/${branch}"
+		if git rev-parse --verify "$ref" >/dev/null 2>&1; then
+			base=$(git merge-base HEAD "$ref" 2>/dev/null) && break
+		elif git rev-parse --verify "$branch" >/dev/null 2>&1; then
+			base=$(git merge-base HEAD "$branch" 2>/dev/null) && break
+		fi
+	done
+	if [[ -z "$base" ]]; then
+		# Fallback: root commit of the current branch
+		base=$(git rev-list --max-parents=0 HEAD 2>/dev/null | head -1)
+	fi
+	printf '%s' "$base"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Resolve the best ref for "the upstream default branch tip" for use as the
+# left-hand side of `git log A..HEAD`. Prefers origin/main, then origin/master,
+# then local main, then local master. Returns empty if none found.
+#
+# Used by _run_check_pr (t2895) to scope the commit list to the PR's unique
+# commits, excluding upstream commits brought in via a merge from main. This
+# is critical for performance when a PR has merged main to resolve conflicts —
+# the merge-base..HEAD range expands to include all commits between fork-point
+# and the new main tip, which can be hundreds of commits on long-lived branches.
+# ---------------------------------------------------------------------------
+_find_default_branch_ref() {
+	local branch ref
+	for branch in main master; do
+		ref="origin/${branch}"
+		if git rev-parse --verify "$ref" >/dev/null 2>&1; then
+			printf '%s' "$ref"
+			return 0
+		fi
+	done
+	for branch in main master; do
+		if git rev-parse --verify "$branch" >/dev/null 2>&1; then
+			printf '%s' "$branch"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Subject caches (t2895 performance fix).
+#
+# When invoked in check-pr mode, _check_message is called per commit in the
+# PR range. Each call may trigger _branch_has_claim and _repo_has_claim, both
+# of which run `git log` against the same data set. Without caching, these
+# scans are repeated O(N_commits × M_tids) times — for a PR with 143 commits
+# brought in via a merge from main, this caused 21+ minute hangs in CI before
+# being cancelled (canonical: PR #20913).
+#
+# These caches are populated once per check-pr invocation and read by the
+# subject-list helpers below. Commit-msg hook mode does NOT populate these,
+# so its behavior is unchanged (single-commit scope, caching not worthwhile).
+# ---------------------------------------------------------------------------
+_TASK_ID_GUARD_BRANCH_SUBJECTS=""
+_TASK_ID_GUARD_BRANCH_SUBJECTS_HOT="0"
+_TASK_ID_GUARD_REPO_SUBJECTS=""
+_TASK_ID_GUARD_REPO_SUBJECTS_HOT="0"
+_TASK_ID_GUARD_MERGE_BASE_CACHE=""
+
+# Emit `git log --format='%s' BASE..HEAD` output, using the cache when hot.
+# Args:
+#   arg1 = base ref (e.g. merge-base SHA)
+_branch_subjects() {
+	local base="${1:-}"
+	if [[ "$_TASK_ID_GUARD_BRANCH_SUBJECTS_HOT" == "1" ]]; then
+		[[ -n "$_TASK_ID_GUARD_BRANCH_SUBJECTS" ]] && printf '%s\n' "$_TASK_ID_GUARD_BRANCH_SUBJECTS"
+		return 0
+	fi
+	[[ -n "$base" ]] && git log --format='%s' "${base}..HEAD" 2>/dev/null
+	return 0
+}
+
+# Emit `git log --all --format='%s'` output, using the cache when hot.
+_repo_subjects() {
+	if [[ "$_TASK_ID_GUARD_REPO_SUBJECTS_HOT" == "1" ]]; then
+		[[ -n "$_TASK_ID_GUARD_REPO_SUBJECTS" ]] && printf '%s\n' "$_TASK_ID_GUARD_REPO_SUBJECTS"
+		return 0
+	fi
+	git log --all --format='%s' 2>/dev/null
+	return 0
+}
+
+# Pre-populate both subject caches. Call once at entry of _run_check_pr so
+# subsequent _branch_has_claim / _repo_has_claim calls hit the cache instead
+# of forking git per (commit, t-ID) pair.
+# Args:
+#   arg1 = base ref for branch subjects (typically the merge-base SHA)
+_populate_check_pr_caches() {
+	local base="${1:-}"
+	if [[ -n "$base" ]]; then
+		_TASK_ID_GUARD_BRANCH_SUBJECTS=$(git log --format='%s' "${base}..HEAD" 2>/dev/null)
+		_TASK_ID_GUARD_BRANCH_SUBJECTS_HOT="1"
+	fi
+	_TASK_ID_GUARD_REPO_SUBJECTS=$(git log --all --format='%s' 2>/dev/null)
+	_TASK_ID_GUARD_REPO_SUBJECTS_HOT="1"
+	_TASK_ID_GUARD_MERGE_BASE_CACHE="$base"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Check whether a given t-ID has a matching claim commit on the current
+# branch between merge-base and HEAD. The claim commit subject must match
+# `chore: claim tNNN[..tMMM] [nonce]` (single or range form — see
+# allocate_counter_cas in claim-task-id.sh lines 684-689).
+#
+# Returns 0 if a claim commit is found, 1 otherwise.
+# ---------------------------------------------------------------------------
+_branch_has_claim() {
+	local tid="${1:-}"
+	local base
+	base=$(_find_merge_base)
+	if [[ -z "$base" ]]; then
+		_debug "merge-base empty — cannot verify branch claim, allowing"
+		return 0
+	fi
+	# Match single claim: "chore: claim t001 [nonce]"
+	# Match range claim:  "chore: claim t001..t003 [nonce]"
+	# Use git log with %s (subject) and grep for the tid as word.
+	local num
+	num=$(printf '%s' "$tid" | tr -d 't')
+	if ! [[ "$num" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+	# Look for an exact single-ID claim first.
+	if _branch_subjects "$base" | grep -qE "^chore: claim t0*${num}( |\$|\\[)"; then
+		return 0
+	fi
+	# Look for a range claim that covers num: chore: claim tA..tB
+	local line low high
+	while IFS= read -r line; do
+		# Extract tA and tB from "chore: claim t00A..t00B [nonce]"
+		if [[ "$line" =~ ^chore:\ claim\ t0*([0-9]+)\.\.t0*([0-9]+) ]]; then
+			low="${BASH_REMATCH[1]}"
+			high="${BASH_REMATCH[2]}"
+			if ((10#$num >= 10#$low && 10#$num <= 10#$high)); then
+				return 0
+			fi
+		fi
+	done < <(_branch_subjects "$base")
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Check whether a given t-ID has a matching claim commit anywhere in the
+# repo history (git log --all). This catches t-IDs that were claimed in
+# prior merged PRs and are now being referenced in prose (e.g., "the t2574
+# REST fallback covers..."). The claim commit subject must match
+# `chore: claim tNNN[..tMMM] [nonce]` (single or range form).
+#
+# Returns 0 if a claim commit is found, 1 otherwise.
+# ---------------------------------------------------------------------------
+_repo_has_claim() {
+	local tid="${1:-}"
+	local num
+	num=$(printf '%s' "$tid" | tr -d 't')
+	if ! [[ "$num" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+	# Look for an exact single-ID claim first.
+	if _repo_subjects | grep -qE "^chore: claim t0*${num}( |\$|\\[)"; then
+		return 0
+	fi
+	# Look for a range claim that covers num: chore: claim tA..tB
+	local line low high
+	while IFS= read -r line; do
+		# Extract tA and tB from "chore: claim t00A..t00B [nonce]"
+		if [[ "$line" =~ ^chore:\ claim\ t0*([0-9]+)\.\.t0*([0-9]+) ]]; then
+			low="${BASH_REMATCH[1]}"
+			high="${BASH_REMATCH[2]}"
+			if ((10#$num >= 10#$low && 10#$num <= 10#$high)); then
+				return 0
+			fi
+		fi
+	done < <(_repo_subjects)
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Extract all tNNN references from text.
+# Outputs one per line.
+# ---------------------------------------------------------------------------
+_extract_tids() {
+	local text="${1:-}"
+	# Match t followed by one or more digits only when NOT preceded by an
+	# alphanumeric character (prevents false positives from subagent or library
+	# names like context7→t7, gpt4→t4, next13→t13).
+	# POSIX ERE lacks \b so we use a two-step approach: first grep anchors the
+	# leading boundary via (^|[^[:alnum:]]), then a second grep strips the
+	# captured leading non-alnum character.  GNU and BSD grep both support this.
+	printf '%s' "$text" | grep -oE '(^|[^[:alnum:]])t[0-9]+' | grep -oE 't[0-9]+' | sort -u
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Extract issue numbers from Resolves|Closes|Fixes|Ref|For footer lines.
+# Accepts both closing keywords (Resolves, Closes, Fixes) and non-closing
+# reference keywords (Ref, For) — the downstream title-match verification
+# is unchanged, so adding Ref/For doesn't weaken the safety check.
+# Outputs one per line.
+# ---------------------------------------------------------------------------
+_extract_closing_issues() {
+	local text="${1:-}"
+	printf '%s' "$text" | grep -iE '(Resolves|Closes|Fixes|Ref|For)[[:space:]]+#[0-9]+' |
+		grep -oE '#[0-9]+' | tr -d '#' | sort -u
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Cross-reference a single t-ID against closing issues via the gh API.
+# Args:
+#   arg1 = tid (e.g. "t2047")
+#   arg2 = newline-separated closing issue numbers
+# Returns:
+#   0 = confirmed (title of at least one linked issue contains the t-ID)
+#   1 = not confirmed (violation)
+#   2 = fail-open (gh unavailable or API error with no confirmation)
+# ---------------------------------------------------------------------------
+_verify_tid_via_issues() {
+	local tid="${1:-}"
+	local closing_issues="${2:-}"
+
+	if [[ -z "$closing_issues" ]]; then
+		_debug "$tid: no linked issues (Resolves/Closes/Fixes/Ref/For) — marking as violation"
+		return 1
+	fi
+
+	if ! command -v gh >/dev/null 2>&1; then
+		_warn "gh not available — fail-open (CI will validate on push)"
+		return 2
+	fi
+
+	local iss_num
+	local gh_had_error=0
+	local confirmed=0
+	while IFS= read -r iss_num; do
+		[[ -z "$iss_num" ]] && continue
+		local title
+		title=$(gh issue view "$iss_num" --json title --jq '.title' 2>/dev/null)
+		local gh_rc=$?
+		if [[ "$gh_rc" -ne 0 || -z "$title" ]]; then
+			_debug "gh issue view #${iss_num} failed (rc=${gh_rc}) — marking gh_had_error"
+			gh_had_error=1
+			continue
+		fi
+		_debug "Issue #${iss_num} title: $title"
+		if printf '%s' "$title" | grep -qE "(^|[^0-9])${tid}([^0-9]|$)"; then
+			_debug "$tid confirmed via linked issue #${iss_num}"
+			confirmed=1
+			break
+		fi
+	done <<<"$closing_issues"
+
+	if [[ "$gh_had_error" -eq 1 && "$confirmed" -eq 0 ]]; then
+		_warn "gh API error during cross-reference check — fail-open (CI will validate on push)"
+		return 2
+	fi
+
+	[[ "$confirmed" -eq 1 ]] && return 0
+	return 1
+}
+
+# ---------------------------------------------------------------------------
+# Print the violation block to stderr.
+# Args:
+#   arg1 = violations string (printf %b-formatted lines)
+#   arg2 = commit subject (for display)
+# ---------------------------------------------------------------------------
+_report_violations() {
+	local violations="${1:-}"
+	local subject="${2:-<unknown>}"
+	printf '\n[task-id-guard][BLOCK] Commit subject references invented or unclaimed task ID(s):\n\n' >&2
+	printf '  Subject: %s\n\n' "$subject" >&2
+	printf '%b\n' "$violations" >&2
+	printf '  To fix:\n' >&2
+	printf '    1. Remove the t-ID from the commit subject/body, OR\n' >&2
+	printf '    2. Claim the ID first: claim-task-id.sh --title "..." → then use the allocated ID, OR\n' >&2
+	printf '    3. If cross-referencing another person'"'"'s task, add "Resolves/Closes/Fixes/Ref/For #NNN" footer\n' >&2
+	printf '       where the linked issue title contains the t-ID.\n' >&2
+	printf '  Bypass (sets audit trail): TASK_ID_GUARD_DISABLE=1 git commit ...  or git commit --no-verify\n\n' >&2
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Core check: given a commit message, check if any t\d+ reference is invented.
+# Args:
+#   arg1 = full commit message text
+#   arg2 = commit subject (for display in errors), optional
+# Returns 0 (clean), 1 (violation found), 2 (fail-open — skip).
+# ---------------------------------------------------------------------------
+_check_message() {
+	local msg="${1:-}"
+	local subject="${2:-<unknown>}"
+
+	if [[ -z "$msg" ]]; then
+		_debug "Empty commit message — allowing"
+		return 0
+	fi
+
+	if [[ "$subject" == "<unknown>" ]]; then
+		subject=$(printf '%s' "$msg" | head -1)
+	fi
+
+	local tids
+	tids=$(_extract_tids "$msg")
+	if [[ -z "$tids" ]]; then
+		_debug "No t-IDs in commit — allowing"
+		return 0
+	fi
+
+	_debug "Found t-IDs: $(printf '%s' "$tids" | tr '\n' ' ')"
+
+	local counter=""
+	counter=$(_resolve_current_counter)
+	if [[ -z "$counter" ]]; then
+		_warn ".task-counter not readable from any source — fail-open"
+		return 2
+	fi
+
+	_debug "Current counter value: $counter"
+
+	local closing_issues
+	closing_issues=$(_extract_closing_issues "$msg")
+	_debug "Closing issues: $(printf '%s' "$closing_issues" | tr '\n' ' ')"
+
+	local violations=""
+	local tid
+	while IFS= read -r tid; do
+		[[ -z "$tid" ]] && continue
+		local num
+		num=$(printf '%s' "$tid" | tr -d 't')
+		if ! [[ "$num" =~ ^[0-9]+$ ]]; then
+			_debug "Non-numeric suffix for $tid — skipping"
+			continue
+		fi
+		# Force base-10 (10#) so leading-zero IDs like "008", "068" don't trip
+		# bash's octal parser. Same root cause as the _compute_counter_seed bug
+		# in claim-task-id.sh — both fixed in this PR (GH#19620).
+		if ((10#$num <= 10#$counter)); then
+			# Phase 1 (t2567 / GH#20001): reuse-without-claim detection.
+			# A t-ID ≤ counter exists globally, but must be claimed on THIS
+			# branch. If no matching `chore: claim tNNN` commit is found on
+			# merge-base..HEAD, check if it was claimed anywhere in repo history
+			# (git log --all) — this handles cross-references to prior merged PRs.
+			# If repo-wide claim exists, allow it. Otherwise, fall through to the
+			# linked-issue check so the worker can still authorise via
+			# `Resolves/Closes/Fixes/Ref/For #NNN` (matching issue title).
+			# If neither claim commit nor linked issue confirms, this becomes a
+			# violation (reuse).
+			if _branch_has_claim "$tid"; then
+				_debug "$tid claimed on this branch — allowed"
+				continue
+			fi
+			if _repo_has_claim "$tid"; then
+				_debug "$tid claimed in repo history — allowed (cross-reference)"
+				continue
+			fi
+			_debug "$tid ≤ counter but no branch/repo claim — verifying via linked issues"
+			local verify_rc
+			_verify_tid_via_issues "$tid" "$closing_issues"
+			verify_rc=$?
+			if [[ "$verify_rc" -eq 2 ]]; then
+				return 2
+			fi
+			if [[ "$verify_rc" -eq 1 ]]; then
+				violations="${violations}  ${tid} — ≤ counter ${counter}, but no 'chore: claim ${tid}' commit on this branch, in repo history, or linked issue title\n"
+			fi
+			continue
+		fi
+		_debug "$tid ($num) > counter ($counter) — suspicious, checking linked issues"
+		local verify_rc
+		_verify_tid_via_issues "$tid" "$closing_issues"
+		verify_rc=$?
+		if [[ "$verify_rc" -eq 2 ]]; then
+			return 2
+		fi
+		if [[ "$verify_rc" -eq 1 ]]; then
+			violations="${violations}  ${tid} — numeric ID ${num} > current counter ${counter}, and not confirmed via a linked issue title\n"
+		fi
+	done <<<"$tids"
+
+	if [[ -n "$violations" ]]; then
+		_report_violations "$violations" "$subject"
+		return 1
+	fi
+
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Commit-msg hook mode (default).
+# arg1 = path to commit message file
+# ---------------------------------------------------------------------------
+_run_hook() {
+	local msg_file="${1:-}"
+	if [[ -z "$msg_file" || ! -f "$msg_file" ]]; then
+		_warn "commit-msg: no message file provided — fail-open"
+		return 0
+	fi
+
+	local msg
+	msg=$(cat "$msg_file")
+	local subject
+	subject=$(head -1 "$msg_file")
+
+	# Skip merge commits, fixup commits, and squash commits
+	if printf '%s' "$subject" | grep -qE '^(Merge|fixup!|squash!)'; then
+		_debug "Merge/fixup/squash commit — skipping"
+		return 0
+	fi
+
+	local rc
+	_check_message "$msg" "$subject"
+	rc=$?
+
+	if [[ "$rc" -eq 2 ]]; then
+		# Fail-open
+		return 0
+	fi
+	return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# Check the PR title (and body, for cross-reference footers) for invented
+# t-IDs. Extracted from _run_check_pr (t2895) to keep that function under the
+# 100-line function-complexity gate.
+#
+# Strategy: concatenate PR title + PR body and run _check_message on the
+# combined string. The PR body typically contains the Resolves/Closes/Fixes
+# footer that supplies the cross-reference context, so title + body together
+# give _check_message everything it needs to distinguish a valid tNNN from
+# an invented one. Fail-open if gh is unavailable or the fetch fails.
+#
+# Returns 1 on violation, 0 otherwise (including fail-open paths).
+# ---------------------------------------------------------------------------
+_check_pr_title() {
+	local pr_number="$1"
+	if ! command -v gh >/dev/null 2>&1; then
+		_warn "gh not available — skipping PR title check (fail-open)"
+		return 0
+	fi
+	local pr_title pr_body pr_combined title_rc
+	pr_title=$(gh pr view "$pr_number" --json title --jq '.title' 2>/dev/null)
+	if [[ -z "$pr_title" ]]; then
+		_warn "Could not fetch PR #${pr_number} title via gh — skipping title check (fail-open)"
+		return 0
+	fi
+	pr_body=$(gh pr view "$pr_number" --json body --jq '.body' 2>/dev/null)
+	pr_combined="${pr_title}"$'\n\n'"${pr_body:-}"
+	_debug "Checking PR #${pr_number} title: $pr_title"
+	_check_message "$pr_combined" "PR #${pr_number} title: ${pr_title}"
+	title_rc=$?
+	[[ "$title_rc" -eq 1 ]] && printf '[task-id-guard][VIOLATION] PR #%s title references invented t-ID: %s\n' "$pr_number" "$pr_title" >&2
+	return "$title_rc"
+}
+
+# ---------------------------------------------------------------------------
+# CI mode: check-pr <PR_NUMBER>
+# Scans every commit in the PR range (merge-base..HEAD).
+# ---------------------------------------------------------------------------
+_run_check_pr() {
+	local pr_number="${1:-}"
+	if [[ -z "$pr_number" ]]; then
+		printf '[task-id-guard][ERROR] check-pr requires a PR number\n' >&2
+		return 1
+	fi
+
+	# Resolve the upstream default-branch ref (origin/main, then origin/master,
+	# then local main/master). Use it as the left-hand side of `git log A..HEAD`
+	# to bound the scan to commits unique to the PR — excluding upstream
+	# commits brought in via a merge from main. This is the t2895 fix: a
+	# merge-from-main on a long-lived branch can pull in hundreds of upstream
+	# commits whose t-IDs were claimed via prior merged PRs; scanning all of
+	# them once was timing out CI at 21+ min (canonical: PR #20913).
+	#
+	# When neither origin/main nor a local main/master exists (rare — fork
+	# without remote, fresh clone with no upstream tracking), fall back to the
+	# merge-base of HEAD against the root commit. This preserves the prior
+	# behavior for that edge case.
+	local default_ref base
+	if default_ref=$(_find_default_branch_ref); then
+		base="$default_ref"
+		_debug "Using default-branch ref for PR scan range: $base"
+	else
+		base=$(_find_merge_base)
+		_debug "No default-branch ref found; falling back to merge-base: $base"
+		if [[ -z "$base" ]]; then
+			_warn "Could not determine PR scan base — fail-open"
+			return 0
+		fi
+	fi
+
+	# Get commits unique to the branch, excluding merge commits via --no-merges.
+	# `git log A..B` already excludes commits reachable from A; combined with
+	# `--no-merges` we skip both upstream commits and the merge commit that
+	# brought them in. fixup!/squash! commits are handled by _check_message.
+	local commits
+	commits=$(git log --no-merges "${base}..HEAD" --format='%H' 2>/dev/null)
+	if [[ -z "$commits" ]]; then
+		_info "No commits in PR range — nothing to check"
+		return 0
+	fi
+
+	# Pre-populate subject caches once. _branch_has_claim and _repo_has_claim
+	# called from _check_message would otherwise fork `git log` per (commit,
+	# t-ID) pair, which is the actual cost driver behind the timeout. Compute
+	# the merge-base for the branch-subjects cache; this is independent of
+	# `base` above (which may be origin/main directly) — we want claims that
+	# live on the branch since fork-point, not since the current main tip.
+	local merge_base
+	merge_base=$(_find_merge_base)
+	_populate_check_pr_caches "$merge_base"
+
+	local total_violations=0
+	local commit_hash
+	while IFS= read -r commit_hash; do
+		[[ -z "$commit_hash" ]] && continue
+		local commit_msg
+		commit_msg=$(git log -1 --format='%s%n%n%b' "$commit_hash" 2>/dev/null)
+		local subject
+		subject=$(git log -1 --format='%s' "$commit_hash" 2>/dev/null)
+
+		_debug "Checking commit $commit_hash: $subject"
+
+		# Skip fixup/squash commits (merges already excluded by --no-merges)
+		if printf '%s' "$subject" | grep -qE '^(fixup!|squash!)'; then
+			_debug "Skipping fixup/squash: $commit_hash"
+			continue
+		fi
+
+		local rc
+		_check_message "$commit_msg" "$subject"
+		rc=$?
+		if [[ "$rc" -eq 1 ]]; then
+			printf '[task-id-guard][VIOLATION] commit %s\n' "$commit_hash" >&2
+			total_violations=$((total_violations + 1))
+		fi
+	done <<<"$commits"
+
+	# Also check the PR title for invented t-IDs (GH#19987). See
+	# _check_pr_title for the strategy. Extracted to keep _run_check_pr
+	# under the 100-line function-complexity gate (t2895).
+	local title_rc
+	_check_pr_title "$pr_number"
+	title_rc=$?
+	total_violations=$((total_violations + (title_rc == 1 ? 1 : 0)))
+
+	if [[ "$total_violations" -gt 0 ]]; then
+		printf '\n[task-id-guard][SUMMARY] %d violation(s) found in PR #%s\n' "$total_violations" "$pr_number" >&2
+		return 1
+	fi
+
+	_info "PR #${pr_number}: all commits clean"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+main() {
+	local mode="${1:-}"
+	case "$mode" in
+	check-pr)
+		shift
+		_run_check_pr "$@"
+		return $?
+		;;
+	help | --help | -h)
+		sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+		return 0
+		;;
+	*)
+		# Default: commit-msg hook mode. First arg is the message file path.
+		_run_hook "${1:-}"
+		return $?
+		;;
+	esac
+}
+
+main "$@"

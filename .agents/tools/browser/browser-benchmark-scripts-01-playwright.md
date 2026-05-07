@@ -1,8 +1,11 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Playwright Benchmark Scripts
 
-Canonical reference. Implements all four tests (navigate, formFill, extract, multiStep) against `https://the-internet.herokuapp.com` — 3 runs each, median reported.
+Sequential and parallel Playwright benchmark scripts. Target: `https://the-internet.herokuapp.com`. See [`browser-benchmark-scripts.md`](browser-benchmark-scripts.md) for the full suite index.
 
-## Sequential benchmark
+## Sequential script
 
 ```javascript
 import { chromium } from 'playwright';
@@ -53,7 +56,7 @@ async function run() {
 run();
 ```
 
-## Parallel benchmark — multi-context, multi-browser, multi-page
+## Parallel script — multi-context, multi-browser, multi-page throughput
 
 ```javascript
 import { chromium } from 'playwright';

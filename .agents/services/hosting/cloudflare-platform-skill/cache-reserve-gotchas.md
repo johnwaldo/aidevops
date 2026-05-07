@@ -1,8 +1,11 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cache Reserve Gotchas
 
 ## Eligibility Requirements
 
-All must hold for an asset to enter Cache Reserve:
+An asset enters Cache Reserve only if all hold:
 
 - Paid Cache Reserve plan active
 - Tiered Cache enabled (strongly recommended)
@@ -15,13 +18,20 @@ All must hold for an asset to enter Cache Reserve:
 
 ## Assets Not Being Cached
 
-**Diagnostics:**
+Run these checks first:
 
-- Check `cf-cache-status` header: `curl -I https://example.com/asset.jpg`
-- Verify eligibility requirements above
+```bash
+# Check Cache Reserve status and asset eligibility
+curl -I https://example.com/asset.jpg | grep -i cache
+curl -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/cache/cache_reserve" \
+  -H "Authorization: Bearer $API_TOKEN" | jq
+```
+
+Common failures after checking eligibility above:
+- `cf-cache-status: MISS` — check TTL (must be ≥36000s), `Content-Length` header, and blocking headers
 - Review Cloudflare Trace output and Logpush `CacheReserveUsed` field
 
-**Fixes:**
+Typical fixes:
 
 ```typescript
 // Ensure minimum TTL (10+ hours)
@@ -44,13 +54,10 @@ response.headers.set('Vary', 'Accept-Encoding'); // Not *
 
 ## High Class A Operations Costs
 
-**Cause**: Frequent cache misses, short TTLs, or frequent revalidation.
+Frequent misses, short TTLs, and repeated revalidation increase Class A charges. For stable content, raise TTLs and use Tiered Cache to reduce direct Cache Reserve misses:
 
 ```typescript
-// Increase TTL for stable content
 response.headers.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=86400');
-
-// Enable Tiered Cache — reduces direct Cache Reserve misses
 ```
 
 ## Purge Behaviour
@@ -60,7 +67,7 @@ response.headers.set('Cache-Control', 'public, max-age=86400, stale-while-revali
 | By URL | Immediately removed | Immediately removed | Free |
 | By Tag | Revalidation triggered (NOT removed) | Immediately removed | Storage costs continue until TTL |
 
-Use purge by URL for immediate removal. For complete removal, disable + clear:
+Use purge by URL for immediate removal. Purge by tag triggers revalidation but does not remove stored content. For complete removal, disable Cache Reserve, then clear it:
 
 ```typescript
 await purgeByURL(['https://example.com/asset.jpg']);
@@ -72,7 +79,7 @@ await clearAllCacheReserve(zoneId, token);
 
 ## Clearing Cache Reserve
 
-**Error**: `"Cache Reserve must be OFF before clearing data"`
+Error: `"Cache Reserve must be OFF before clearing data"`
 
 ```typescript
 const clearProcess = async (zoneId: string, token: string) => {
@@ -92,22 +99,6 @@ const clearProcess = async (zoneId: string, token: string) => {
 };
 ```
 
-## Troubleshooting
-
-```bash
-# Check Cache Reserve status
-curl -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/cache/cache_reserve" \
-  -H "Authorization: Bearer $API_TOKEN" | jq
-
-# Check asset cache status
-curl -I https://example.com/asset.jpg | grep -i cache
-```
-
-**Header indicators:**
-
-- Eligible: `cf-cache-status: HIT`, `max-age >= 36000`, `content-length` present
-- Not eligible: fails any requirement in Eligibility Requirements above
-
 ## Limits
 
 | Setting | Value |
@@ -117,7 +108,7 @@ curl -I https://example.com/asset.jpg | grep -i cache
 | Max file size | Same as R2 limits |
 | Purge/clear time | Up to 24 hours |
 
-**API endpoints:**
+API endpoints:
 
 | Action | Method + Path |
 |--------|--------------|
@@ -137,5 +128,5 @@ curl -I https://example.com/asset.jpg | grep -i cache
 - [R2 docs](https://developers.cloudflare.com/r2/)
 - [Smart Shield](https://developers.cloudflare.com/smart-shield/)
 - [Tiered Cache](https://developers.cloudflare.com/cache/how-to/tiered-cache/)
-- [README](./README.md) — overview and core concepts
-- [Patterns](./patterns.md) — best practices and optimization
+- [Cache Reserve overview](./cache-reserve.md) — overview and core concepts
+- [Cache Reserve patterns](./cache-reserve-patterns.md) — best practices and optimization

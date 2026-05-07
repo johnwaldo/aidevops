@@ -1,43 +1,38 @@
 ---
 name: get-audio-duration
 mode: subagent
-description: Getting the duration of an audio file in seconds with Mediabunny
-metadata:
-  tags: duration, audio, length, time, seconds, mp3, wav
+description: Get audio file duration in seconds using Mediabunny's Input.computeDuration()
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Getting audio duration with Mediabunny
 
-Mediabunny can extract the duration of an audio file. It works in browser, Node.js, and Bun environments.
+`Input.computeDuration()` returns audio length in seconds. Works in browser, Node.js, and Bun.
 
-## Getting audio duration
+## URLs and `staticFile()`
 
 ```tsx
 import { Input, ALL_FORMATS, UrlSource } from "mediabunny";
+import { staticFile } from "remotion";
 
 export const getAudioDuration = async (src: string) => {
   const input = new Input({
     formats: ALL_FORMATS,
-    source: new UrlSource(src, {
-      getRetryDelay: () => null,
-    }),
+    source: new UrlSource(src, { getRetryDelay: () => null }),
   });
-
-  const durationInSeconds = await input.computeDuration();
-  return durationInSeconds;
+  return input.computeDuration();
 };
+
+// Remote URL or Remotion staticFile()
+const remoteDuration = await getAudioDuration("https://remotion.media/audio.mp3");
+const staticDuration = await getAudioDuration(staticFile("audio.mp3"));
 ```
 
-## Usage
+## Local files (`FileSource`)
 
-```tsx
-const duration = await getAudioDuration("https://remotion.media/audio.mp3");
-console.log(duration); // e.g. 180.5 (seconds)
-```
-
-## Using with local files
-
-For local files, use `FileSource` instead of `UrlSource`:
+Browser uploads or drag-and-drop:
 
 ```tsx
 import { Input, ALL_FORMATS, FileSource } from "mediabunny";
@@ -46,14 +41,5 @@ const input = new Input({
   formats: ALL_FORMATS,
   source: new FileSource(file), // File object from input or drag-drop
 });
-
 const durationInSeconds = await input.computeDuration();
-```
-
-## Using with staticFile in Remotion
-
-```tsx
-import { staticFile } from "remotion";
-
-const duration = await getAudioDuration(staticFile("audio.mp3"));
 ```

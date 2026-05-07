@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # sandbox-exec-helper.sh — Lightweight execution sandbox for tool/command isolation
 # Commands: run | audit | config | help
 #
@@ -116,8 +118,13 @@ _sandbox_secret_block_reason() {
 		return 0
 	fi
 
-	if [[ "$normalized" =~ (^|[[:space:];|&])cat[[:space:]]+([^[:space:]]*/)?(\.env([^[:space:]]*)?|credentials\.sh|[^[:space:]]*secret[^[:space:]]*)($|[[:space:];|&]) ]]; then
+	if [[ "$normalized" =~ (^|[[:space:];|&])(cat|less|more|tail|head|sed|awk)[[:space:]].*(^|[[:space:]/])((id_(rsa|dsa|ecdsa|ed25519))|\.env([^[:space:]]*)?|credentials\.(sh|json|ya?ml)|[^[:space:]]*secret[^[:space:]]*|[^[:space:]]*password[^[:space:]]*|[^[:space:]]*passwd[^[:space:]]*|[^[:space:]]*\.(pem|key|p12|pfx|kdbx|age|asc|gpg))($|[[:space:];|&]) ]]; then
 		echo "file read command targeting likely secret material"
+		return 0
+	fi
+
+	if [[ "$normalized" =~ (^|[[:space:];|&])(cat|less|more|tail|head|sed|awk)[[:space:]].*(^|[[:space:]/])(\.ssh|\.gnupg|\.aws|\.azure|\.kube|password-store|1password|op-vault)(/|[[:space:];|&]) ]] && [[ ! "$normalized" =~ \.pub($|[[:space:];|&]) ]]; then
+		echo "file read command targeting credential-store path"
 		return 0
 	fi
 
@@ -421,7 +428,23 @@ _sandbox_pgkill_cleanup() {
 	# after we've already cleaned up the child.
 	if [[ -n "$cleanup_watchdog_pid" ]]; then
 		kill "$cleanup_watchdog_pid" 2>/dev/null || true
+		local cleanup_wait_start cleanup_wait_elapsed
+		cleanup_wait_start=$(date +%s)
+		while kill -0 "$cleanup_watchdog_pid" 2>/dev/null; do
+			cleanup_wait_elapsed=$(( $(date +%s) - cleanup_wait_start ))
+			if [[ "$cleanup_wait_elapsed" -ge 5 ]]; then
+				kill -9 "$cleanup_watchdog_pid" 2>/dev/null || true
+				break
+			fi
+			sleep 1
+		done
 		wait "$cleanup_watchdog_pid" 2>/dev/null || true
+	fi
+
+	local cleanup_self_pgid=""
+	cleanup_self_pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]')" || true
+	if [[ -n "$cleanup_child_pgid" && -n "$cleanup_self_pgid" && "$cleanup_child_pgid" == "$cleanup_self_pgid" ]]; then
+		cleanup_child_pgid=""
 	fi
 
 	if [[ -n "$cleanup_child_pgid" ]]; then
@@ -457,8 +480,20 @@ _sandbox_spawn_child() {
 	# its descendants share a PGID distinct from the wrapper's PGID.
 	# stdout/stderr are redirected here so the redirection applies to the
 	# backgrounded child process, not to the polling loop.
+	#
+	# --stream-stdout mode (GH#15180 bug #4): when stream_stdout=true (set
+	# by sandbox_run via dynamic scoping), stdout is NOT redirected to the
+	# capture file. Instead it flows to the caller's stdout (e.g., through
+	# a pipe to tee in headless-runtime-helper.sh) so external watchdogs
+	# can monitor activity in real-time. Stderr is still captured. The
+	# capture file remains empty; _sandbox_emit_redacted_output handles
+	# this gracefully (returns early on empty/missing files).
 	if command -v setsid &>/dev/null; then
-		setsid "$@" >"$sc_stdout_file" 2>"$sc_stderr_file" &
+		if [[ "${stream_stdout:-false}" == "true" ]]; then
+			setsid "$@" 2>"$sc_stderr_file" &
+		else
+			setsid "$@" >"$sc_stdout_file" 2>"$sc_stderr_file" &
+		fi
 		child_pid=$!
 		# Retrieve the process group ID of the child.
 		# On Linux: ps -o pgid= returns the PGID. On macOS: same flag works.
@@ -469,7 +504,11 @@ _sandbox_spawn_child() {
 			child_pgid=""
 		fi
 	else
-		"$@" >"$sc_stdout_file" 2>"$sc_stderr_file" &
+		if [[ "${stream_stdout:-false}" == "true" ]]; then
+			"$@" 2>"$sc_stderr_file" &
+		else
+			"$@" >"$sc_stdout_file" 2>"$sc_stderr_file" &
+		fi
 		child_pid=$!
 		# setsid not available — child shares the script's process group.
 		# Do NOT read the PGID here: ps would return the script's own PGID,
@@ -496,8 +535,13 @@ _sandbox_poll_child() {
 	local poll_timeout="$1"
 	local poll_child_pid="$2"
 	local half_secs_remaining=$((poll_timeout * 2))
+	local poll_state=""
 
 	while kill -0 "$poll_child_pid" 2>/dev/null; do
+		poll_state="$(ps -o stat= -p "$poll_child_pid" 2>/dev/null | tr -d '[:space:]')" || true
+		if [[ "$poll_state" == *Z* ]]; then
+			return 0
+		fi
 		if ((half_secs_remaining <= 0)); then
 			return 124
 		fi
@@ -586,6 +630,17 @@ _sandbox_exec_with_pgkill() {
 		log_sandbox "WARN" "Secondary watchdog marker detected for PID ${child_pid} — overriding exit code to 124"
 		t_exit_code=124
 		rm -f "$t_watchdog_marker" 2>/dev/null || true
+	fi
+
+	# Emit captured stderr to our stderr so callers (headless-runtime-helper)
+	# can see errors from the child process. Always emit for headless workers
+	# (opencode exits 0 even on silent failures). Truncate to 8KB.
+	if [[ -s "$t_stderr_file" ]]; then
+		local _stderr_size
+		_stderr_size=$(wc -c <"$t_stderr_file" | tr -d ' ')
+		log_sandbox "INFO" "Child exited $t_exit_code — captured stderr (${_stderr_size}B):"
+		head -c 8192 "$t_stderr_file" >&2
+		echo >&2
 	fi
 
 	# Explicitly clean up any remaining descendants in the process group.
@@ -918,8 +973,12 @@ _sandbox_run_post_exec() {
 		log_sandbox "WARN" "Command timed out after ${timeout_secs}s"
 	fi
 
-	# Output results with redaction and taint-aware handling
-	_sandbox_emit_redacted_output "$stdout_file" "stdout" "$command_tainted"
+	# Output results with redaction and taint-aware handling.
+	# In --stream-stdout mode, stdout was already sent to the caller in
+	# real-time (not captured to file), so skip its emission here.
+	if [[ "${stream_stdout:-false}" != "true" ]]; then
+		_sandbox_emit_redacted_output "$stdout_file" "stdout" "$command_tainted"
+	fi
 	_sandbox_emit_redacted_output "$stderr_file" "stderr" "$command_tainted"
 
 	# Audit log
@@ -996,18 +1055,12 @@ _sandbox_run_pre_exec() {
 	return 0
 }
 
-sandbox_run() {
-	local timeout_secs="$SANDBOX_DEFAULT_TIMEOUT"
-	local block_network=false
-	local network_tiering=false
-	local allow_secret_io=false
-	local worker_id="sandbox-$$"
-	local extra_passthrough=""
-	local secret_io_guard="${AIDEVOPS_BLOCK_SECRET_IO:-$SECRET_IO_GUARD_DEFAULT}"
-	# cmd_args is an array — preserves spaces, avoids bash -c eval risks
-	local -a cmd_args=()
-
-	# Parse flags; remaining positional args become the sandboxed command
+# Parse sandbox_run flags into caller-scoped variables (bash dynamic scoping).
+# Caller must declare all target variables as local before calling this function:
+#   timeout_secs, block_network, network_tiering, allow_secret_io,
+#   worker_id, extra_passthrough, stream_stdout, cmd_args (array).
+# Returns 0 on success, 1 if no command was provided after flag parsing.
+_sandbox_run_parse_args() {
 	while [[ $# -gt 0 ]]; do
 		case $1 in
 		--timeout)
@@ -1038,17 +1091,42 @@ sandbox_run() {
 			extra_passthrough="$2"
 			shift 2
 			;;
+		--stream-stdout)
+			stream_stdout=true
+			shift
+			;;
 		--)
 			shift
 			cmd_args=("$@")
-			break
+			return 0
 			;;
 		*)
 			cmd_args=("$@")
-			break
+			return 0
 			;;
 		esac
 	done
+	return 0
+}
+
+sandbox_run() {
+	local timeout_secs="$SANDBOX_DEFAULT_TIMEOUT"
+	local block_network=false
+	local network_tiering=false
+	local allow_secret_io=false
+	local worker_id="sandbox-$$"
+	local extra_passthrough=""
+	local secret_io_guard="${AIDEVOPS_BLOCK_SECRET_IO:-$SECRET_IO_GUARD_DEFAULT}"
+	# Stream stdout mode (GH#15180 bug #4): when true, child stdout flows to
+	# the caller's stdout in real-time instead of being captured to a file and
+	# replayed after exit. This allows external watchdogs (e.g., the headless
+	# activity watchdog) to monitor output as it's produced. Stderr is still
+	# captured. Post-exec stdout emission is skipped (already streamed).
+	local stream_stdout=false
+	# cmd_args is an array — preserves spaces, avoids bash -c eval risks
+	local -a cmd_args=()
+
+	_sandbox_run_parse_args "$@"
 
 	if [[ ${#cmd_args[@]} -eq 0 ]]; then
 		log_sandbox "ERROR" "No command provided"

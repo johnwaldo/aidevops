@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Plugin System
 
 Third-party agent plugins extend aidevops with additional capabilities. Plugins are git repositories that deploy agents into namespaced directories, isolated from core agents.
@@ -138,6 +141,12 @@ plugin-loader-helper.sh status     # Show plugin system status
 ```
 
 Loading priority: (1) `plugin.json` `agents` array if present; (2) scan directory for `.md` files with YAML frontmatter.
+
+The shared `subagent-index.toon` discovery file is regenerated after plugin add,
+update, enable, and disable actions. `subagent-index-helper.sh generate` preserves
+the core `subagents` TOON block and appends `plugin-loader-helper.sh index` output
+as a lightweight `plugin_agents` block, so runtimes can discover plugin namespaces
+from one startup index without reading every plugin file.
 
 ## Lifecycle Hooks
 

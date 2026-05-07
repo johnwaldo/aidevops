@@ -1,70 +1,63 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # D1 Gotchas & Troubleshooting
 
-## SQL Injection Prevention (CRITICAL)
+## Critical: Bind Parameters, Never Interpolate
 
 ```typescript
-// ❌ NEVER: String interpolation - SQL injection vulnerability
-await env.DB.prepare(`SELECT * FROM users WHERE id = ${userId}`).all(); // DANGEROUS!
+// ❌ NEVER: SQL injection via string interpolation
+await env.DB.prepare(`SELECT * FROM users WHERE id = ${userId}`).all();
 
 // ✅ ALWAYS: Prepared statements with bind()
 await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).all();
 ```
 
-Attacker could pass `1 OR 1=1` to dump table or `1; DROP TABLE users;--` to delete data.
+Interpolated SQL lets attackers pass `1 OR 1=1` to dump a table or `1; DROP TABLE users;--` to delete data.
 
-## Common Errors
+## Query Performance
 
-**Missing Table:** "no such table" → Run migrations first  
-**Unique Constraint:** "UNIQUE constraint failed" → Catch and return 409  
-**Query Timeout:** 30s exceeded → Break into smaller queries or add indexes
-
-## N+1 Query Problem
+**N+1 queries** — use JOIN or `batch()` instead of per-row fetches:
 
 ```typescript
-// ❌ BAD: N+1 queries (multiple round trips)
+// ❌ N+1: one query per post
 for (const post of posts.results) {
   const author = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(post.user_id).first();
 }
 
-// ✅ GOOD: Single JOIN or batch()
-const postsWithAuthors = await env.DB.prepare(`
-  SELECT posts.*, users.name FROM posts JOIN users ON posts.user_id = users.id
-`).all();
+// ✅ Single JOIN
+const postsWithAuthors = await env.DB.prepare(
+  'SELECT posts.*, users.name FROM posts JOIN users ON posts.user_id = users.id'
+).all();
 ```
 
-## Missing Indexes
+**Missing indexes** — check with `EXPLAIN QUERY PLAN`, add if not using index:
 
 ```sql
-EXPLAIN QUERY PLAN SELECT * FROM users WHERE email = ?;  -- Check for "USING INDEX"
-CREATE INDEX idx_users_email ON users(email);  -- Add if missing
+EXPLAIN QUERY PLAN SELECT * FROM users WHERE email = ?;  -- look for "USING INDEX"
+CREATE INDEX idx_users_email ON users(email);
 ```
 
-## Limits to Watch
+Monitor via `meta.duration`. Split long transactions into smaller queries.
+
+## Common Errors
+
+- **`no such table`** — run migrations first.
+- **`UNIQUE constraint failed`** — catch and return `409`.
+- **Query timeout (`30s`)** — add indexes or split the query.
+- **Local state** — local D1 uses `.wrangler/state/v3/d1/<database-id>.sqlite`; test migrations locally before applying remotely.
+
+## Limits That Change Design
 
 | Limit | Value | Impact |
 |-------|-------|--------|
-| Database size | 10 GB | Design for multiple DBs per tenant |
+| Database size | 10 GB | Horizontal partitioning: multiple small DBs per tenant |
 | Row size | 1 MB | Store large files in R2, not D1 |
 | Query timeout | 30s | Break long queries into smaller chunks |
 | Batch size | 10,000 statements | Split large batches |
 
-## Local vs Remote
+## Data Type Gotchas
 
-Local uses `.wrangler/state/v3/d1/<database-id>.sqlite`. Always test migrations locally before remote.
+- **Boolean:** SQLite uses `INTEGER` (`0`/`1`). Bind `1` or `0`, not `true`/`false`.
+- **Date/time:** Use `TEXT` (ISO 8601) or `INTEGER` (Unix timestamp) — no native `DATE`/`TIME`.
 
-## Data Types
-
-**Boolean:** SQLite uses INTEGER (0/1) not boolean - bind 1 or 0, not true/false  
-**Date/Time:** Use TEXT (ISO 8601) or INTEGER (unix timestamp), not native DATE/TIME
-
-## Best Practices
-
-- ✅ Use prepared statements with bind() - ALWAYS
-- ✅ Create indexes on frequently queried columns
-- ✅ Use batch() for multiple queries (reduces latency)
-- ✅ Design for horizontal scaling (multiple small DBs vs single large DB)
-- ✅ Test migrations locally before applying remotely
-- ✅ Monitor query performance via meta.duration
-- ❌ Don't store binary data directly (use R2 for blobs)
-- ❌ Don't use single large database (scale horizontally instead)
-- ❌ Don't run long transactions (30s timeout)

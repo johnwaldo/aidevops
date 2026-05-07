@@ -1,49 +1,27 @@
 ---
 mode: subagent
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 # Conversation Starter Prompts
 
-Shared prompts for Build+ agent to ensure consistent UX.
+Shared prompts for consistent Build+ session opening.
 
 ## Inside Git Repository
 
-**First**: Check git context and auto-recall recent lessons:
+On session start: check `git branch --show-current`. Run `memory-helper.sh recall --recent --limit 5` — if results, summarize actionable lessons only (no raw dump).
 
-```bash
-BRANCH=$(git branch --show-current)
-if [[ "$BRANCH" == "main" ]]; then
-    echo "Currently on main branch - will suggest work branch for coding tasks"
-fi
-
-# Auto-recall recent lessons from memory (silent if no results)
-# This runs automatically at session start to surface relevant context
-RECENT_MEMORIES=$(~/.aidevops/agents/scripts/memory-helper.sh recall --recent --limit 5 2>/dev/null || echo "")
-if [[ -n "$RECENT_MEMORIES" ]]; then
-    echo "## Recent Learnings"
-    echo "$RECENT_MEMORIES"
-    echo ""
-fi
-```
-
-**Auto-recall behavior**: The memory system automatically surfaces recent lessons
-at session start. If results are returned, briefly note any relevant lessons
-(e.g., "Recent lesson: always read domain subagents before content generation tasks").
-Do not dump raw memory output — summarize actionable items only.
-
-If on `main` branch, include this note in the prompt:
-
-> **Note**: You're on the `main` branch. For file changes, I'll check for existing branches and offer options before proceeding.
-
-What are you working on?
-
-**Planning & Analysis** (Build+ deliberation mode):
+> What are you working on?
 >
+> **Note** *(on `main` branch)*: For file changes, I'll check for existing branches before proceeding.
+>
+> **Planning & Analysis** (Build+ deliberation mode)
 > 1. Architecture Analysis
 > 2. Code Review (`workflows/code-audit-remote.md`)
 > 3. Documentation Review
 >
-> **Implementation** (Build+):
->
+> **Implementation** (Build+)
 > 1. Feature Development (`workflows/feature-development.md`, `workflows/branch/feature.md`)
 > 2. Bug Fixing (`workflows/bug-fixing.md`, `workflows/branch/bugfix.md`)
 > 3. Hotfix (`workflows/branch/hotfix.md`)
@@ -55,29 +33,22 @@ What are you working on?
 > 9. Work on Issue (paste GitHub/GitLab/Gitea issue URL)
 > 10. Something else (describe)
 
-**For implementation tasks (1-4, 9-10)**: Read `workflows/git-workflow.md` first for branch creation, issue URL handling, and fork detection.
-
-After selection, read the relevant workflow subagent to add context.
+For implementation tasks (1-4, 9-10): read `workflows/git-workflow.md` first (branch creation, issue URL handling, fork detection), then the relevant workflow subagent.
 
 ## Outside Git Repository
 
 > Where are you working?
 >
 > 1. Local project (provide path)
-> 2. Remote services
+> 2. Remote services — which service?
+>    1. 101domains (`services/hosting/101domains.md`)
+>    2. Closte (`services/hosting/closte.md`)
+>    3. Cloudflare (`services/hosting/cloudflare.md`)
+>    4. Cloudron (`services/hosting/cloudron.md`)
+>    5. Hetzner (`services/hosting/hetzner.md`)
+>    6. Hostinger (`services/hosting/hostinger.md`)
+>    7. QuickFile (`services/accounting/quickfile.md`)
+>    8. SES (`services/email/ses.md`)
+>    9. Spaceship (`services/hosting/spaceship.md`)
 
-If "Remote services", show available services:
-
-> Which service do you need?
->
-> 1. 101domains (`services/hosting/101domains.md`)
-> 2. Closte (`services/hosting/closte.md`)
-> 3. Cloudflare (`services/hosting/cloudflare.md`)
-> 4. Cloudron (`services/hosting/cloudron.md`)
-> 5. Hetzner (`services/hosting/hetzner.md`)
-> 6. Hostinger (`services/hosting/hostinger.md`)
-> 7. QuickFile (`services/accounting/quickfile.md`)
-> 8. SES (`services/email/ses.md`)
-> 9. Spaceship (`services/hosting/spaceship.md`)
-
-After selection, read the relevant service subagent to add context.
+After selection, read the relevant service subagent.

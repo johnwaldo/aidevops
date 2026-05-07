@@ -1,4 +1,9 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Patterns & Use Cases
+
+Patterns: [Chat](#chat) · [AI with Tools](#ai-with-tools) · [Streaming](#streaming) · [Cron / Scheduled](#cron--scheduled) · [Email with AI](#email-with-ai) · [Game](#game)
 
 ## Chat
 
@@ -20,7 +25,7 @@ export class ChatAgent extends Agent<Env, ChatState> {
 }
 ```
 
-## AI w/Tools
+## AI with Tools
 
 ```ts
 import {tool} from "ai"; import {z} from "zod";
@@ -48,7 +53,7 @@ export class StreamingAgent extends Agent<Env> {
 }
 ```
 
-## Cron/Scheduled
+## Cron / Scheduled
 
 ```ts
 export class TaskAgent extends Agent<Env> {
@@ -58,7 +63,7 @@ export class TaskAgent extends Agent<Env> {
 }
 ```
 
-## Email+AI
+## Email with AI
 
 ```ts
 export class EmailAgent extends Agent<Env> {

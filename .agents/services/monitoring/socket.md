@@ -10,9 +10,15 @@ tools:
   grep: false
   webfetch: true
   task: false
+  socket_*: true
+  # TODO(permission-migration): Replace with permission: socket: allow
+  # once anomalyco/opencode#6892 is resolved.
 mcp:
   - socket
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Socket MCP
 
@@ -24,63 +30,44 @@ mcp:
 - **MCP**: Remote at `https://mcp.socket.dev/`
 - **Auth**: API token from socket.dev
 - **Credentials**: `~/.config/aidevops/credentials.sh` → `SOCKET_YOURNAME`
-
-**When to use**:
-
-- Scanning dependencies for vulnerabilities
-- Detecting malware or typosquatting in packages
-- Auditing supply chain security
-- Checking package reputation before installing
+- **Use for**: Vulnerability scans, malware/typosquat checks, and package reputation review before install
 
 <!-- AI-CONTEXT-END -->
 
-## MCP Setup
+## Setup
 
-### 1. Create Socket Account
-
-1. Sign up at [socket.dev](https://socket.dev)
-2. Connect your GitHub account (optional, for repo scanning)
-
-### 2. Generate API Token
-
-1. Go to Settings → API Tokens
-2. Click "Create Token"
-3. Select permissions (Full Access recommended for MCP)
-4. Save token:
+1. Sign up at [socket.dev](https://socket.dev). GitHub connection is optional for repo scans.
+2. Create an API token in Settings → API Tokens. Grant Full Access if available.
+3. Save the token:
 
 ```bash
 echo 'export SOCKET_YOURNAME="sktsec_..."' >> ~/.config/aidevops/credentials.sh
 chmod 600 ~/.config/aidevops/credentials.sh
 ```
 
-### 3. Configure OpenCode MCP
-
-The Socket MCP uses the remote endpoint. Update your config:
+4. Configure OpenCode MCP. Socket uses the remote endpoint:
 
 ```bash
 jq '.mcp.socket = {"type": "remote", "url": "https://mcp.socket.dev/", "enabled": false}' \
   ~/.config/opencode/opencode.json > /tmp/oc.json && mv /tmp/oc.json ~/.config/opencode/opencode.json
 ```
 
-**Note**: The remote MCP may use OAuth. If it doesn't work with API token, you may need to authenticate via browser when first using it.
-
-### 4. Test Connection
+5. If API-token auth fails, complete the browser OAuth flow on first use.
+6. Test the token:
 
 ```bash
 source ~/.config/aidevops/credentials.sh
 curl -s -H "Authorization: Bearer $SOCKET_YOURNAME" "https://api.socket.dev/v0/organizations" | jq '.organizations'
 ```
 
-## Available MCP Tools
+## MCP Tools
 
-| Tool | Description |
-|------|-------------|
-| `scan_package` | Scan a specific package for issues |
-| `scan_repo` | Scan a repository's dependencies |
-| `get_package_info` | Get security info for a package |
-| `list_issues` | List known issues in dependencies |
+- `scan_package` — scan a package for issues
+- `scan_repo` — scan repository dependencies
+- `get_package_info` — fetch package security data
+- `list_issues` — list known dependency issues
 
-## Usage Examples
+## Example prompts
 
 ```text
 @socket scan my package.json for vulnerabilities
@@ -89,9 +76,9 @@ curl -s -H "Authorization: Bearer $SOCKET_YOURNAME" "https://api.socket.dev/v0/o
 @socket is this package safe to install: some-new-package
 ```
 
-## CLI Alternative
+## CLI fallback
 
-You can also use the Socket CLI directly:
+Use the Socket CLI when MCP is unavailable:
 
 ```bash
 # Install
@@ -108,17 +95,18 @@ socket npm info lodash
 
 ### "Unauthorized" error
 
-1. Verify token: `source ~/.config/aidevops/credentials.sh && echo $SOCKET_YOURNAME`
-2. Check token has correct permissions in socket.dev dashboard
-3. Token format should start with `sktsec_`
+- Verify the token is set: `source ~/.config/aidevops/credentials.sh && echo $SOCKET_YOURNAME`
+- Check token permissions in the socket.dev dashboard
+- Confirm the token starts with `sktsec_`
 
 ### MCP not connecting
 
-The remote MCP at `mcp.socket.dev` may require OAuth authentication via browser rather than API token. Try using the MCP - it should prompt for auth if needed.
+- `mcp.socket.dev` may require browser OAuth instead of API-token auth
+- Start the MCP and complete the prompt if shown
 
 ### Rate limits
 
-Free tier has API rate limits. Upgrade to paid plan for higher limits.
+- Free tier requests are rate-limited; upgrade if scans are throttled
 
 ## Related
 

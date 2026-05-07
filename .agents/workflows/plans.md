@@ -12,6 +12,9 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Plans Workflow
 
 ## Quick Reference
@@ -58,21 +61,26 @@ Analyze conversation for complexity signals when `/save-todo` is invoked:
 
 ## Auto-Dispatch Tagging
 
-Add `#auto-dispatch` only when ALL inclusion criteria pass and NO exclusion criteria apply:
+Worker-ready implementation tasks created by interactive agents (user-facing sessions) or workers default to `#auto-dispatch`; readiness is the gate. Add the tag when ALL Include column criteria pass and NO exclusion criteria apply. If readiness is missing, finish the brief/body first or mark the item `#parent`/blocked instead of saving a non-dispatchable implementation issue:
 
 | Include (ALL required) | Exclude (ANY blocks) |
 |------------------------|----------------------|
-| Clear fix/feature with specific files or patterns | Requires credentials, accounts, or purchases |
-| Bounded scope (~1h or less) | Is a `#plan` needing decomposition first |
-| No design decisions requiring user preference | Requires hardware or external service setup |
+| Clear fix/feature with specific files or patterns | Requires credentials, accounts, or purchases (`needs-credentials` label) |
+| Bounded scope (~1h or less) | Is a `#plan`/`#parent` needing decomposition first |
+| No design decisions requiring human preference/approval | Requires hardware or external service setup |
 | Verification is automatable (tests, ShellCheck, syntax, browser) | Description says "investigate"/"evaluate" without clear deliverable |
-| | Has `blocked-by:` dependencies on incomplete tasks |
+| 2+ acceptance criteria beyond generic tests/lint | Has `blocked-by:` dependencies on incomplete tasks |
+| | User explicitly prefers interactive/manual handling |
+
+Full canonical dispatch-blocker label set (labels + claim-states + validator-states): `reference/dispatch-blockers.md`.
 
 ## Saving Work
 
 ### MANDATORY: Task Brief Requirement
 
 Every task MUST have `todo/tasks/{task_id}-brief.md`. Use `templates/brief-template.md`. Captures: origin (session ID, date, author), what, why, how (with file refs), acceptance criteria, context. Detect runtime: `$OPENCODE_SESSION_ID`, `$CLAUDE_SESSION_ID`, or `{app}:unknown-{date}`.
+
+**Code scaffolding (t1901 — MANDATORY for code tasks):** The brief's How section must include code skeletons for each file in Files to Modify. Read the reference pattern file and draft the skeleton — new files get complete structure with imports, function signatures, and inline comments marking where logic goes; edits get the exact code block to insert with surrounding context. The implementing worker should copy and fill in, not invent structure from scratch. This is the single highest-leverage thing you can do to make a task succeed on first dispatch.
 
 ### Task Description Quality (GH#6419)
 
@@ -91,7 +99,22 @@ Extract from conversation: title, description, estimate (`~Xh (ai:Xh test:Xh rea
 
 Format elements (all optional except id and description): `@owner`, `#tag`, `~estimate`, `logged:YYYY-MM-DD`, `blocked-by:t001,t002`, `blocks:t003`.
 
-**Auto-dispatch gate**: Only add `#auto-dispatch` if the brief has at least 2 specific acceptance criteria, a non-empty How section with file references, and a clear What section.
+**Auto-dispatch gate**: Add `#auto-dispatch` for worker-ready implementation tasks once the brief has:
+
+- At least 2 specific acceptance criteria
+- A non-empty How section with file references
+- A clear What section
+- Automatable verification
+
+If any element is missing, complete the brief before saving. Omit `#auto-dispatch` for:
+
+- Blocker labels
+- Decomposition or human-decision work
+- Credentials, accounts, or purchases
+- Hardware or external service setup
+- Investigation/evaluation without a clear deliverable
+- Incomplete dependencies, including unresolved `blocked-by:` tasks
+- Explicit user preference for interactive/manual handling
 
 **Complex** — present: `This looks like complex work. Creating execution plan. Title: {title} | Estimate: ~{estimate} | Phases: {count} | Creating brief: todo/tasks/{task_id}-brief.md | 1. Confirm and create plan + brief  2. Simplify to TODO.md + brief  3. Add more context`
 

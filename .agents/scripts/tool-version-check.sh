@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # Tool Version Check
 # Checks versions of key tools and flags outdated ones
 #
@@ -16,7 +18,7 @@ source "${SCRIPT_DIR}/shared-constants.sh"
 
 set -euo pipefail
 
-readonly BOLD='\033[1m'
+[[ -z "${BOLD+x}" ]] && BOLD='\033[1m'
 
 # Parse arguments
 AUTO_UPDATE=false
@@ -64,13 +66,16 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# OPENCODE_PINNED_VERSION is set in shared-constants.sh (sourced above).
+# To unpin: change to "latest" in shared-constants.sh when the upstream fix ships.
+
 # Detect how OpenCode was installed — build the right upgrade command.
 # update_cmd is executed via `bash -c` so it must be a self-contained string.
 # Use `command -v` path directly: bun-installed binaries live under ~/.bun/bin/,
 # so the path itself contains "bun". This avoids `readlink -f` which is a GNU
 # extension not available on macOS by default.
 # shellcheck disable=SC2016  # Single quotes intentional: string is a bash -c payload, must not expand at assignment time
-_oc_upgrade_cmd='if r=$(command -v opencode 2>/dev/null); [[ "$r" == *bun* ]]; then bun install -g opencode-ai@latest; else npm install -g opencode-ai@latest; fi'
+_oc_upgrade_cmd='if r=$(command -v opencode 2>/dev/null); [[ "$r" == *bun* ]]; then bun install -g opencode-ai@'"${OPENCODE_PINNED_VERSION}"'; else npm install -g opencode-ai@'"${OPENCODE_PINNED_VERSION}"'; fi'
 
 # Platform-aware brew package upgrade command.
 # On macOS (or any system with brew), use brew upgrade.
@@ -107,7 +112,6 @@ NPM_TOOLS=(
 	"npm|OpenCode|opencode|--version|opencode-ai|${_oc_upgrade_cmd}"
 	"npm|Claude Code CLI|claude|--version|@anthropic-ai/claude-code|npm install -g @anthropic-ai/claude-code@latest"
 	"npm|Codex CLI|codex|--version|@openai/codex|npm install -g @openai/codex@latest"
-	"npm|Augment CLI|auggie|--version|@augmentcode/auggie@prerelease|npm install -g @augmentcode/auggie@prerelease"
 	"npm|Repomix|repomix|--version|repomix|npm install -g repomix@latest"
 	"npm|DSPyGround|dspyground|--version|dspyground|npm install -g dspyground@latest"
 	"npm|LocalWP MCP|mcp-local-wp|--version|@verygoodplugins/mcp-local-wp|npm install -g @verygoodplugins/mcp-local-wp@latest"
@@ -155,6 +159,7 @@ INSTALLED_COUNT=0
 NOT_INSTALLED_COUNT=0
 TIMEOUT_COUNT=0
 UNKNOWN_COUNT=0
+SUDO_SKIP_COUNT=0
 declare -a OUTDATED_PACKAGES=()
 declare -a JSON_RESULTS=()
 
@@ -520,7 +525,7 @@ _check_all_categories() {
 		if [[ ${#NPM_TOOLS[@]} -gt 0 ]]; then
 			check_category "NPM" "${NPM_TOOLS[@]}"
 		fi
-		if command -v brew &>/dev/null && [[ ${#BREW_TOOLS[@]} -gt 0 ]]; then
+		if [[ ${#BREW_TOOLS[@]} -gt 0 ]]; then
 			check_category "Homebrew" "${BREW_TOOLS[@]}"
 		fi
 		if command -v pip &>/dev/null && [[ ${#PIP_TOOLS[@]} -gt 0 ]]; then
@@ -586,31 +591,61 @@ _output_summary_and_updates() {
 		if [[ "$AUTO_UPDATE" == "true" ]]; then
 			echo -e "${BLUE}Updating outdated tools...${NC}"
 			echo ""
-			for update_cmd in "${OUTDATED_PACKAGES[@]}"; do
-				echo "  Running: $update_cmd"
-				# Run update command directly (not via eval for security)
-				# Commands are hardcoded in tool definitions, not user input
-				# Timeout prevents hangs on slow registries/network issues
-				# Use timeout_sec for macOS compatibility (no native timeout)
-				# NOTE: Do NOT pipe timeout_sec output to tail/head — on macOS the
-				# perl alarm fallback doesn't close the pipe's write end on SIGALRM,
-				# causing tail to block forever. Use a temp file instead.
-				local _update_log
-				if ! _update_log=$(mktemp "${TMPDIR:-/tmp}/tool-update.XXXXXX"); then
-					echo -e "  ${RED}✗ Failed to create temp log${NC}"
+		for update_cmd in "${OUTDATED_PACKAGES[@]}"; do
+			echo "  Running: $update_cmd"
+			# Sudo safety gate (GH#21734): commands routed through apt-get/dnf/yum
+			# require sudo. Probe for passwordless sudo first; if not available,
+			# skip and print the manual command instead of hanging on an
+			# interactive password prompt during unattended `aidevops update`.
+			if [[ "$update_cmd" == *" sudo "* ]]; then
+				if ! sudo -n true 2>/dev/null; then
+					local _manual_cmd
+					_manual_cmd=""
+					if command -v apt-get >/dev/null 2>&1; then
+						_manual_cmd=$(grep -oE 'sudo apt-get[^;]+' <<<"$update_cmd" | head -1)
+					elif command -v dnf >/dev/null 2>&1; then
+						_manual_cmd=$(grep -oE 'sudo dnf[^;]+' <<<"$update_cmd" | head -1)
+					elif command -v yum >/dev/null 2>&1; then
+						_manual_cmd=$(grep -oE 'sudo yum[^;]+' <<<"$update_cmd" | head -1)
+					fi
+					echo -e "  ${YELLOW}⊘ Skipped: requires sudo. Run manually:${NC}"
+					if [[ -n "$_manual_cmd" ]]; then
+						echo "    ${_manual_cmd}"
+					else
+						echo "    $update_cmd"
+					fi
+					((++SUDO_SKIP_COUNT))
+					echo ""
 					continue
 				fi
-				if timeout_sec 120 bash -c "$update_cmd" >"$_update_log" 2>&1; then
-					tail -2 "$_update_log"
-					echo -e "  ${GREEN}✓ Updated${NC}"
-				else
-					tail -2 "$_update_log"
-					echo -e "  ${RED}✗ Failed${NC}"
-				fi
-				rm -f "$_update_log"
-				echo ""
-			done
+			fi
+			# Run update command directly (not via eval for security)
+			# Commands are hardcoded in tool definitions, not user input
+			# Timeout prevents hangs on slow registries/network issues
+			# Use timeout_sec for macOS compatibility (no native timeout)
+			# NOTE: Do NOT pipe timeout_sec output to tail/head — on macOS the
+			# perl alarm fallback doesn't close the pipe's write end on SIGALRM,
+			# causing tail to block forever. Use a temp file instead.
+			local _update_log
+			if ! _update_log=$(mktemp "${TMPDIR:-/tmp}/tool-update.XXXXXX"); then
+				echo -e "  ${RED}✗ Failed to create temp log${NC}"
+				continue
+			fi
+			if timeout_sec 120 bash -c "$update_cmd" >"$_update_log" 2>&1; then
+				tail -2 "$_update_log"
+				echo -e "  ${GREEN}✓ Updated${NC}"
+			else
+				tail -2 "$_update_log"
+				echo -e "  ${RED}✗ Failed${NC}"
+			fi
+			rm -f "$_update_log"
+			echo ""
+		done
+		if [[ $SUDO_SKIP_COUNT -gt 0 ]]; then
+			echo -e "${GREEN}Updates complete (${SUDO_SKIP_COUNT} skipped — manual sudo required).${NC}"
+		else
 			echo -e "${GREEN}Updates complete. Re-run to verify.${NC}"
+		fi
 		else
 			echo "To update all outdated tools, run:"
 			echo "  tool-version-check.sh --update"

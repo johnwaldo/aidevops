@@ -6,84 +6,73 @@ metadata:
   tags: fonts, google-fonts, typography, text
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Using fonts in Remotion
 
 ## Google Fonts (`@remotion/google-fonts`)
 
-Type-safe, auto-blocks rendering until ready. Install:
+Use for fonts available on Google Fonts. Type-safe; blocks rendering until ready.
 
 ```bash
-npx remotion add @remotion/google-fonts  # npm
-bunx remotion add @remotion/google-fonts  # bun
-yarn remotion add @remotion/google-fonts  # yarn
-pnpm exec remotion add @remotion/google-fonts  # pnpm
+npx remotion add @remotion/google-fonts
+bunx remotion add @remotion/google-fonts
+yarn remotion add @remotion/google-fonts
+pnpm exec remotion add @remotion/google-fonts
 ```
-
-Basic usage — import per-font, destructure `fontFamily`:
 
 ```tsx
 import { loadFont } from "@remotion/google-fonts/Roboto";
 
-const { fontFamily } = loadFont("normal", {
+const { fontFamily, waitUntilDone } = loadFont("normal", {
   weights: ["400", "700"],
-  subsets: ["latin"],  // specify weights/subsets to reduce file size
+  subsets: ["latin"],
 });
+
+await waitUntilDone(); // Required before measuring text or DOM layout
 
 export const Title: React.FC<{ text: string }> = ({ text }) => (
   <h1 style={{ fontFamily, fontSize: 80, fontWeight: "bold" }}>{text}</h1>
 );
 ```
 
-Wait for font ready (e.g., before measuring text):
+*Tip: Specify only required weights/subsets to minimize bundle size.*
 
-```tsx
-const { fontFamily, waitUntilDone } = loadFont();
-await waitUntilDone();
-```
+## Local Fonts (`@remotion/fonts`)
 
-## Local fonts (`@remotion/fonts`)
-
-Install:
+Use for custom font files. Place in `public/` and load at module scope (not during render).
 
 ```bash
-npx remotion add @remotion/fonts  # npm
-bunx remotion add @remotion/fonts  # bun
-yarn remotion add @remotion/fonts  # yarn
-pnpm exec remotion add @remotion/fonts  # pnpm
+npx remotion add @remotion/fonts
+bunx remotion add @remotion/fonts
+yarn remotion add @remotion/fonts
+pnpm exec remotion add @remotion/fonts
 ```
-
-Place font files in `public/`. Load at module level (before component render):
 
 ```tsx
 import { loadFont } from "@remotion/fonts";
 import { staticFile } from "remotion";
 
-// Single weight
-await loadFont({
-  family: "MyFont",
-  url: staticFile("MyFont-Regular.woff2"),
-});
+// Single font
+await loadFont({ family: "MyFont", url: staticFile("MyFont-Regular.woff2") });
 
-// Multiple weights — same family name, parallel load
+// Multiple weights
 await Promise.all([
   loadFont({ family: "Inter", url: staticFile("Inter-Regular.woff2"), weight: "400" }),
   loadFont({ family: "Inter", url: staticFile("Inter-Bold.woff2"), weight: "700" }),
 ]);
-
-export const MyComposition = () => (
-  <div style={{ fontFamily: "MyFont" }}>Hello World</div>
-);
 ```
 
-`loadFont` options:
+### `loadFont()` Options
 
 ```tsx
 loadFont({
-  family: "MyFont",          // Required: CSS font-family name
-  url: staticFile("f.woff2"), // Required: font file URL
-  format: "woff2",           // Optional: auto-detected from extension
-  weight: "400",             // Optional: font weight
-  style: "normal",           // Optional: normal | italic
-  display: "block",          // Optional: font-display behavior
+  family: "MyFont",           // Required: CSS font-family name
+  url: staticFile("f.woff2"), // Required: Font file URL
+  format: "woff2",            // Optional: Inferred from extension
+  weight: "400",              // Optional
+  style: "normal",            // Optional: normal | italic
+  display: "block",           // Optional: font-display value
 });
 ```

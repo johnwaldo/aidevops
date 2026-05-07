@@ -11,7 +11,6 @@ subagents:
   - production-video
   - production-audio
   - production-characters
-  - heygen-skill
   - video-higgsfield
   - video-runway
   - video-wavespeed
@@ -41,13 +40,16 @@ subagents:
   - explore
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Content - Multi-Media Multi-Channel Production Pipeline
 
 <!-- AI-CONTEXT-START -->
 
 ## Role
 
-You are the Content agent. Domain: multi-media multi-channel content production (blog, video, social, newsletters, podcasts, short-form, AI video generation, video prompt engineering). Own it fully -- you are NOT a DevOps assistant in this role.
+Content agent. Domain: blog, video, social, newsletters, podcasts, short-form, AI video generation, video prompt engineering. Own it fully — NOT a DevOps assistant in this role.
 
 ## Quick Reference
 
@@ -110,12 +112,12 @@ All subagent paths relative to `content/`.
 
 | Subagent | Frameworks |
 |----------|-----------|
-| research.md | **11-Dimension Reddit Research** (sentiment, UX, competitors, pricing, use cases, support, performance, updates, power tips, red flags, decision summary), **30-Minute Expert Method** (Reddit -> NotebookLM -> insights), **Niche Viability** (Demand + Buying Intent + Low Competition) |
-| story.md | **7 Hook Formulas** (Bold Claim, Question, Story, Contrarian, Result, Problem-Agitate, Curiosity Gap; 6-12 words), **4-Part Script** (Hook / Storytelling / Soft Sell / Visual Cues) |
-| production-video.md | **Sora 2 Pro 6-Section Template** (header, shots, timestamps, dialogue, sound, specs), **Veo 3.1 Ingredients-to-Video** (upload face/product as ingredients, NOT frame-to-video), **Seed Bracketing** (test seeds 1000-1010, score, iterate; 15% -> 70%+ success) |
-| production-audio.md | **Voice Pipeline** -- CapCut cleanup FIRST, THEN ElevenLabs transformation (t204) |
-| production-characters.md | **Facial Engineering** -- exhaustive facial analysis for cross-output consistency |
-| optimization.md | **A/B Testing** (10 variants min, 250-sample rule, <2% kill, >3% scale), **Monetization** (affiliates -> info products $5-27 -> upsell ladder -> Q4 seasonality) |
+| research.md | **11-Dimension Reddit Research** + **30-Minute Expert Method** (Reddit → NotebookLM → insights); **Niche Viability** (Demand + Buying Intent + Low Competition) |
+| story.md | **7 Hook Formulas** (6-12 words) + **4-Part Script** (Hook / Storytelling / Soft Sell / Visual Cues) |
+| production-video.md | **Sora 2 Pro 6-Section Template**; **Veo 3.1 Ingredients-to-Video** (upload face/product, NOT frame-to-video); **Seed Bracketing** (seeds 1000-1010; 15% → 70%+ success) |
+| production-audio.md | **Voice Pipeline** — CapCut cleanup FIRST, THEN ElevenLabs transformation (t204) |
+| production-characters.md | **Facial Engineering** — exhaustive facial analysis for cross-output consistency |
+| optimization.md | **A/B Testing** (10 variants min, 250-sample rule, <2% kill, >3% scale); **Monetization** (affiliates → info products $5-27 → upsell ladder → Q4 seasonality) |
 
 **Note**: YouTube agents live in `.agents/content/distribution-youtube/` (migrated from `.agents/youtube/` in t199.8).
 
@@ -131,7 +133,7 @@ content-fanout-helper.sh plan ~/brief.md    # Generate fan-out plan
 content-fanout-helper.sh run <plan-file>    # Execute (also: channels, status, estimate)
 ```
 
-**Channels**: youtube, short-form, social-x, social-linkedin, social-reddit, blog, email, podcast. **Brief fields**: `topic`, `angle`, `audience`, `channels`, `tone`, `cta`, `notes`.
+**Brief fields**: `topic`, `angle`, `audience`, `channels`, `tone`, `cta`, `notes`.
 
 ## Supporting Tools
 
@@ -141,10 +143,9 @@ content-fanout-helper.sh run <plan-file>    # Execute (also: channels, status, e
 | Video | `content/video-higgsfield.md`, `tools/video/video-prompt-design.md`, t200 Veo Meta Framework |
 | Voice | `tools/voice/speech-to-speech.md`, `voice-helper.sh` |
 | SEO/Blog | `seo/`, `content/seo-writer.md`, `content/editor.md`, `content/meta-creator.md`, `content/internal-linker.md` |
-| Email | `marketing-sales.md` (FluentCRM), Social: `content/social-bird.md` (X), `social-linkedin.md`, `social-reddit.md` |
+| Social | `content/social-bird.md` (X), `content/social-linkedin.md`, `content/social-reddit.md` |
+| Email | `content/marketing-sales.md` (FluentCRM), `content/distribution-email.md` |
 | Analysis | `seo-content-analyzer.py analyze article.md --keyword "target keyword"` |
-
-**Legacy text tools** (for blog/article workflows): `guidelines.md`, `platform-personas.md`, `seo-writer.md`, `meta-creator.md`, `editor.md`, `internal-linker.md`, `context-templates.md`.
 
 ## Related Tasks
 

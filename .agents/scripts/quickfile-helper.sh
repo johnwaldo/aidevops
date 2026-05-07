@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 set -euo pipefail
 
 # QuickFile Integration Helper for AI DevOps Framework
@@ -490,7 +492,7 @@ cmd_status() {
 		echo "  credentials:    configured (${QF_CREDENTIALS})"
 		# Check file permissions
 		local perms
-		perms="$(stat -f '%Lp' "$QF_CREDENTIALS" 2>/dev/null || stat -c '%a' "$QF_CREDENTIALS" 2>/dev/null || echo "unknown")"
+		perms="$(_file_perms "$QF_CREDENTIALS")"
 		if [[ "$perms" == "600" ]]; then
 			echo "  permissions:    600 (correct)"
 		else

@@ -3,28 +3,22 @@ name: can-decode
 mode: subagent
 description: Check if a video can be decoded by the browser using Mediabunny
 metadata:
-  tags: decode, validation, video, audio, compatibility, browser
+  tags: decode, video, audio, mediabunny, canDecode, browser, compatibility
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Checking if a video can be decoded
 
-Use Mediabunny to check if a video can be decoded by the browser before attempting to play it.
+Use `canDecode()` from Mediabunny to check browser decode support before playback.
 
-## The `canDecode()` function
-
-This function can be copy-pasted into any project.
+## Shared helper
 
 ```tsx
-import { Input, ALL_FORMATS, UrlSource } from "mediabunny";
+import { Input, ALL_FORMATS } from "mediabunny";
 
-export const canDecode = async (src: string) => {
-  const input = new Input({
-    formats: ALL_FORMATS,
-    source: new UrlSource(src, {
-      getRetryDelay: () => null,
-    }),
-  });
-
+const checkTracks = async (input: Input): Promise<boolean> => {
   try {
     await input.getFormat();
   } catch {
@@ -32,45 +26,31 @@ export const canDecode = async (src: string) => {
   }
 
   const videoTrack = await input.getPrimaryVideoTrack();
-  if (videoTrack && !(await videoTrack.canDecode())) {
-    return false;
-  }
+  if (videoTrack && !(await videoTrack.canDecode())) return false;
 
   const audioTrack = await input.getPrimaryAudioTrack();
-  if (audioTrack && !(await audioTrack.canDecode())) {
-    return false;
-  }
+  if (audioTrack && !(await audioTrack.canDecode())) return false;
 
   return true;
 };
 ```
 
-## Usage
+## URL source
 
 ```tsx
-const src = "https://remotion.media/video.mp4";
-const isDecodable = await canDecode(src);
+import { UrlSource } from "mediabunny";
 
-if (isDecodable) {
-  console.log("Video can be decoded");
-} else {
-  console.log("Video cannot be decoded by this browser");
-}
+export const canDecode = (src: string) =>
+  checkTracks(new Input({ formats: ALL_FORMATS, source: new UrlSource(src, { getRetryDelay: () => null }) }));
+
+const isDecodable = await canDecode("https://remotion.media/video.mp4");
 ```
 
-## Using with Blob
-
-For file uploads or drag-and-drop, use `BlobSource`:
+## Blob source (file uploads / drag-and-drop)
 
 ```tsx
-import { Input, ALL_FORMATS, BlobSource } from "mediabunny";
+import { BlobSource } from "mediabunny";
 
-export const canDecodeBlob = async (blob: Blob) => {
-  const input = new Input({
-    formats: ALL_FORMATS,
-    source: new BlobSource(blob),
-  });
-
-  // Same validation logic as above
-};
+export const canDecodeBlob = (blob: Blob) =>
+  checkTracks(new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) }));
 ```

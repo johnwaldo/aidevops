@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # Tests for migrate_orphaned_supervisor() (GH#5147)
 # Verifies cleanup of orphaned supervisor-helper.sh and supervisor/ modules
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MIGRATIONS_SCRIPT="$REPO_DIR/setup-modules/migrations.sh"
+MIGRATIONS_SCRIPT="$REPO_DIR/.agents/scripts/setup/modules/migrations.sh"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -68,8 +70,6 @@ find_opencode_config() { return 1; }
 # shellcheck disable=SC2329
 create_backup_with_rotation() { return 0; }
 # shellcheck disable=SC2329
-should_overwrite_user_file() { return 0; }
-# shellcheck disable=SC2329
 resolve_mcp_binary_path() {
 	echo ""
 	return 1
@@ -83,7 +83,7 @@ sanitize_plugin_namespace() {
 }
 # Export stubs so sourced script can find them
 export -f print_info print_success print_warning _launchd_has_agent
-export -f find_opencode_config create_backup_with_rotation should_overwrite_user_file
+export -f find_opencode_config create_backup_with_rotation
 export -f resolve_mcp_binary_path update_mcp_paths_in_opencode sanitize_plugin_namespace
 
 # Source the migrations script to get the function
@@ -230,6 +230,69 @@ if command -v crontab &>/dev/null; then
 	fi
 else
 	pass "Cron test skipped (crontab not available)"
+fi
+
+# ============================================================================
+section "Test: cleanup_deprecated_paths works when should_overwrite_user_file is undefined"
+# ============================================================================
+
+omo_config="$HOME/.config/opencode/oh-my-opencode.json"
+opencode_config="$HOME/.config/opencode/opencode.json"
+mkdir -p "$HOME/.config/opencode"
+printf '{"legacy":true}\n' >"$omo_config"
+printf '{"plugin":["oh-my-opencode","other-plugin"]}\n' >"$opencode_config"
+
+# Point migration lookup at our temporary config file.
+# shellcheck disable=SC2329
+find_opencode_config() {
+	echo "$opencode_config"
+	return 0
+}
+export -f find_opencode_config
+
+# Avoid global side effects from cleanup paths unrelated to this regression test.
+# shellcheck disable=SC2329
+cleanup_osgrep() { return 0; }
+# shellcheck disable=SC2329
+cleanup_antigravity_plugin() { return 0; }
+export -f cleanup_osgrep cleanup_antigravity_plugin
+
+# Explicitly verify the legacy helper is not available.
+unset -f should_overwrite_user_file 2>/dev/null || true
+
+cleanup_output=$(cleanup_deprecated_paths 2>&1)
+cleanup_exit_code=$?
+
+if [[ $cleanup_exit_code -eq 0 ]]; then
+	pass "cleanup_deprecated_paths succeeds without should_overwrite_user_file"
+else
+	fail "cleanup_deprecated_paths should succeed without should_overwrite_user_file" "exit code: $cleanup_exit_code"
+fi
+
+if [[ "$cleanup_output" == *"should_overwrite_user_file: command not found"* ]]; then
+	fail "No command-not-found error when helper is undefined" "$cleanup_output"
+else
+	pass "No command-not-found error when helper is undefined"
+fi
+
+if [[ -f "$omo_config" ]]; then
+	pass "oh-my-opencode config preserved by default when helper is undefined"
+else
+	fail "oh-my-opencode config should be preserved by default"
+fi
+
+if command -v jq &>/dev/null; then
+	if jq -e '.plugin | index("oh-my-opencode")' "$opencode_config" >/dev/null 2>&1; then
+		pass "oh-my-opencode plugin entry preserved by default when helper is undefined"
+	else
+		fail "oh-my-opencode plugin entry should be preserved by default"
+	fi
+else
+	if grep -qF '"oh-my-opencode"' "$opencode_config"; then
+		pass "oh-my-opencode plugin entry preserved by default when helper is undefined"
+	else
+		fail "oh-my-opencode plugin entry should be preserved by default"
+	fi
 fi
 
 # ============================================================================

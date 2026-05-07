@@ -5,30 +5,38 @@ metadata:
   tags: authentication, api-key, headers, security
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # HeyGen Authentication
 
-All requests require an API key in the `X-Api-Key` header.
+All requests require an API key in the `X-Api-Key` header. Keep it server-side, load it from an environment variable, never expose it in client code.
+
+## Security Rules
+
+1. **Keep keys server-side** — route requests through a backend service
+2. **Use environment variables** — never hardcode keys in source
+3. **Rotate keys periodically** — replace old keys on a regular schedule
+4. **Monitor usage** — review the HeyGen dashboard for unusual activity
 
 ## Setup
 
-1. Log in at https://app.heygen.com → Settings > API → copy your key
-2. Store as environment variable:
+1. Log in at https://app.heygen.com → Settings > API and copy the key.
+2. Store as an environment variable:
 
 ```bash
 export HEYGEN_API_KEY="your-api-key-here"   # shell
 # or in .env: HEYGEN_API_KEY=your-api-key-here
 ```
 
-## Making Authenticated Requests
+## Request Pattern
 
-### curl
+Send `X-Api-Key` on every request (curl / TypeScript / Python):
 
 ```bash
 curl -X GET "https://api.heygen.com/v2/avatars" \
   -H "X-Api-Key: $HEYGEN_API_KEY"
 ```
-
-### TypeScript (fetch)
 
 ```typescript
 const response = await fetch("https://api.heygen.com/v2/avatars", {
@@ -36,8 +44,6 @@ const response = await fetch("https://api.heygen.com/v2/avatars", {
 });
 const { data } = await response.json();
 ```
-
-### Python
 
 ```python
 import os, requests
@@ -48,8 +54,6 @@ response = requests.get(
 )
 data = response.json()
 ```
-
-The pattern is identical for any HTTP client — set `X-Api-Key` header to your key.
 
 ## Reusable API Client
 
@@ -75,12 +79,13 @@ class HeyGenClient {
   }
 }
 
-// Usage
 const client = new HeyGenClient(process.env.HEYGEN_API_KEY!);
 const avatars = await client.get("/v2/avatars");
 ```
 
-## API Response Format
+## Response Shape
+
+`{ error: null, data: ... }` on success; `{ error: "Invalid API key", data: null }` on auth failure.
 
 ```typescript
 interface ApiResponse<T> {
@@ -89,9 +94,7 @@ interface ApiResponse<T> {
 }
 ```
 
-Example error: `{ "error": "Invalid API key", "data": null }`
-
-## Error Handling
+## Errors & Rate Limits
 
 | Status | Error | Cause |
 |--------|-------|-------|
@@ -99,9 +102,7 @@ Example error: `{ "error": "Invalid API key", "data": null }`
 | 403 | Forbidden | Insufficient permissions |
 | 429 | Rate limit exceeded | Too many requests — use exponential backoff |
 
-## Rate Limiting
-
-Standard limits per API key; video generation endpoints are stricter. Retry 429s with exponential backoff:
+Video generation endpoints have stricter rate limits. Retry 429 with exponential backoff:
 
 ```typescript
 async function requestWithRetry(fn: () => Promise<Response>, maxRetries = 3): Promise<Response> {
@@ -113,10 +114,3 @@ async function requestWithRetry(fn: () => Promise<Response>, maxRetries = 3): Pr
   throw new Error("Max retries exceeded");
 }
 ```
-
-## Security Best Practices
-
-1. **Never expose API keys in client-side code** — always call from a backend server
-2. **Use environment variables** — never hardcode keys in source code
-3. **Rotate keys periodically** — generate new keys on a regular schedule
-4. **Monitor usage** — check your HeyGen dashboard for unusual activity

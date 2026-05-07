@@ -1,33 +1,23 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Miniflare
 
-Local simulator for Cloudflare Workers development/testing. Runs Workers in workerd sandbox implementing runtime APIs - no internet required.
+Local simulator for Cloudflare Workers. Runs Workers in workerd sandbox with full runtime API support — no internet required.
 
-## Features
-
-- Full-featured: KV, Durable Objects, R2, D1, WebSockets, Queues
-- Fully-local: test without internet, instant reload
-- TypeScript-native: detailed logging, source maps
-- Advanced testing: dispatch events without HTTP, simulate Worker connections
+> **Most users should use Wrangler (`wrangler dev`).** Use Miniflare for advanced testing requiring programmatic control.
 
 ## When to Use
 
-- Integration tests for Workers
-- Advanced use cases requiring fine-grained control
-- Testing bindings/storage locally
+- Integration tests for Workers with bindings (KV, DO, R2, D1, Queues, WebSockets)
+- Fine-grained test control: dispatch events without HTTP, simulate Worker connections
 - Multiple Workers with service bindings
-
-**Note:** Most users should use Wrangler. Miniflare for advanced testing.
 
 ## Setup
 
 ```bash
 npm i -D miniflare
-```
-
-Requires ES modules in `package.json`:
-
-```json
-{"type": "module"}
+# Requires "type": "module" in package.json
 ```
 
 ## Quick Start
@@ -51,13 +41,10 @@ console.log(await res.text()); // Hello Miniflare!
 await mf.dispose();
 ```
 
-## See Also
+## References
 
-- [patterns.md](./patterns.md) - Testing patterns, CI, mocking
-- [gotchas.md](./gotchas.md) - Compatibility issues, limits, debugging
-
-## Resources
-
+- [patterns.md](./patterns.md) — Testing patterns, CI, mocking
+- [gotchas.md](./gotchas.md) — Compatibility issues, limits, debugging
 - [Miniflare Docs](https://developers.cloudflare.com/workers/testing/miniflare/)
 - [Miniflare GitHub](https://github.com/cloudflare/workers-sdk/tree/main/packages/miniflare)
 - [Vitest Integration](https://developers.cloudflare.com/workers/testing/vitest-integration/) (recommended)

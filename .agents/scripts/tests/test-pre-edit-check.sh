@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 set -euo pipefail
 
@@ -12,6 +14,8 @@ readonly TEST_RESET='\033[0m'
 TESTS_RUN=0
 TESTS_FAILED=0
 TEST_ROOT=""
+TEST_REGISTRY_DIR=""
+TEST_REGISTRY_DB=""
 
 print_result() {
 	local test_name="$1"
@@ -34,6 +38,8 @@ print_result() {
 
 setup_test_repo() {
 	TEST_ROOT=$(mktemp -d)
+	TEST_REGISTRY_DIR="${TEST_ROOT}/.registry"
+	TEST_REGISTRY_DB="${TEST_REGISTRY_DIR}/worktree-registry.db"
 	git -C "$TEST_ROOT" init -b main >/dev/null 2>&1 || {
 		git -C "$TEST_ROOT" init >/dev/null 2>&1
 		git -C "$TEST_ROOT" checkout -b main >/dev/null 2>&1
@@ -58,9 +64,27 @@ run_helper() {
 	shift
 	(
 		cd "$target_dir" || exit 1
-		"$HELPER" "$@"
+		WORKTREE_REGISTRY_DIR="$TEST_REGISTRY_DIR" \
+			WORKTREE_REGISTRY_DB="$TEST_REGISTRY_DB" \
+			"$HELPER" "$@"
 	)
 	return $?
+}
+
+ensure_registry_schema() {
+	mkdir -p "$TEST_REGISTRY_DIR"
+	sqlite3 "$TEST_REGISTRY_DB" "
+        CREATE TABLE IF NOT EXISTS worktree_owners (
+            worktree_path TEXT PRIMARY KEY,
+            branch        TEXT,
+            owner_pid     INTEGER,
+            owner_session TEXT DEFAULT '',
+            owner_batch   TEXT DEFAULT '',
+            task_id       TEXT DEFAULT '',
+            created_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+    " >/dev/null 2>&1
+	return 0
 }
 
 test_blocks_headless_edits_on_main_with_worktree_guidance() {
@@ -110,6 +134,137 @@ test_warns_when_canonical_repo_is_off_main() {
 	return 0
 }
 
+test_blocks_when_linked_worktree_owned_by_another_live_process() {
+	local worktree_path="${TEST_ROOT}/owned-worktree"
+	git -C "$TEST_ROOT" worktree add "$worktree_path" -b bugfix/owned-worktree >/dev/null 2>&1
+
+	ensure_registry_schema
+	sqlite3 "$TEST_REGISTRY_DB" "
+        INSERT OR REPLACE INTO worktree_owners
+            (worktree_path, branch, owner_pid, owner_session)
+        VALUES
+            ('$worktree_path',
+             'bugfix/owned-worktree',
+             $$,
+             'other-session');
+    " >/dev/null 2>&1
+
+	local output=""
+	local exit_code=0
+	local claim_pid=""
+	sleep 30 >/dev/null 2>&1 &
+	claim_pid=$!
+	output=$(PRE_EDIT_OWNER_PID="$claim_pid" run_helper "$worktree_path" 2>&1) || exit_code=$?
+	kill "$claim_pid" >/dev/null 2>&1 || true
+	wait "$claim_pid" 2>/dev/null || true
+
+	if [[ "$exit_code" -eq 2 ]] && [[ "$output" == *"WORKTREE_OWNERSHIP_CONFLICT=true"* ]] && [[ "$output" == *"WORKTREE_OWNER_PID=$$"* ]] && [[ "$output" == *"ACTION_REQUIRED=create_worktree"* ]]; then
+		print_result "blocks linked worktree edits when owned by another live process" 0
+		return 0
+	fi
+
+	print_result "blocks linked worktree edits when owned by another live process" 1 "exit=${exit_code} output=${output}"
+	return 0
+}
+
+test_allowlisted_path_allows_edit_on_main() {
+	# Ensure repo is on main for this test
+	git -C "$TEST_ROOT" switch main >/dev/null 2>&1 || true
+
+	local output=""
+	local exit_code=0
+	output=$(FULL_LOOP_HEADLESS=true run_helper "$TEST_ROOT" --loop-mode --file "README.md" 2>&1) || exit_code=$?
+
+	if [[ "$exit_code" -eq 0 ]] && [[ "$output" == *"LOOP_DECISION=stay"* ]]; then
+		print_result "allowlisted path (README.md) allows edit on main in loop mode" 0
+		return 0
+	fi
+
+	print_result "allowlisted path (README.md) allows edit on main in loop mode" 1 "exit=${exit_code} output=${output}"
+	return 0
+}
+
+test_path_traversal_blocked_on_main() {
+	# Ensure repo is on main for this test
+	git -C "$TEST_ROOT" switch main >/dev/null 2>&1 || true
+
+	local output=""
+	local exit_code=0
+	output=$(FULL_LOOP_HEADLESS=true run_helper "$TEST_ROOT" --loop-mode --file "todo/../secret.py" 2>&1) || exit_code=$?
+
+	if [[ "$exit_code" -eq 2 ]] && [[ "$output" == *"LOOP_DECISION=worktree"* ]]; then
+		print_result "path traversal (todo/../secret.py) blocked on main" 0
+		return 0
+	fi
+
+	print_result "path traversal (todo/../secret.py) blocked on main" 1 "exit=${exit_code} output=${output}"
+	return 0
+}
+
+test_absolute_path_outside_repo_blocked_on_main() {
+	# Ensure repo is on main for this test
+	git -C "$TEST_ROOT" switch main >/dev/null 2>&1 || true
+
+	local output=""
+	local exit_code=0
+	output=$(FULL_LOOP_HEADLESS=true run_helper "$TEST_ROOT" --loop-mode --file "/etc/passwd" 2>&1) || exit_code=$?
+
+	if [[ "$exit_code" -eq 2 ]] && [[ "$output" == *"LOOP_DECISION=worktree"* ]]; then
+		print_result "absolute path outside repo (/etc/passwd) blocked on main" 0
+		return 0
+	fi
+
+	print_result "absolute path outside repo (/etc/passwd) blocked on main" 1 "exit=${exit_code} output=${output}"
+	return 0
+}
+
+test_todo_subdir_path_allows_edit_on_main() {
+	# Ensure repo is on main for this test
+	git -C "$TEST_ROOT" switch main >/dev/null 2>&1 || true
+	mkdir -p "${TEST_ROOT}/todo"
+
+	local output=""
+	local exit_code=0
+	output=$(FULL_LOOP_HEADLESS=true run_helper "$TEST_ROOT" --loop-mode --file "todo/tasks/t001-brief.md" 2>&1) || exit_code=$?
+
+	if [[ "$exit_code" -eq 0 ]] && [[ "$output" == *"LOOP_DECISION=stay"* ]]; then
+		print_result "todo/ subdir path allows edit on main in loop mode" 0
+		return 0
+	fi
+
+	print_result "todo/ subdir path allows edit on main in loop mode" 1 "exit=${exit_code} output=${output}"
+	return 0
+}
+
+test_auto_creates_git_path_worktree_from_ansi_helper_output() {
+	local repo_parent="${TEST_ROOT}/ansi-case/Git"
+	local repo_path="${repo_parent}/aidevops"
+	mkdir -p "$repo_path"
+	git -C "$repo_path" init -b main >/dev/null 2>&1 || {
+		git -C "$repo_path" init >/dev/null 2>&1
+		git -C "$repo_path" checkout -b main >/dev/null 2>&1
+	}
+	git -C "$repo_path" config user.name "Aidevops Test"
+	git -C "$repo_path" config user.email "test@example.com"
+	printf 'test\n' >"${repo_path}/README.md"
+	git -C "$repo_path" add README.md
+	git -C "$repo_path" commit -m "test: seed ansi repo" >/dev/null 2>&1
+
+	local output=""
+	local exit_code=0
+	output=$(FULL_LOOP_HEADLESS=true run_helper "$repo_path" --loop-mode --task "https://github.com/marcusquinn/aidevops/issues/22136" 2>&1) || exit_code=$?
+
+	local worktree_path=""
+	worktree_path=$(printf '%s\n' "$output" | awk -F= '/^WORKTREE_PATH=/{print $2; exit}')
+	if [[ "$exit_code" -eq 0 ]] && [[ "$output" == *"LOOP_DECISION=worktree_created"* ]] && [[ -n "$worktree_path" ]] && [[ -d "$worktree_path" ]]; then
+		print_result "auto-creates /Git worktree despite ANSI helper output" 0
+		return 0
+	fi
+
+	print_result "auto-creates /Git worktree despite ANSI helper output" 1 "exit=${exit_code} path=${worktree_path} output=${output}"
+	return 0
+}
+
 main() {
 	trap teardown_test_repo EXIT
 	setup_test_repo
@@ -117,6 +272,12 @@ main() {
 	test_blocks_headless_edits_on_main_with_worktree_guidance
 	test_allows_linked_worktree_edits
 	test_warns_when_canonical_repo_is_off_main
+	test_blocks_when_linked_worktree_owned_by_another_live_process
+	test_allowlisted_path_allows_edit_on_main
+	test_path_traversal_blocked_on_main
+	test_absolute_path_outside_repo_blocked_on_main
+	test_todo_subdir_path_allows_edit_on_main
+	test_auto_creates_git_path_worktree_from_ansi_helper_output
 
 	printf '\nRan %s tests, %s failed\n' "$TESTS_RUN" "$TESTS_FAILED"
 	if [[ "$TESTS_FAILED" -ne 0 ]]; then

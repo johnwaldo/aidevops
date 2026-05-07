@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034
 
 # SOPS Helper - Encrypted config file management with Mozilla SOPS
@@ -103,7 +105,9 @@ cmd_install() {
 		arch=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
 		local latest_url="https://github.com/getsops/sops/releases/latest/download/sops_3.9.4_${arch}.deb"
 		local tmp_deb
-		tmp_deb=$(mktemp /tmp/sops-XXXXXX.deb)
+		# t2997: drop .deb — XXXXXX must be at end for BSD mktemp; dpkg detects
+		# package format from magic bytes, not filename extension.
+		tmp_deb=$(mktemp /tmp/sops-XXXXXX)
 		_save_cleanup_scope
 		trap '_run_cleanups' RETURN
 		push_cleanup "rm -f '${tmp_deb}'"
@@ -438,7 +442,7 @@ cmd_status() {
 	# GPG backend
 	if command -v gpg &>/dev/null; then
 		local gpg_keys
-		gpg_keys=$(gpg --list-secret-keys 2>/dev/null | grep -c "^sec" || echo "0")
+		gpg_keys=$(gpg --list-secret-keys 2>/dev/null | safe_grep_count "^sec")
 		echo -e "  GPG:          ${GREEN}installed${NC} ($gpg_keys secret key(s))"
 	else
 		echo -e "  GPG:          ${DIM}not installed${NC}"

@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Workerd Patterns
 
 ## Best Practices
@@ -41,26 +44,21 @@ const config :Workerd.Config = (
 ## Durable Objects
 
 ```capnp
-const config :Workerd.Config = (
-  services = [
-    (name = "app", worker = (
-      modules = [
-        (name = "index.js", esModule = embed "index.js"),
-        (name = "room.js", esModule = embed "room.js"),
-      ],
-      compatibilityDate = "2024-01-15",
-      bindings = [(name = "ROOMS", durableObjectNamespace = "Room")],
-      durableObjectNamespaces = [(className = "Room", uniqueKey = "v1")],
-      durableObjectStorage = (localDisk = "/var/do")
-    ))
+(name = "app", worker = (
+  modules = [
+    (name = "index.js", esModule = embed "index.js"),
+    (name = "room.js", esModule = embed "room.js"),
   ],
-  sockets = [(name = "http", address = "*:8080", http = (), service = "app")]
-);
+  compatibilityDate = "2024-01-15",
+  bindings = [(name = "ROOMS", durableObjectNamespace = "Room")],
+  durableObjectNamespaces = [(className = "Room", uniqueKey = "v1")],
+  durableObjectStorage = (localDisk = "/var/do")
+))
 ```
 
 ## Dev vs Prod Configs
 
-Separate named configs per environment; override bindings via `fromEnvironment`:
+Named configs per environment; bindings via `fromEnvironment`:
 
 ```capnp
 const devWorker :Workerd.Worker = (
@@ -73,22 +71,22 @@ const devWorker :Workerd.Worker = (
 );
 ```
 
-Run with: `API_URL=http://localhost:3000 DEBUG=true workerd serve dev.capnp`
+```bash
+API_URL=http://localhost:3000 DEBUG=true workerd serve dev.capnp
+```
 
 ## HTTP Reverse Proxy
 
+Service-worker syntax with external backend (add to `services`/`sockets`):
+
 ```capnp
-const config :Workerd.Config = (
-  services = [
-    (name = "proxy", worker = (
-      serviceWorkerScript = embed "proxy.js",
-      compatibilityDate = "2024-01-15",
-      bindings = [(name = "BACKEND", service = "backend")]
-    )),
-    (name = "backend", external = (address = "internal:8080", http = ()))
-  ],
-  sockets = [(name = "http", address = "*:80", http = (), service = "proxy")]
-);
+(name = "proxy", worker = (
+  serviceWorkerScript = embed "proxy.js",
+  compatibilityDate = "2024-01-15",
+  bindings = [(name = "BACKEND", service = "backend")]
+)),
+(name = "backend", external = (address = "internal:8080", http = ()))
+# socket: (name = "http", address = "*:80", http = (), service = "proxy")
 ```
 
 ## Local Development
@@ -120,7 +118,7 @@ workerd test config.capnp --test-only=test.js
 
 ### Systemd
 
-`/etc/systemd/system/workerd.service` + `workerd.socket`:
+`/etc/systemd/system/workerd.service`
 
 ```ini
 [Unit]
@@ -138,6 +136,8 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 ```
+
+`/etc/systemd/system/workerd.socket`
 
 ```ini
 [Socket]
@@ -166,4 +166,4 @@ workerd compile config.capnp myConfig -o production-server
 ./production-server
 ```
 
-See [gotchas.md](./gotchas.md) for common errors.
+See [workerd-gotchas.md](./workerd-gotchas.md) for common errors.

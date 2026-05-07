@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2034
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+# shellcheck disable=SC1091,SC2034
 #
 # OpenCode GitHub/GitLab Setup Helper
 #
@@ -47,6 +49,15 @@ readonly GITHUB_APP_URL="https://github.com/apps/opencode-agent"
 readonly OPENCODE_GITHUB_DOCS="https://opencode.ai/docs/github/"
 readonly OPENCODE_GITLAB_DOCS="https://opencode.ai/docs/gitlab/"
 
+# Platform identifiers (used in detection, case routing, and guard checks)
+readonly PLATFORM_GITHUB="github"
+readonly PLATFORM_GITLAB="gitlab"
+readonly PLATFORM_GITEA="gitea"
+readonly PLATFORM_BITBUCKET="bitbucket"
+
+# Shared error messages
+readonly GITHUB_ONLY_MSG="This command is for GitHub repositories only"
+
 # ------------------------------------------------------------------------------
 # UTILITY FUNCTIONS
 # ------------------------------------------------------------------------------
@@ -83,13 +94,13 @@ detect_remote_type() {
 	}
 
 	if [[ "$remote_url" == *"github.com"* ]]; then
-		echo "github"
-	elif [[ "$remote_url" == *"gitlab"* ]]; then
-		echo "gitlab"
-	elif [[ "$remote_url" == *"gitea"* ]] || [[ "$remote_url" == *"forgejo"* ]]; then
-		echo "gitea"
-	elif [[ "$remote_url" == *"bitbucket"* ]]; then
-		echo "bitbucket"
+		echo "$PLATFORM_GITHUB"
+	elif [[ "$remote_url" == *"$PLATFORM_GITLAB"* ]]; then
+		echo "$PLATFORM_GITLAB"
+	elif [[ "$remote_url" == *"$PLATFORM_GITEA"* ]] || [[ "$remote_url" == *"forgejo"* ]]; then
+		echo "$PLATFORM_GITEA"
+	elif [[ "$remote_url" == *"$PLATFORM_BITBUCKET"* ]]; then
+		echo "$PLATFORM_BITBUCKET"
 	else
 		echo "unknown"
 	fi
@@ -239,29 +250,31 @@ cmd_check() {
 	fi
 
 	echo "Repository: $repo_path"
-	echo "Remote URL: $remote_url"
+	# t2458: sanitize_url strips embedded credentials from remote URLs.
+	echo "Remote URL: $(sanitize_url "$remote_url")"
 	echo "Platform:   $remote_type"
 	echo ""
 
 	case "$remote_type" in
-	"github")
+	"$PLATFORM_GITHUB")
 		check_github_status "$repo_path"
 		;;
-	"gitlab")
+	"$PLATFORM_GITLAB")
 		check_gitlab_status
 		;;
-	"gitea")
+	"$PLATFORM_GITEA")
 		print_warning "Gitea/Forgejo detected"
 		echo "  OpenCode integration is not yet available for Gitea."
 		echo "  Use the standard git CLI workflow instead."
 		;;
-	"bitbucket")
+	"$PLATFORM_BITBUCKET")
 		print_warning "Bitbucket detected"
 		echo "  OpenCode integration is not yet available for Bitbucket."
 		;;
 	*)
 		print_warning "Unknown git platform"
-		echo "  Remote URL: $remote_url"
+		# t2458: sanitize_url strips embedded credentials from remote URLs.
+		echo "  Remote URL: $(sanitize_url "$remote_url")"
 		;;
 	esac
 	return 0
@@ -357,7 +370,7 @@ cmd_setup() {
 	remote_type=$(detect_remote_type)
 
 	case "$remote_type" in
-	"github")
+	"$PLATFORM_GITHUB")
 		print_info "Setting up OpenCode GitHub integration..."
 		echo ""
 		echo "Run the automated setup:"
@@ -370,7 +383,7 @@ cmd_setup() {
 		echo ""
 		echo "See: ~/.aidevops/agents/tools/git/opencode-github.md"
 		;;
-	"gitlab")
+	"$PLATFORM_GITLAB")
 		print_info "Setting up OpenCode GitLab integration..."
 		echo ""
 		echo "Manual setup required:"
@@ -395,8 +408,8 @@ cmd_create_workflow() {
 	local remote_type
 	remote_type=$(detect_remote_type)
 
-	if [[ "$remote_type" != "github" ]]; then
-		print_error "This command is for GitHub repositories only"
+	if [[ "$remote_type" != "$PLATFORM_GITHUB" ]]; then
+		print_error "$GITHUB_ONLY_MSG"
 		return 1
 	fi
 
@@ -434,7 +447,7 @@ jobs:
           fetch-depth: 1
 
       - name: Run OpenCode
-        uses: sst/opencode/github@latest
+        uses: anomalyco/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -461,8 +474,8 @@ cmd_create_secure_workflow() {
 	local remote_type
 	remote_type=$(detect_remote_type)
 
-	if [[ "$remote_type" != "github" ]]; then
-		print_error "This command is for GitHub repositories only"
+	if [[ "$remote_type" != "$PLATFORM_GITHUB" ]]; then
+		print_error "$GITHUB_ONLY_MSG"
 		return 1
 	fi
 
@@ -639,7 +652,7 @@ _write_workflow_agent_job() {
         with:
           fetch-depth: 1
       
-      - uses: sst/opencode/github@latest
+      - uses: anomalyco/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -675,8 +688,8 @@ cmd_create_labels() {
 	local remote_type
 	remote_type=$(detect_remote_type)
 
-	if [[ "$remote_type" != "github" ]]; then
-		print_error "This command is for GitHub repositories only"
+	if [[ "$remote_type" != "$PLATFORM_GITHUB" ]]; then
+		print_error "$GITHUB_ONLY_MSG"
 		return 1
 	fi
 

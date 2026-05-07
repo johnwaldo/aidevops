@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 """
 pageindex-generator.py - Generate .pageindex.json from markdown heading hierarchy.
 
@@ -17,6 +19,12 @@ import re
 import json
 import hashlib
 from typing import Any, Dict, List, Optional
+
+from pageindex_helpers import (
+    extract_first_sentence,
+    get_ollama_summary,
+    extract_markdoc_tags,
+)
 
 
 def extract_frontmatter(lines: List[str]) -> Dict[str, str]:
@@ -45,75 +53,6 @@ def get_frontmatter_end(lines: List[str]) -> int:
     return 0
 
 
-def extract_first_sentence(text: str) -> str:
-    """Extract the first meaningful sentence from text."""
-    # Strip markdown formatting
-    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # links
-    text = re.sub(r'[*_`~]+', '', text)  # emphasis
-    text = text.strip()
-
-    if not text:
-        return ""
-
-    # Find first sentence boundary
-    match = re.match(r'^(.+?[.!?])\s', text)
-    if match:
-        sentence = match.group(1).strip()
-        # Cap at 200 chars
-        if len(sentence) > 200:
-            return sentence[:197] + '...'
-        return sentence
-
-    # No sentence boundary — use first line, capped
-    first_line = text.split('\n')[0].strip()
-    if len(first_line) > 200:
-        return first_line[:197] + '...'
-    return first_line
-
-
-def get_ollama_summary(text: str, model: str) -> Optional[str]:
-    """Get a one-sentence summary from Ollama. Returns None on failure."""
-    import urllib.request
-    import urllib.error
-
-    # Truncate input to avoid overwhelming small models
-    if len(text) > 2000:
-        text = text[:2000] + '...'
-
-    prompt = (
-        "Summarise the following section in exactly one concise sentence "
-        "(max 150 characters). Return ONLY the summary sentence, nothing else.\n\n"
-        + text
-    )
-
-    payload = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 80},
-    }).encode('utf-8')
-
-    req = urllib.request.Request(
-        'http://localhost:11434/api/generate',
-        data=payload,
-        headers={'Content-Type': 'application/json'},
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.loads(resp.read().decode('utf-8'))
-            summary = result.get('response', '').strip()
-            # Clean up: remove quotes, ensure single sentence
-            summary = summary.strip('"\'')
-            # Take only first sentence if model returned multiple
-            match = re.match(r'^(.+?[.!?])', summary)
-            if match:
-                return match.group(1)
-            return summary if summary else None
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
-        return None
-
-
 def estimate_page_from_position(
     line_idx: int, total_lines: int, page_count: int
 ) -> int:
@@ -125,16 +64,53 @@ def estimate_page_from_position(
     return min(page, page_count)
 
 
+class TreeContext:
+    """Shared context for tree-building operations."""
+
+    def __init__(
+        self,
+        total_lines: int,
+        page_count: int,
+        use_ollama: bool,
+        ollama_model: str,
+    ) -> None:
+        self.total_lines = total_lines
+        self.page_count = page_count
+        self.use_ollama = use_ollama
+        self.ollama_model = ollama_model
+
+
+def get_section_summary(section: Dict[str, Any], ctx: TreeContext) -> str:
+    """Generate a summary for a section using Ollama or first-sentence extraction."""
+    summary = ""
+    if ctx.use_ollama and section['content']:
+        summary = get_ollama_summary(section['content'], ctx.ollama_model) or ""
+    if not summary and section['content']:
+        summary = extract_first_sentence(section['content'])
+    return summary
+
+
+def get_section_page(section: Dict[str, Any], ctx: TreeContext) -> Optional[int]:
+    """Estimate the PDF page for a section, or None if page_count is 0."""
+    if ctx.page_count > 0:
+        return estimate_page_from_position(
+            section['line_idx'], ctx.total_lines, ctx.page_count
+        )
+    return None
+
+
 def build_tree_recursive(
     sections_list: List[Dict[str, Any]],
     start_idx: int,
     parent_level: int,
-    total_lines: int,
-    page_count: int,
-    use_ollama: bool,
-    ollama_model: str,
+    ctx: TreeContext,
 ) -> tuple:
-    """Recursively build tree from sections starting at start_idx."""
+    """Recursively build tree from sections starting at start_idx.
+
+    Each node gains private ``_line_start`` / ``_line_end`` fields (relative
+    to the content array, i.e. after frontmatter) used during tag injection.
+    Call ``_strip_internal_fields`` to remove them before serialising.
+    """
     children = []
     i = start_idx
 
@@ -142,47 +118,143 @@ def build_tree_recursive(
         section = sections_list[i]
 
         if section['level'] <= parent_level:
-            # This section is at or above parent level — stop
             break
 
-        # Generate summary
-        summary = ""
-        if use_ollama and section['content']:
-            summary = get_ollama_summary(section['content'], ollama_model) or ""
-        if not summary and section['content']:
-            summary = extract_first_sentence(section['content'])
+        child_children, next_i = build_tree_recursive(
+            sections_list, i + 1, section['level'], ctx
+        )
 
-        # Estimate page reference
-        page_ref = None
-        if page_count > 0:
-            page_ref = estimate_page_from_position(
-                section['line_idx'], total_lines, page_count
-            )
+        # Line end: start of next sibling (or cousin at same/higher level) - 1.
+        if next_i < len(sections_list):
+            line_end = sections_list[next_i]['line_idx'] - 1
+        else:
+            line_end = ctx.total_lines - 1
 
         node: Dict[str, Any] = {
             "title": section['title'],
             "level": section['level'],
-            "summary": summary,
-            "page": page_ref,
-            "children": [],
+            "summary": get_section_summary(section, ctx),
+            "page": get_section_page(section, ctx),
+            "metadata": {},
+            "_line_start": section['line_idx'],
+            "_line_end": line_end,
+            "children": child_children,
         }
-
-        # Find children (sections with higher level numbers before next sibling)
-        child_children, next_i = build_tree_recursive(
-            sections_list,
-            i + 1,
-            section['level'],
-            total_lines,
-            page_count,
-            use_ollama,
-            ollama_model,
-        )
-        node['children'] = child_children
 
         children.append(node)
         i = next_i
 
     return children, i
+
+
+def _inject_tag_record(node: Dict[str, Any], tag_rec: Dict[str, Any]) -> bool:
+    """Inject a tag record into the deepest tree node containing its line.
+
+    Walks depth-first so the most specific (deepest) node wins.  Returns True
+    if the tag was consumed by this node or one of its descendants.
+    """
+    line = tag_rec['line_num']
+    if not (node.get('_line_start', 0) <= line <= node.get('_line_end', 0)):
+        return False
+
+    # Try children first — deepest match wins.
+    for child in node.get('children', []):
+        if _inject_tag_record(child, tag_rec):
+            return True
+
+    # No child claimed it — inject into this node.
+    tag_name = tag_rec['tag']
+    attrs = tag_rec['attrs']
+    meta = node.setdefault('metadata', {})
+    existing = meta.get(tag_name)
+    if existing is None:
+        meta[tag_name] = attrs
+    elif isinstance(existing, list):
+        existing.append(attrs)
+    else:
+        meta[tag_name] = [existing, attrs]
+    return True
+
+
+def _strip_internal_fields(node: Dict[str, Any]) -> None:
+    """Remove private line-range fields from a node tree in-place (recursive)."""
+    node.pop('_line_start', None)
+    node.pop('_line_end', None)
+    for child in node.get('children', []):
+        _strip_internal_fields(child)
+
+
+def parse_sections(content_lines: List[str]) -> List[Dict[str, Any]]:
+    """Parse markdown headings into a flat list of section dicts."""
+    sections: List[Dict[str, Any]] = []
+    current_heading: Optional[Dict[str, Any]] = None
+    current_content_lines: List[str] = []
+
+    for i, line in enumerate(content_lines):
+        heading_match = re.match(r'^(#{1,6})\s+(.+)$', line.strip())
+        if heading_match:
+            if current_heading is not None:
+                sections.append({
+                    'level': current_heading['level'],
+                    'title': current_heading['title'],
+                    'line_idx': current_heading['line_idx'],
+                    'content': '\n'.join(current_content_lines).strip(),
+                })
+            current_heading = {
+                'level': len(heading_match.group(1)),
+                'title': heading_match.group(2).strip(),
+                'line_idx': i,
+            }
+            current_content_lines = []
+        else:
+            current_content_lines.append(line)
+
+    if current_heading is not None:
+        sections.append({
+            'level': current_heading['level'],
+            'title': current_heading['title'],
+            'line_idx': current_heading['line_idx'],
+            'content': '\n'.join(current_content_lines).strip(),
+        })
+
+    return sections
+
+
+def build_headingless_result(
+    frontmatter: Dict[str, str],
+    content_lines: List[str],
+    ctx: TreeContext,
+    source_pdf: str = '',
+) -> Dict[str, Any]:
+    """Build a single-node result when the document has no headings.
+
+    The root node carries ``_line_start``/``_line_end`` so that callers can
+    inject Markdoc tag metadata before stripping internal fields.
+    """
+    full_content = '\n'.join(content_lines).strip()
+    title = frontmatter.get('title', 'Untitled')
+    summary = ""
+    if ctx.use_ollama and full_content:
+        summary = get_ollama_summary(full_content, ctx.ollama_model) or ""
+    if not summary and full_content:
+        summary = extract_first_sentence(full_content)
+    return {
+        "version": "1.0",
+        "generator": "aidevops/document-creation-helper",
+        "source_file": frontmatter.get('source_file') or source_pdf,
+        "content_hash": frontmatter.get('content_hash', ''),
+        "page_count": ctx.page_count,
+        "tree": {
+            "title": title,
+            "level": 1,
+            "summary": summary,
+            "page": 1 if ctx.page_count > 0 else None,
+            "metadata": {},
+            "_line_start": 0,
+            "_line_end": max(0, len(content_lines) - 1),
+            "children": [],
+        },
+    }
 
 
 def build_pageindex_tree(
@@ -192,115 +264,84 @@ def build_pageindex_tree(
     source_pdf: str,
     page_count: int,
 ) -> Dict[str, Any]:
-    """Build a hierarchical PageIndex tree from markdown headings."""
+    """Build a hierarchical PageIndex tree from markdown headings.
+
+    Markdoc tag attributes from the content are lifted into per-node
+    ``metadata`` fields (t2972):
+
+    - File-scope tags (before the first heading) → root node ``metadata``.
+    - Section-scope tags → the deepest subtree node whose line range
+      contains the tag's line.
+    - Inline tags → same depth-first injection rule.
+
+    ``{% citation ... %}`` tags are additionally aggregated into a top-level
+    ``cross_references`` array for fast retrieval without full-corpus re-reads.
+    """
     frontmatter = extract_frontmatter(lines)
     content_start = get_frontmatter_end(lines)
     content_lines = lines[content_start:]
-    total_lines = len(content_lines)
+    ctx = TreeContext(len(content_lines), page_count, use_ollama, ollama_model)
 
-    # Parse headings and their content
-    sections: List[Dict[str, Any]] = []
-    current_heading: Optional[Dict[str, Any]] = None
-    current_content_lines: List[str] = []
+    # Extract Markdoc tags once; skip bare closing tags (no attrs to lift).
+    all_tag_records = extract_markdoc_tags(content_lines)
+    open_tags = [t for t in all_tag_records if not t['is_close']]
+    citation_tags = [t for t in open_tags if t['tag'] == 'citation']
 
-    for i, line in enumerate(content_lines):
-        stripped = line.strip()
-        heading_match = re.match(r'^(#{1,6})\s+(.+)$', stripped)
-
-        if heading_match:
-            # Save previous section
-            if current_heading is not None:
-                sections.append({
-                    'level': current_heading['level'],
-                    'title': current_heading['title'],
-                    'line_idx': current_heading['line_idx'],
-                    'content': '\n'.join(current_content_lines).strip(),
-                })
-
-            level = len(heading_match.group(1))
-            title = heading_match.group(2).strip()
-            current_heading = {
-                'level': level,
-                'title': title,
-                'line_idx': i,
-            }
-            current_content_lines = []
-        else:
-            current_content_lines.append(line)
-
-    # Save last section
-    if current_heading is not None:
-        sections.append({
-            'level': current_heading['level'],
-            'title': current_heading['title'],
-            'line_idx': current_heading['line_idx'],
-            'content': '\n'.join(current_content_lines).strip(),
-        })
+    sections = parse_sections(content_lines)
 
     if not sections:
-        # No headings found — create a single root node from the whole content
-        full_content = '\n'.join(content_lines).strip()
-        title = frontmatter.get('title', 'Untitled')
-        summary = ""
-        if use_ollama and full_content:
-            summary = get_ollama_summary(full_content, ollama_model) or ""
-        if not summary and full_content:
-            summary = extract_first_sentence(full_content)
+        content_hash = frontmatter.get('content_hash') or hashlib.sha256('\n'.join(lines).encode('utf-8')).hexdigest()
+        result = build_headingless_result(frontmatter, content_lines, ctx, source_pdf)
+        result['content_hash'] = content_hash
+        root_node = result['tree']
+        for tag_rec in open_tags:
+            _inject_tag_record(root_node, tag_rec)
+        _strip_internal_fields(root_node)
+        if citation_tags:
+            result['cross_references'] = [t['attrs'] for t in citation_tags]
+        return result
 
-        return {
-            "version": "1.0",
-            "generator": "aidevops/document-creation-helper",
-            "source_file": frontmatter.get('source_file', ''),
-            "content_hash": frontmatter.get('content_hash', ''),
-            "page_count": page_count,
-            "tree": {
-                "title": title,
-                "level": 1,
-                "summary": summary,
-                "page": 1 if page_count > 0 else None,
-                "children": [],
-            },
-        }
-
-    # Build hierarchical tree from flat section list
     root_section = sections[0]
-    root_summary = ""
-    if use_ollama and root_section['content']:
-        root_summary = get_ollama_summary(root_section['content'], ollama_model) or ""
-    if not root_summary and root_section['content']:
-        root_summary = extract_first_sentence(root_section['content'])
-
-    root_page = 1 if page_count > 0 else None
-
-    root_children, _ = build_tree_recursive(
-        sections, 1, root_section['level'], total_lines, page_count,
-        use_ollama, ollama_model,
-    )
+    root_summary = get_section_summary(root_section, ctx)
+    root_children, _ = build_tree_recursive(sections, 1, root_section['level'], ctx)
 
     tree: Dict[str, Any] = {
         "title": root_section['title'],
         "level": root_section['level'],
         "summary": root_summary,
-        "page": root_page,
+        "page": 1 if page_count > 0 else None,
+        "metadata": {},
+        # Root spans from line 0 so pre-heading tags are captured at root level.
+        "_line_start": 0,
+        "_line_end": max(0, len(content_lines) - 1),
         "children": root_children,
     }
 
-    # Compute content hash if not in frontmatter
+    # Inject all open tags into the deepest containing node.
+    for tag_rec in open_tags:
+        _inject_tag_record(tree, tag_rec)
+
+    # Remove line-range bookkeeping before serialising.
+    _strip_internal_fields(tree)
+
     content_hash = frontmatter.get('content_hash', '')
     if not content_hash:
-        full_text = '\n'.join(lines)
-        content_hash = hashlib.sha256(full_text.encode('utf-8')).hexdigest()
+        content_hash = hashlib.sha256('\n'.join(lines).encode('utf-8')).hexdigest()
 
-    return {
+    result = {
         "version": "1.0",
         "generator": "aidevops/document-creation-helper",
-        "source_file": frontmatter.get(
-            'source_file', source_pdf if source_pdf else ''
-        ),
+        "source_file": frontmatter.get('source_file') or source_pdf,
         "content_hash": content_hash,
         "page_count": page_count,
         "tree": tree,
     }
+
+    # Cross-reference index: all citation tags aggregated at document root.
+    if citation_tags:
+        result['cross_references'] = [t['attrs'] for t in citation_tags]
+
+    return result
 
 
 def main() -> None:

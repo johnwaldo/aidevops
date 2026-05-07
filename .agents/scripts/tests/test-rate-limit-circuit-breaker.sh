@@ -1,0 +1,771 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+#
+# test-rate-limit-circuit-breaker.sh — t2690 / GH#20310 regression guard.
+#
+# Asserts the pulse-level GraphQL rate-limit circuit breaker:
+#   1. Trips when remaining <= threshold (e.g. 4/5000 at 5% threshold)
+#   2. Does NOT trip when remaining > threshold (e.g. 1000/5000)
+#   3. Fails open on API error (gh api rate_limit unreachable)
+#   4. Emergency bypass via AIDEVOPS_SKIP_PULSE_CIRCUIT_BREAKER=1
+#   5. Disabled when threshold=0
+#   6. Status output includes correct state
+#   7. Custom threshold works (e.g. 10% = 500/5000)
+#   8. Stats counter increments on trip
+#
+# Stub strategy: define `gh` as a shell function. Shell functions take
+# precedence over PATH binaries, so the stub captures all `gh` invocations
+# without PATH mutation. STUB_GH_REMAINING controls the remaining value;
+# STUB_GH_FAIL=1 simulates API failure.
+
+set -uo pipefail
+
+SCRIPT_DIR_TEST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+SCRIPTS_DIR="$(cd "${SCRIPT_DIR_TEST}/.." && pwd)" || exit 1
+
+if [[ -t 1 ]]; then
+	TEST_GREEN=$'\033[0;32m'
+	TEST_RED=$'\033[0;31m'
+	TEST_NC=$'\033[0m'
+else
+	TEST_GREEN="" TEST_RED="" TEST_NC=""
+fi
+
+TESTS_RUN=0
+TESTS_FAILED=0
+
+pass() {
+	TESTS_RUN=$((TESTS_RUN + 1))
+	printf '  %sPASS%s %s\n' "$TEST_GREEN" "$TEST_NC" "$1"
+	return 0
+}
+
+fail() {
+	TESTS_RUN=$((TESTS_RUN + 1))
+	TESTS_FAILED=$((TESTS_FAILED + 1))
+	printf '  %sFAIL%s %s\n' "$TEST_RED" "$TEST_NC" "$1"
+	if [[ -n "${2:-}" ]]; then
+		printf '       %s\n' "$2"
+	fi
+	return 0
+}
+
+# =============================================================================
+# Sandbox
+# =============================================================================
+TMP=$(mktemp -d -t t2690.XXXXXX)
+trap 'rm -rf "$TMP"' EXIT
+
+export LOGFILE="${TMP}/test-pulse.log"
+export HOME="${TMP}/home"
+mkdir -p "${HOME}/.aidevops/logs"
+
+# Stub pulse-stats-helper.sh — track counter increments.
+STATS_COUNTER_FILE="${TMP}/stats-counter.log"
+pulse_stats_increment() {
+	local counter_name="$1"
+	printf '%s\n' "$counter_name" >>"$STATS_COUNTER_FILE"
+	return 0
+}
+pulse_stats_get_24h() {
+	local counter_name="$1"
+	if [[ -f "$STATS_COUNTER_FILE" ]]; then
+		grep -c "^${counter_name}$" "$STATS_COUNTER_FILE" 2>/dev/null || printf '0\n'
+	else
+		printf '0\n'
+	fi
+	return 0
+}
+export -f pulse_stats_increment pulse_stats_get_24h
+
+# Configurable stub behaviour per test via env vars:
+#   STUB_GH_REMAINING — GraphQL remaining value (default 5000)
+#   STUB_GH_LIMIT     — GraphQL limit value (default 5000)
+#   STUB_GH_CORE_REMAINING — REST core remaining value (unset omits core budget)
+#   STUB_GH_RESET     — GraphQL reset epoch (default: now+3600)
+#   STUB_GH_FAIL      — 1 to make gh api rate_limit fail entirely
+gh() {
+	if [[ "$1" == "api" && "$2" == "rate_limit" ]]; then
+		if [[ "${STUB_GH_FAIL:-0}" == "1" ]]; then
+			return 1
+		fi
+		local remaining="${STUB_GH_REMAINING:-5000}"
+		local limit="${STUB_GH_LIMIT:-5000}"
+		local core_json=""
+		if [[ -n "${STUB_GH_CORE_REMAINING:-}" ]]; then
+			core_json=",\"core\":{\"remaining\":${STUB_GH_CORE_REMAINING},\"limit\":${STUB_GH_CORE_LIMIT:-5000}}"
+		fi
+		local reset="${STUB_GH_RESET:-$(($(date +%s) + 3600))}"
+		# Handle --jq flag for direct extraction
+		if [[ "${3:-}" == "--jq" ]]; then
+			local jq_expr="${4:-}"
+			if [[ "$jq_expr" == ".resources.graphql.remaining" ]]; then
+				printf '%s\n' "$remaining"
+				return 0
+			fi
+		fi
+		# Full JSON response
+		printf '{"resources":{"graphql":{"remaining":%s,"limit":%s,"reset":%s}%s}}\n' \
+			"$remaining" "$limit" "$reset" "$core_json"
+		return 0
+	fi
+	# Default: succeed silently for unknown calls
+	return 0
+}
+export -f gh
+
+# Source the circuit breaker helper.
+# shellcheck source=../pulse-rate-limit-circuit-breaker.sh
+source "${SCRIPTS_DIR}/pulse-rate-limit-circuit-breaker.sh"
+
+# Re-override pulse_stats_* AFTER sourcing — the circuit breaker sources
+# the real pulse-stats-helper.sh which replaces our capturing stubs.
+# shellcheck disable=SC2317
+pulse_stats_increment() {
+	local counter_name="$1"
+	printf '%s\n' "$counter_name" >>"$STATS_COUNTER_FILE"
+	return 0
+}
+# shellcheck disable=SC2317
+pulse_stats_get_24h() {
+	local counter_name="$1"
+	if [[ -f "$STATS_COUNTER_FILE" ]]; then
+		grep -c "^${counter_name}$" "$STATS_COUNTER_FILE" 2>/dev/null || printf '0\n'
+	else
+		printf '0\n'
+	fi
+	return 0
+}
+
+# =============================================================================
+# Reset test state between tests
+# =============================================================================
+reset_test_state() {
+	: >"$LOGFILE"
+	: >"$STATS_COUNTER_FILE"
+	rm -f "${HOME}/.aidevops/logs/pulse-graphql-circuit-breaker.state"
+	rm -f "${HOME}/.aidevops/cache/pulse-graphql-rate-limit.json"
+	unset AIDEVOPS_SKIP_PULSE_CIRCUIT_BREAKER 2>/dev/null || true
+	unset AIDEVOPS_PULSE_RATE_LIMIT_CACHE_TTL 2>/dev/null || true
+	unset AIDEVOPS_PULSE_DISPATCH_REST_FALLBACK 2>/dev/null || true
+	unset AIDEVOPS_PULSE_DISPATCH_REST_FALLBACK_ACTIVE 2>/dev/null || true
+	unset AIDEVOPS_GH_FORCE_REST_READS 2>/dev/null || true
+	unset STUB_GH_CORE_REMAINING 2>/dev/null || true
+	unset STUB_GH_CORE_LIMIT 2>/dev/null || true
+	unset STUB_GH_FAIL 2>/dev/null || true
+	STUB_GH_REMAINING=5000
+	STUB_GH_LIMIT=5000
+	export AIDEVOPS_PULSE_CIRCUIT_BREAKER_THRESHOLD="0.05"
+	return 0
+}
+
+# =============================================================================
+# Test cases
+# =============================================================================
+printf 'test-rate-limit-circuit-breaker.sh (t2690)\n'
+printf '============================================\n'
+
+# --- Test 1: Breaker trips at 4/5000 (below 5% = 250 threshold) ---
+test_breaker_trips_below_threshold() {
+	reset_test_state
+	STUB_GH_REMAINING=4
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 1 ]]; then
+		pass "breaker trips when remaining=4 (below threshold=250)"
+	else
+		fail "breaker should trip when remaining=4 (rc=$rc, expected 1)"
+	fi
+	return 0
+}
+
+# --- Test 2: Breaker trips at exactly threshold (250/5000) ---
+test_breaker_trips_at_threshold() {
+	reset_test_state
+	STUB_GH_REMAINING=250
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 1 ]]; then
+		pass "breaker trips when remaining=250 (at threshold=250)"
+	else
+		fail "breaker should trip when remaining=250 (rc=$rc, expected 1)"
+	fi
+	return 0
+}
+
+# --- Test 3: Breaker does NOT trip at 1000/5000 ---
+test_breaker_passes_above_threshold() {
+	reset_test_state
+	STUB_GH_REMAINING=1000
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 0 ]]; then
+		pass "breaker passes when remaining=1000 (above threshold=250)"
+	else
+		fail "breaker should pass when remaining=1000 (rc=$rc, expected 0)"
+	fi
+	return 0
+}
+
+# --- Test 4: Breaker does NOT trip at 251/5000 (one above threshold) ---
+test_breaker_passes_just_above_threshold() {
+	reset_test_state
+	STUB_GH_REMAINING=251
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 0 ]]; then
+		pass "breaker passes when remaining=251 (just above threshold=250)"
+	else
+		fail "breaker should pass when remaining=251 (rc=$rc, expected 0)"
+	fi
+	return 0
+}
+
+# --- Test 5: Fail-open on API error ---
+test_fail_open_on_api_error() {
+	reset_test_state
+	STUB_GH_FAIL=1
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 2 ]]; then
+		pass "fails open on API error (rc=2)"
+	else
+		fail "should fail open on API error (rc=$rc, expected 2)"
+	fi
+	return 0
+}
+
+# --- Test 6: Emergency bypass ---
+test_emergency_bypass() {
+	reset_test_state
+	STUB_GH_REMAINING=0
+	export AIDEVOPS_SKIP_PULSE_CIRCUIT_BREAKER=1
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 0 ]]; then
+		pass "emergency bypass allows dispatch when remaining=0"
+	else
+		fail "emergency bypass should allow dispatch (rc=$rc, expected 0)"
+	fi
+	return 0
+}
+
+# --- Test 7: Disabled when threshold=0 ---
+test_disabled_at_zero_threshold() {
+	reset_test_state
+	STUB_GH_REMAINING=0
+	export AIDEVOPS_PULSE_CIRCUIT_BREAKER_THRESHOLD="0"
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 0 ]]; then
+		pass "disabled when threshold=0 (remaining=0 still passes)"
+	else
+		fail "should be disabled when threshold=0 (rc=$rc, expected 0)"
+	fi
+	return 0
+}
+
+# --- Test 8: Custom threshold 10% = 500/5000 ---
+test_custom_threshold_10_percent() {
+	reset_test_state
+	export AIDEVOPS_PULSE_CIRCUIT_BREAKER_THRESHOLD="0.10"
+	STUB_GH_REMAINING=499
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 1 ]]; then
+		pass "trips at custom threshold 10% when remaining=499 (threshold=500)"
+	else
+		fail "should trip at 10% threshold when remaining=499 (rc=$rc, expected 1)"
+	fi
+	return 0
+}
+
+# --- Test 9: Stats counter increments on trip ---
+test_stats_counter_increments() {
+	reset_test_state
+	STUB_GH_REMAINING=4
+	is_graphql_budget_sufficient || true
+	local count
+	count=$(grep -c "^pulse_dispatch_circuit_broken$" "$STATS_COUNTER_FILE" 2>/dev/null) || count=0
+	if [[ "$count" -eq 1 ]]; then
+		pass "pulse_dispatch_circuit_broken counter incremented on trip"
+	else
+		fail "counter should increment once (got $count)"
+	fi
+	return 0
+}
+
+# --- Test 10: Stats counter does NOT increment when passing ---
+test_stats_counter_no_increment_on_pass() {
+	reset_test_state
+	STUB_GH_REMAINING=1000
+	is_graphql_budget_sufficient || true
+	local count
+	count=$(grep -c "^pulse_dispatch_circuit_broken$" "$STATS_COUNTER_FILE" 2>/dev/null) || count=0
+	if [[ "$count" -eq 0 ]]; then
+		pass "counter not incremented when budget is sufficient"
+	else
+		fail "counter should not increment on pass (got $count)"
+	fi
+	return 0
+}
+
+# --- Test 11: State file created on trip, cleared on recovery ---
+test_state_file_lifecycle() {
+	reset_test_state
+	local state_file="${HOME}/.aidevops/logs/pulse-graphql-circuit-breaker.state"
+
+	# Trip the breaker.
+	STUB_GH_REMAINING=4
+	is_graphql_budget_sufficient || true
+	if [[ -f "$state_file" ]]; then
+		pass "state file created on trip"
+	else
+		fail "state file should be created on trip"
+		return 0
+	fi
+
+	# Recover.
+	STUB_GH_REMAINING=1000
+	rm -f "${HOME}/.aidevops/cache/pulse-graphql-rate-limit.json"
+	is_graphql_budget_sufficient || true
+	if [[ ! -f "$state_file" ]]; then
+		pass "state file cleared on recovery"
+	else
+		fail "state file should be cleared on recovery"
+	fi
+	return 0
+}
+
+# --- Test 12: Status output when OK ---
+test_status_output_ok() {
+	reset_test_state
+	STUB_GH_REMAINING=4500
+	local output
+	output=$(_circuit_breaker_status 2>/dev/null)
+	if printf '%s' "$output" | grep -q "^OK:"; then
+		pass "status output shows OK when budget sufficient"
+	else
+		fail "status should show OK (got: $output)"
+	fi
+	return 0
+}
+
+# --- Test 13: Status output when TRIPPED ---
+test_status_output_tripped() {
+	reset_test_state
+	STUB_GH_REMAINING=4
+	# Trip the breaker first to create the state file.
+	is_graphql_budget_sufficient || true
+	local output
+	output=$(_circuit_breaker_status 2>/dev/null)
+	if printf '%s' "$output" | grep -q "^TRIPPED:"; then
+		pass "status output shows TRIPPED when budget exhausted"
+	else
+		fail "status should show TRIPPED (got: $output)"
+	fi
+	return 0
+}
+
+# --- Test 14: Cached-only status does not call gh on cache hit ---
+test_status_cached_only_uses_cache() {
+	reset_test_state
+	STUB_GH_REMAINING=4321
+	local output
+	output=$(_circuit_breaker_status 2>/dev/null)
+	STUB_GH_REMAINING=1
+	output=$(_circuit_breaker_status cached-only 2>/dev/null)
+	if [[ "$output" == OK:*remaining=4321/5000* ]]; then
+		pass "cached-only status reuses cached rate_limit response"
+	else
+		fail "cached-only status should reuse cached response (got: $output)"
+	fi
+	return 0
+}
+
+# --- Test 14: Log message on trip ---
+test_log_message_on_trip() {
+	reset_test_state
+	STUB_GH_REMAINING=4
+	is_graphql_budget_sufficient || true
+	if grep -q "GraphQL budget EXHAUSTED" "$LOGFILE" 2>/dev/null; then
+		pass "log message emitted on trip"
+	else
+		fail "should emit 'GraphQL budget EXHAUSTED' log message on trip"
+	fi
+	return 0
+}
+
+# --- Test 15: GraphQL exhausted proceeds with REST fallback when core is healthy ---
+test_graphql_exhausted_rest_core_healthy_allows_dispatch() {
+	reset_test_state
+	STUB_GH_REMAINING=0
+	STUB_GH_CORE_REMAINING=4994
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	local fallback_count
+	fallback_count=$(grep -c "^pulse_dispatch_rest_fallback$" "$STATS_COUNTER_FILE" 2>/dev/null) || fallback_count=0
+	if [[ "$rc" -eq 0 && "${AIDEVOPS_GH_FORCE_REST_READS:-0}" == "1" && "${AIDEVOPS_PULSE_DISPATCH_REST_FALLBACK_ACTIVE:-0}" == "1" && "$fallback_count" -eq 1 ]]; then
+		pass "GraphQL exhausted with healthy REST core enables dispatch_rest_fallback"
+	else
+		fail "REST fallback should allow dispatch" "rc=$rc force_rest=${AIDEVOPS_GH_FORCE_REST_READS:-unset} active=${AIDEVOPS_PULSE_DISPATCH_REST_FALLBACK_ACTIVE:-unset} fallback_count=$fallback_count"
+	fi
+	return 0
+}
+
+# --- Test 16: GraphQL exhausted still blocks when REST core is low ---
+test_graphql_exhausted_rest_core_low_blocks_dispatch() {
+	reset_test_state
+	STUB_GH_REMAINING=0
+	STUB_GH_CORE_REMAINING=10
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 1 && "${AIDEVOPS_GH_FORCE_REST_READS:-0}" != "1" ]]; then
+		pass "GraphQL exhausted with low REST core still blocks dispatch"
+	else
+		fail "low REST core should not allow fallback" "rc=$rc force_rest=${AIDEVOPS_GH_FORCE_REST_READS:-unset}"
+	fi
+	return 0
+}
+
+# --- Test 17: REST fallback can be explicitly disabled ---
+test_graphql_exhausted_rest_fallback_disabled_blocks_dispatch() {
+	reset_test_state
+	STUB_GH_REMAINING=0
+	STUB_GH_CORE_REMAINING=4994
+	export AIDEVOPS_PULSE_DISPATCH_REST_FALLBACK=0
+	local rc=0
+	is_graphql_budget_sufficient || rc=$?
+	if [[ "$rc" -eq 1 && "${AIDEVOPS_PULSE_DISPATCH_REST_FALLBACK_ACTIVE:-0}" != "1" && "${AIDEVOPS_GH_FORCE_REST_READS:-0}" != "1" ]]; then
+		pass "GraphQL exhausted blocks dispatch when REST fallback is disabled"
+	else
+		fail "disabled REST fallback should not allow dispatch" "rc=$rc active=${AIDEVOPS_PULSE_DISPATCH_REST_FALLBACK_ACTIVE:-unset} force_rest=${AIDEVOPS_GH_FORCE_REST_READS:-unset}"
+	fi
+	return 0
+}
+
+# =============================================================================
+# Part 2: no_work rate circuit breaker (t2770, GH#20640)
+#
+# Tests is_no_work_rate_acceptable() from pulse-wrapper.sh.
+# The function is extracted via awk to avoid sourcing the entire
+# pulse-wrapper.sh (which triggers jitter, module sources, etc.).
+# Stub strategy: write fake pulse.log lines containing "crash_type=no_work"
+# to control the observed event count.
+# =============================================================================
+
+# Extract is_no_work_rate_acceptable from pulse-wrapper.sh using brace-counting awk.
+_NW_FUNC_DEF="$(awk '
+    /^is_no_work_rate_acceptable\(\) \{/ { depth=1; print; next }
+    depth > 0 {
+        for (i=1; i<=length($0); i++) {
+            c = substr($0,i,1)
+            if (c=="{") depth++
+            else if (c=="}") depth--
+        }
+        print
+        if (depth==0) exit
+    }
+' "${SCRIPTS_DIR}/pulse-wrapper.sh")"
+
+if [[ -z "$_NW_FUNC_DEF" ]]; then
+	printf '  %sSKIP%s no_work breaker tests: could not extract is_no_work_rate_acceptable from pulse-wrapper.sh\n' \
+		"$TEST_RED" "$TEST_NC"
+else
+	# shellcheck disable=SC2317
+	eval "$_NW_FUNC_DEF"
+
+	# Separate sandbox for no_work tests.
+	NW_TMP=$(mktemp -d -t t2770.XXXXXX)
+	trap 'rm -rf "$NW_TMP"' EXIT
+
+	NW_HOME="${NW_TMP}/home"
+	NW_LOGFILE="${NW_TMP}/pulse.log"
+	mkdir -p "${NW_HOME}/.aidevops/logs"
+
+	NW_STATE_FILE="${NW_HOME}/.aidevops/logs/pulse-no-work-breaker.state"
+
+	# Stub pulse_stats_increment for no_work counter tracking.
+	NW_STATS_FILE="${NW_TMP}/nw-stats.log"
+	# shellcheck disable=SC2317
+	pulse_stats_increment() {
+		local counter_name="$1"
+		printf '%s\n' "$counter_name" >>"$NW_STATS_FILE"
+		return 0
+	}
+
+	# Write N no_work lines to the fake pulse.log.
+	write_nw_log_lines() {
+		local count="$1"
+		local i=0
+		while [[ "$i" -lt "$count" ]]; do
+			printf '[pulse-wrapper] fast_fail_record: #%s (repo/repo) failure_backoff reason=stale_timeout crash_type=no_work\n' "$i" >>"$NW_LOGFILE"
+			i=$((i + 1))
+		done
+		return 0
+	}
+
+	reset_nw_state() {
+		: >"$NW_LOGFILE"
+		rm -f "$NW_STATE_FILE"
+		: >"$NW_STATS_FILE"
+		unset AIDEVOPS_SKIP_NO_WORK_BREAKER 2>/dev/null || true
+		export HOME="$NW_HOME"
+		export LOGFILE="$NW_LOGFILE"
+		export NO_WORK_WINDOW_SECS=600
+		export NO_WORK_WINDOW_MAX=10
+		unset AIDEVOPS_NO_WORK_WINDOW_SECS 2>/dev/null || true
+		unset AIDEVOPS_NO_WORK_WINDOW_MAX 2>/dev/null || true
+		return 0
+	}
+
+	printf '\ntest-rate-limit-circuit-breaker.sh (t2770 — no_work rate breaker)\n'
+	printf '====================================================================\n'
+
+	# --- NW Test 1: Passes when no no_work events present ---
+	test_nw_passes_with_no_events() {
+		reset_nw_state
+		local rc=0
+		is_no_work_rate_acceptable || rc=$?
+		if [[ "$rc" -eq 0 ]]; then
+			pass "no_work breaker: passes when log has zero no_work events"
+		else
+			fail "no_work breaker: should pass with zero events (rc=$rc)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 2: Passes when below threshold ---
+	test_nw_passes_below_threshold() {
+		reset_nw_state
+		write_nw_log_lines 5  # 5 events, max=10 → should pass
+		# First call to establish state baseline.
+		local rc=0
+		is_no_work_rate_acceptable || rc=$?
+		if [[ "$rc" -eq 0 ]]; then
+			pass "no_work breaker: passes when 5 events below max=10"
+		else
+			fail "no_work breaker: should pass with 5 events, max=10 (rc=$rc)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 3: Trips when threshold reached (exactly max events) ---
+	test_nw_trips_at_threshold() {
+		reset_nw_state
+		write_nw_log_lines 10  # 10 events, max=10 → should trip
+		local rc=0
+		is_no_work_rate_acceptable || rc=$?
+		if [[ "$rc" -eq 1 ]]; then
+			pass "no_work breaker: trips when exactly max=10 events in window"
+		else
+			fail "no_work breaker: should trip at max=10 events (rc=$rc)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 4: Trips when above threshold (11 events) ---
+	test_nw_trips_above_threshold() {
+		reset_nw_state
+		write_nw_log_lines 11  # 11 events, max=10 → should trip
+		local rc=0
+		is_no_work_rate_acceptable || rc=$?
+		if [[ "$rc" -eq 1 ]]; then
+			pass "no_work breaker: trips when 11 events exceed max=10"
+		else
+			fail "no_work breaker: should trip with 11 events, max=10 (rc=$rc)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 5: Emergency bypass ---
+	test_nw_emergency_bypass() {
+		reset_nw_state
+		write_nw_log_lines 50  # Far above threshold
+		export AIDEVOPS_SKIP_NO_WORK_BREAKER=1
+		local rc=0
+		is_no_work_rate_acceptable || rc=$?
+		if [[ "$rc" -eq 0 ]]; then
+			pass "no_work breaker: emergency bypass allows dispatch (rc=0)"
+		else
+			fail "no_work breaker: emergency bypass should allow dispatch (rc=$rc)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 6: Disabled when max=0 ---
+	test_nw_disabled_at_zero_max() {
+		reset_nw_state
+		export NO_WORK_WINDOW_MAX=0
+		write_nw_log_lines 100  # Far above disabled threshold
+		local rc=0
+		is_no_work_rate_acceptable || rc=$?
+		if [[ "$rc" -eq 0 ]]; then
+			pass "no_work breaker: disabled when NO_WORK_WINDOW_MAX=0"
+		else
+			fail "no_work breaker: should be disabled when max=0 (rc=$rc)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 7: Counter increments on trip ---
+	test_nw_counter_increments_on_trip() {
+		reset_nw_state
+		write_nw_log_lines 11
+		is_no_work_rate_acceptable || true
+		local count
+		count=$(grep -c "^pulse_dispatch_no_work_breaker_tripped$" "$NW_STATS_FILE" 2>/dev/null) || count=0
+		if [[ "$count" -eq 1 ]]; then
+			pass "no_work breaker: pulse_dispatch_no_work_breaker_tripped counter incremented"
+		else
+			fail "no_work breaker: counter should increment once on trip (got $count)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 8: Counter does NOT increment when passing ---
+	test_nw_counter_no_increment_on_pass() {
+		reset_nw_state
+		write_nw_log_lines 3
+		is_no_work_rate_acceptable || true
+		local count
+		count=$(grep -c "^pulse_dispatch_no_work_breaker_tripped$" "$NW_STATS_FILE" 2>/dev/null) || count=0
+		if [[ "$count" -eq 0 ]]; then
+			pass "no_work breaker: counter not incremented when passing"
+		else
+			fail "no_work breaker: counter should not increment on pass (got $count)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 9: State file written on check ---
+	test_nw_state_file_written() {
+		reset_nw_state
+		write_nw_log_lines 3
+		is_no_work_rate_acceptable || true
+		if [[ -f "$NW_STATE_FILE" ]]; then
+			pass "no_work breaker: state file written after check"
+		else
+			fail "no_work breaker: state file should be written after check"
+		fi
+		return 0
+	}
+
+	# --- NW Test 10: Log message on trip ---
+	test_nw_log_message_on_trip() {
+		reset_nw_state
+		write_nw_log_lines 11
+		is_no_work_rate_acceptable || true
+		if grep -q "no_work rate circuit breaker TRIPPED" "$NW_LOGFILE" 2>/dev/null; then
+			pass "no_work breaker: TRIPPED log message emitted"
+		else
+			fail "no_work breaker: should emit 'no_work rate circuit breaker TRIPPED' log message"
+		fi
+		return 0
+	}
+
+	# --- NW Test 11: Custom threshold via env var ---
+	test_nw_custom_max_env_var() {
+		reset_nw_state
+		export AIDEVOPS_NO_WORK_WINDOW_MAX=5
+		write_nw_log_lines 5
+		local rc=0
+		is_no_work_rate_acceptable || rc=$?
+		if [[ "$rc" -eq 1 ]]; then
+			pass "no_work breaker: AIDEVOPS_NO_WORK_WINDOW_MAX=5 trips at 5 events"
+		else
+			fail "no_work breaker: should trip at AIDEVOPS_NO_WORK_WINDOW_MAX=5 (rc=$rc)"
+		fi
+		return 0
+	}
+
+	# --- NW Test 12: Window pruning — old events don't count ---
+	test_nw_window_pruning() {
+		reset_nw_state
+		export NO_WORK_WINDOW_SECS=1  # 1 second window
+		write_nw_log_lines 11  # 11 events — enough to trip at max=10
+		# First call: establish state with 11 events in window.
+		is_no_work_rate_acceptable || true
+		# Wait for window to expire.
+		sleep 2
+		# Second call: all events should be pruned (outside the 1s window).
+		# No new events since last check → should pass.
+		local rc=0
+		is_no_work_rate_acceptable || rc=$?
+		if [[ "$rc" -eq 0 ]]; then
+			pass "no_work breaker: old events pruned after window expires"
+		else
+			fail "no_work breaker: should pass after window expires (rc=$rc)"
+		fi
+		return 0
+	}
+
+	# Save outer sandbox state before no_work tests modify HOME/LOGFILE.
+	_NW_SAVE_HOME="$HOME"
+	_NW_SAVE_LOGFILE="$LOGFILE"
+	_NW_SAVE_STATS_FILE="$STATS_COUNTER_FILE"
+
+	test_nw_passes_with_no_events
+	test_nw_passes_below_threshold
+	test_nw_trips_at_threshold
+	test_nw_trips_above_threshold
+	test_nw_emergency_bypass
+	test_nw_disabled_at_zero_max
+	test_nw_counter_increments_on_trip
+	test_nw_counter_no_increment_on_pass
+	test_nw_state_file_written
+	test_nw_log_message_on_trip
+	test_nw_custom_max_env_var
+	test_nw_window_pruning
+
+	# Restore outer sandbox state for GraphQL breaker tests that follow.
+	export HOME="$_NW_SAVE_HOME"
+	export LOGFILE="$_NW_SAVE_LOGFILE"
+	# Restore the original pulse_stats_increment (reads from $STATS_COUNTER_FILE).
+	# shellcheck disable=SC2317
+	pulse_stats_increment() {
+		local counter_name="$1"
+		printf '%s\n' "$counter_name" >>"$_NW_SAVE_STATS_FILE"
+		return 0
+	}
+	# Restore the circuit-breaker state file path (in outer HOME).
+	rm -f "${HOME}/.aidevops/logs/pulse-graphql-circuit-breaker.state" 2>/dev/null || true
+	# Restore GraphQL threshold to test default (0.05).
+	export AIDEVOPS_PULSE_CIRCUIT_BREAKER_THRESHOLD="0.05"
+	unset AIDEVOPS_SKIP_NO_WORK_BREAKER NO_WORK_WINDOW_SECS NO_WORK_WINDOW_MAX 2>/dev/null || true
+fi  # end: no_work breaker tests
+
+# =============================================================================
+# Run all tests
+# =============================================================================
+test_breaker_trips_below_threshold
+test_breaker_trips_at_threshold
+test_breaker_passes_above_threshold
+test_breaker_passes_just_above_threshold
+test_fail_open_on_api_error
+test_emergency_bypass
+test_disabled_at_zero_threshold
+test_custom_threshold_10_percent
+test_stats_counter_increments
+test_stats_counter_no_increment_on_pass
+test_state_file_lifecycle
+test_status_output_ok
+test_status_output_tripped
+test_status_cached_only_uses_cache
+test_log_message_on_trip
+test_graphql_exhausted_rest_core_healthy_allows_dispatch
+test_graphql_exhausted_rest_core_low_blocks_dispatch
+test_graphql_exhausted_rest_fallback_disabled_blocks_dispatch
+
+# =============================================================================
+# Summary
+# =============================================================================
+printf '\n%s/%s tests passed' "$((TESTS_RUN - TESTS_FAILED))" "$TESTS_RUN"
+if [[ "$TESTS_FAILED" -gt 0 ]]; then
+	printf ' (%s%s FAILED%s)\n' "$TEST_RED" "$TESTS_FAILED" "$TEST_NC"
+	exit 1
+else
+	printf ' %s(all passed)%s\n' "$TEST_GREEN" "$TEST_NC"
+	exit 0
+fi

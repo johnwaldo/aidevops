@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # Fallback Chain Helper v2.0 — Simplified model routing
 # Reads a JSON routing table and checks model availability.
@@ -52,9 +54,9 @@ get_tier_models_from_table() {
 	if [[ -z "$models" || "$models" == "null" ]]; then
 		# Hardcoded minimal fallback for unknown tiers
 		case "$tier" in
-		haiku | flash | health) echo '["anthropic/claude-haiku-4-5"]' ;;
-		sonnet | pro | eval) echo '["anthropic/claude-sonnet-4-6"]' ;;
-		opus | coding) echo '["anthropic/claude-opus-4-6"]' ;;
+		haiku | flash | health) echo '["openai/gpt-5.4-mini"]' ;;
+		sonnet | pro | eval) echo '["openai/gpt-5.5"]' ;;
+		opus | coding) echo '["openai/gpt-5.5"]' ;;
 		*)
 			print_error "Unknown tier: $tier"
 			return 1
@@ -88,6 +90,7 @@ is_model_available() {
 	anthropic) key_var="ANTHROPIC_API_KEY" ;;
 	openai) key_var="OPENAI_API_KEY" ;;
 	google) key_var="GOOGLE_API_KEY" ;;
+	openrouter) key_var="OPENROUTER_API_KEY" ;;
 	*) key_var="" ;;
 	esac
 

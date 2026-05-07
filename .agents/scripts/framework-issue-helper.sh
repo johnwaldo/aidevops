@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # framework-issue-helper.sh - Route self-improvement issues to the aidevops repo
 # Part of aidevops framework: https://aidevops.sh
 #
@@ -454,7 +456,7 @@ log_framework_issue() {
 	log_info "Creating issue on ${AIDEVOPS_SLUG}: $title"
 
 	local issue_url
-	issue_url=$(gh issue create \
+	issue_url=$(gh_create_issue \
 		--repo "$AIDEVOPS_SLUG" \
 		--title "$title" \
 		--body "$body" \

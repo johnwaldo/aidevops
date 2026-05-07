@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2317
 set -euo pipefail
 
@@ -101,8 +103,10 @@ process_directory() {
 	while IFS= read -r -d '' file; do
 		((++total_files))
 		local before_hash after_hash
+		# shell-portability: ignore next — sha256sum: macOS needs shasum -a 256 (GH#18787)
 		before_hash=$(sha256sum "$file" | awk '{print $1}')
 		fix_markdown_file "$file"
+		# shell-portability: ignore next — sha256sum: macOS needs shasum -a 256 (GH#18787)
 		after_hash=$(sha256sum "$file" | awk '{print $1}')
 		if [[ "$before_hash" != "$after_hash" ]]; then
 			((++changed_files))

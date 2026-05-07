@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # DO Storage Gotchas & Troubleshooting
 
 ## Concurrency Gates
@@ -69,25 +72,16 @@ await this.ctx.storage.deleteAll();
 
 ## Auto Caching & Bypass
 
-```typescript
-// Built-in cache makes simple code fast
-async getUniqueNumber() {
-  let val = await this.ctx.storage.get("counter"); // Cached after first
-  await this.ctx.storage.put("counter", val + 1);  // Instant cache write
-  return val;
-}
+Storage reads are cached after first access; writes update cache instantly.
 
+```typescript
 // Bypass opts: allowConcurrency, noCache, allowUnconfirmed
 await this.ctx.storage.get("key", { allowConcurrency: true, noCache: true });
 ```
 
-## Common Errors & Best Practices
+## Common Errors
 
 **Slow perf:** Use sync KV API (`ctx.storage.kv`) vs async  
-**Races:** Check concurrent calls from same event (not protected)  
 **High billing:** Check `rowsRead`/`rowsWritten`; verify unused objects call `deleteAll()`  
-**Overload:** Single DO soft limit ~1K req/sec; shard
-
-**Do:** Use SQLite-backed; sync KV for simple key-value; don't await writes unnecessarily (output gate protects); use `blockConcurrencyWhile()` for init; delete alarms AND storage when cleaning
-
-**Don't:** Use SQL transaction statements directly; initiate concurrent storage ops from same event; assume TypeScript types validate at runtime
+**Overload:** Single DO soft limit ~1K req/sec; shard  
+**Init races:** Use `blockConcurrencyWhile()` for initialization

@@ -11,6 +11,9 @@ tools:
   webfetch: false
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Tirith - Terminal Security Guard
 
 <!-- AI-CONTEXT-START -->
@@ -21,13 +24,11 @@ tools:
 - **Repo**: [github.com/sheeki03/tirith](https://github.com/sheeki03/tirith) (1.5k stars, Rust, AGPL-3.0)
 - **Key trait**: Sub-millisecond overhead, fully local, no network calls, no telemetry
 - **Coverage**: 30 rules across 7 categories
-
-Browsers block homograph attacks, ANSI injection, and suspicious URLs. Terminals don't.
-Tirith hooks into your shell and intercepts dangerous commands before they execute.
+- **Activation**: Add the shell hook once; every later command is checked automatically
 
 <!-- AI-CONTEXT-END -->
 
-## Installation
+## Install and activate
 
 ```bash
 brew install sheeki03/tap/tirith   # macOS
@@ -36,26 +37,15 @@ cargo install tirith               # from source
 mise use -g tirith                 # mise
 ```
 
-Also available via Nix, deb, rpm, AUR, Scoop, and Chocolatey.
-
-## Shell Hook Setup
-
-Add to your shell profile — this is the only activation step:
+Also available via Nix, deb, rpm, AUR, Scoop, and Chocolatey. Add one shell hook:
 
 ```bash
-# zsh (~/.zshrc)
-eval "$(tirith init --shell zsh)"
-
-# bash (~/.bashrc)
-eval "$(tirith init --shell bash)"
-
-# fish (~/.config/fish/config.fish)
-tirith init --shell fish | source
+eval "$(tirith init --shell zsh)"   # ~/.zshrc
+eval "$(tirith init --shell bash)"  # ~/.bashrc
+tirith init --shell fish | source   # ~/.config/fish/config.fish
 ```
 
-Every command is now guarded. Clean commands pass through invisibly.
-
-## Rule Categories
+## What it catches
 
 | Category | What it stops |
 |----------|---------------|
@@ -83,10 +73,7 @@ tirith doctor                  # Diagnostic check (shell, hooks, policy)
 
 ## Configuration
 
-YAML policy file, discovered in order:
-
-1. `.tirith/policy.yaml` (walks up to repo root)
-2. `~/.config/tirith/policy.yaml`
+Policy lookup: `.tirith/policy.yaml` (walks up to repo root), then `~/.config/tirith/policy.yaml`.
 
 ```yaml
 version: 1
@@ -100,25 +87,19 @@ severity_overrides:
 fail_mode: open  # or "closed" for strict environments
 ```
 
-Organizations can set `allow_bypass: false` to prevent per-command bypass.
+Set `allow_bypass: false` to prevent per-command bypass in org environments.
 
-## Bypass
-
-For commands you've verified manually:
+Bypass (one command only, does not persist):
 
 ```bash
 TIRITH=0 curl -L https://known-safe.example.com | bash
 ```
 
-Standard shell prefix — applies to that single command only, does not persist.
-
 ## Integration with aidevops
 
-**setup.sh recommendation**: Check for tirith and suggest installation if missing.
-Once `eval "$(tirith init)"` is in the shell profile, all terminal commands
-(including those spawned by aidevops scripts) are automatically guarded.
-
-**Audit log**: Local JSONL at `~/.local/share/tirith/log.jsonl` (timestamp, action, rule ID, redacted preview). Disable with `TIRITH_LOG=0`.
+- **setup.sh**: checks for Tirith and suggests installation if missing
+- **Auto-guard**: `eval "$(tirith init)"` in shell profile guards all commands spawned by aidevops scripts
+- **Audit log**: `~/.local/share/tirith/log.jsonl` (timestamp, action, rule ID, redacted preview); disable with `TIRITH_LOG=0`
 
 ## Related
 

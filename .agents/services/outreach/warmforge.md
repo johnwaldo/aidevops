@@ -7,51 +7,41 @@ tools:
   grep: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # WarmForge
 
-<!-- AI-CONTEXT-START -->
+Monitors domain deliverability signals and automates mailbox warmup state transitions.
 
-## Quick Reference
+- One active profile per mailbox: `conservative`, `standard`, or `aggressive`
+- Scale only after 7+ days stable health (low bounce, low spam-folder drift, positive reply baseline)
+- Auto-pause on anomaly thresholds; resume at reduced profile after remediation — never jump to prior peak
 
-- Use WarmForge to monitor domain-level deliverability signals and automate mailbox warmup state transitions
-- Keep warmup deterministic: only one active schedule profile per mailbox (`conservative`, `standard`, or `aggressive`)
-- Gate scale decisions on evidence: improve volume only after at least 7 days of stable health (low bounce, low spam-folder drift, steady positive reply baseline)
-- Pause warmup automatically on anomaly thresholds (bounce spike, complaint spike, sudden inbox-placement drop)
-- Resume warmup with reduced profile after remediation; never jump directly back to prior peak volume
+## Operational Policy
 
-### Helper Script
+1. Check `health` and `domains` before any orchestration command.
+2. Pull `deliverability` for active domain window (default `7d`).
+3. Stable → `warmup-start` or `warmup-resume`. Degraded → `warmup-pause` + incident note with root-cause hypothesis.
+4. After remediation → resume at lower profile before re-scaling.
 
-Use `.agents/scripts/warmforge-helper.sh` for API access.
+## Helper Script
 
-- `warmforge-helper.sh health`
-- `warmforge-helper.sh domains`
-- `warmforge-helper.sh mailboxes [status]`
-- `warmforge-helper.sh deliverability <domain> [window]`
-- `warmforge-helper.sh warmup-status <mailbox_id>`
-- `warmforge-helper.sh warmup-start <mailbox_id> [profile] [start_date]`
-- `warmforge-helper.sh warmup-pause <mailbox_id>`
-- `warmforge-helper.sh warmup-resume <mailbox_id>`
-- `warmforge-helper.sh raw <METHOD> <PATH> [JSON_BODY]`
+`.agents/scripts/warmforge-helper.sh` — **Env:** `WARMFORGE_API_KEY` (required); `WARMFORGE_API_BASE_URL` (optional, default `https://api.warmforge.ai/v1`). API keys: terminal-local only.
 
-### Required Environment
+| Command | Args |
+|---------|------|
+| `health` | |
+| `domains` | |
+| `mailboxes` | `[status]` |
+| `deliverability` | `<domain> [window]` |
+| `warmup-status` | `<mailbox_id>` |
+| `warmup-start` | `<mailbox_id> [profile] [start_date]` |
+| `warmup-pause` | `<mailbox_id>` |
+| `warmup-resume` | `<mailbox_id>` |
+| `raw` | `<METHOD> <PATH> [JSON_BODY]` |
 
-- `WARMFORGE_API_KEY` (required)
-- `WARMFORGE_API_BASE_URL` (optional, defaults to `https://api.warmforge.ai/v1`)
+## Failure Handling
 
-### Operational Policy
-
-1. Check `health` and `domains` before running orchestration commands.
-2. Pull `deliverability` metrics for the active domain window (default `7d`).
-3. If health is stable, run `warmup-start` or `warmup-resume` for the mailbox.
-4. If metrics degrade, run `warmup-pause` and open an incident note with root-cause hypothesis.
-5. Re-check after remediation and resume with a lower profile before re-scaling.
-
-### Failure Handling
-
-- Treat HTTP 4xx as configuration/auth problems first (token scope, mailbox ID, domain ID)
-- Treat HTTP 5xx as provider-side reliability incidents; retry with backoff and preserve request context for debugging
-- Keep API-key handling terminal-local only; never paste secrets into chat or issue comments
-
-<!-- AI-CONTEXT-END -->
-
-This document defines the baseline WarmForge operating model for deliverability monitoring and warmup orchestration tasks.
+- HTTP 4xx → configuration/auth problem (token scope, mailbox ID, domain ID)
+- HTTP 5xx → provider-side incident; retry with backoff, preserve request context

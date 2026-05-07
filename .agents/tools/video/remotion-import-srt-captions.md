@@ -6,31 +6,27 @@ metadata:
   tags: captions, subtitles, srt, import, parse
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Importing .srt subtitles into Remotion
 
-If you have an existing `.srt` subtitle file, you can import it into Remotion using `parseSrt()` from `@remotion/captions`.
+Use `parseSrt()` from `@remotion/captions` to import `.srt` files.
 
-## Prerequisites
-
-First, the @remotion/captions package needs to be installed.
-If it is not installed, use the following command:
+## Install
 
 ```bash
-npx remotion add @remotion/captions # If project uses npm
-bunx remotion add @remotion/captions # If project uses bun
-yarn remotion add @remotion/captions # If project uses yarn
-pnpm exec remotion add @remotion/captions # If project uses pnpm
+npx remotion add @remotion/captions
 ```
 
-## Reading an .srt file
+## Usage
 
-Use `staticFile()` to reference an `.srt` file in your `public` folder, then fetch and parse it:
+`staticFile()` references files in `public/`; remote URLs work via `fetch()`.
 
 ```tsx
 import {useState, useEffect, useCallback} from 'react';
 import {AbsoluteFill, staticFile, useDelayRender} from 'remotion';
-import {parseSrt} from '@remotion/captions';
-import type {Caption} from '@remotion/captions';
+import {parseSrt, type Caption} from '@remotion/captions';
 
 export const MyComponent: React.FC = () => {
   const [captions, setCaptions] = useState<Caption[] | null>(null);
@@ -49,20 +45,10 @@ export const MyComponent: React.FC = () => {
     }
   }, [continueRender, cancelRender, handle]);
 
-  useEffect(() => {
-    fetchCaptions();
-  }, [fetchCaptions]);
+  useEffect(() => { fetchCaptions(); }, [fetchCaptions]);
 
-  if (!captions) {
-    return null;
-  }
+  if (!captions) return null;
 
   return <AbsoluteFill>{/* Use captions here */}</AbsoluteFill>;
 };
 ```
-
-Remote URLs are also supported - you can `fetch()` a remote file via URL instead of using `staticFile()`.
-
-## Using imported captions
-
-Once parsed, the captions are in the `Caption` format and can be used with all `@remotion/captions` utilities.

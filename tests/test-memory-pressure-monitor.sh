@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # test-memory-pressure-monitor.sh
 #
 # Unit tests for memory-pressure-monitor.sh:
@@ -9,6 +11,7 @@
 # - OS memory info collection (_get_os_memory_info)
 # - Interactive session counting (_count_interactive_sessions)
 # - Process classification: app vs tool (_is_app_process) (GH#2992)
+# - Daemon PID file guard (GH#17408): --stop, --restart, duplicate prevention
 # - CLI commands (--help, --status, --check)
 #
 # Uses isolated temp directories to avoid touching production data.
@@ -523,6 +526,229 @@ test_notify_disabled() {
 }
 
 test_notify_disabled
+
+# ============================================================================
+section "Daemon PID File Guard (GH#17408)"
+# ============================================================================
+
+test_daemon_stop_no_pid_file() {
+	# --stop with no PID file should exit 1 with an error message
+	local exit_code=0
+	local output
+	output=$(bash "$SCRIPT_UNDER_TEST" --stop 2>&1) || exit_code=$?
+	if [[ "$exit_code" -eq 1 ]]; then
+		pass "--stop with no PID file exits 1"
+	else
+		fail "--stop with no PID file exits 1" "Got exit code $exit_code"
+	fi
+}
+
+test_daemon_stop_stale_pid_file() {
+	# --stop with a stale PID file (process gone) should clean up and exit 0
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	# Use a PID that is guaranteed not to exist
+	echo "999999999" >"$pid_file"
+	local exit_code=0
+	bash "$SCRIPT_UNDER_TEST" --stop >/dev/null 2>&1 || exit_code=$?
+	if [[ "$exit_code" -eq 0 ]]; then
+		pass "--stop with stale PID exits 0 and cleans up"
+	else
+		fail "--stop with stale PID exits 0 and cleans up" "Got exit code $exit_code"
+	fi
+	# PID file should be removed
+	if [[ ! -f "$pid_file" ]]; then
+		pass "--stop removes stale PID file"
+	else
+		fail "--stop removes stale PID file" "PID file still exists"
+		rm -f "$pid_file"
+	fi
+}
+
+test_daemon_stop_invalid_pid_file() {
+	# --stop with a non-numeric PID file should exit 1 and clean up
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	echo "not-a-pid" >"$pid_file"
+	local exit_code=0
+	bash "$SCRIPT_UNDER_TEST" --stop >/dev/null 2>&1 || exit_code=$?
+	if [[ "$exit_code" -eq 1 ]]; then
+		pass "--stop with invalid PID file exits 1"
+	else
+		fail "--stop with invalid PID file exits 1" "Got exit code $exit_code"
+	fi
+	# PID file should be removed
+	if [[ ! -f "$pid_file" ]]; then
+		pass "--stop removes invalid PID file"
+	else
+		fail "--stop removes invalid PID file" "PID file still exists"
+		rm -f "$pid_file"
+	fi
+}
+
+test_daemon_duplicate_prevention() {
+	# Simulate a running daemon by writing our own PID to the PID file
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	echo $$ >"$pid_file"
+
+	# Attempting to start another daemon should fail with exit 1
+	local exit_code=0
+	local output
+	output=$(bash "$SCRIPT_UNDER_TEST" --daemon 2>&1) || exit_code=$?
+	if [[ "$exit_code" -eq 1 ]]; then
+		pass "--daemon exits 1 when daemon already running"
+	else
+		fail "--daemon exits 1 when daemon already running" "Got exit code $exit_code"
+	fi
+	if echo "$output" | grep -q "already running"; then
+		pass "--daemon prints 'already running' message"
+	else
+		fail "--daemon prints 'already running' message" "Output: $output"
+	fi
+
+	# Clean up
+	rm -f "$pid_file"
+}
+
+test_daemon_stale_pid_allows_start() {
+	# A stale PID file (process gone) should not block a new daemon start.
+	# We test this by writing a non-existent PID, then verifying --daemon
+	# does NOT exit 1 immediately (it should clear the stale file and proceed).
+	# Since we can't run a full daemon in tests, we verify the stale-file
+	# cleanup path by checking that --stop clears it and --daemon would proceed.
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	echo "999999999" >"$pid_file"
+
+	# --stop should clean up the stale file
+	bash "$SCRIPT_UNDER_TEST" --stop >/dev/null 2>&1 || true
+
+	if [[ ! -f "$pid_file" ]]; then
+		pass "Stale PID file cleared by --stop, allowing new daemon start"
+	else
+		fail "Stale PID file cleared by --stop" "PID file still exists"
+		rm -f "$pid_file"
+	fi
+}
+
+test_daemon_stop_no_pid_file
+test_daemon_stop_stale_pid_file
+test_daemon_stop_invalid_pid_file
+test_daemon_duplicate_prevention
+test_daemon_stale_pid_allows_start
+
+# ============================================================================
+section "Daemon --restart Command"
+# ============================================================================
+
+test_restart_no_daemon() {
+	# --restart with no running daemon should start a new daemon.
+	# Since we can't run a blocking daemon in tests, we verify --restart
+	# doesn't error out when no daemon is running (stop_rc=1 is tolerated).
+	# We use a timeout to kill the daemon after it starts.
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	rm -f "$pid_file"
+
+	# Start daemon in background with a timeout
+	local exit_code=0
+	timeout 3 bash "$SCRIPT_UNDER_TEST" --restart >/dev/null 2>&1 || exit_code=$?
+	# timeout exits 124 when it kills the process; 0 if it exits naturally
+	# Both are acceptable — we just want to confirm it didn't fail immediately
+	if [[ "$exit_code" -eq 0 ]] || [[ "$exit_code" -eq 124 ]]; then
+		pass "--restart starts daemon when none running (exit $exit_code)"
+	else
+		fail "--restart starts daemon when none running" "Got exit code $exit_code"
+	fi
+
+	# Clean up any PID file left behind
+	rm -f "$pid_file"
+}
+
+test_restart_no_daemon
+
+# ============================================================================
+section "Batch Process Age (_batch_get_process_ages)"
+# ============================================================================
+
+test_batch_age_self() {
+	# Batch-fetch age of current process — should be numeric and >= 0
+	local output
+	output=$(_batch_get_process_ages $$)
+	local got_pid got_age
+	read -r got_pid got_age <<<"$output"
+	if [[ "$got_pid" == "$$" ]] && [[ "$got_age" =~ ^[0-9]+$ ]] && [[ "$got_age" -ge 0 ]]; then
+		pass "_batch_get_process_ages returns numeric age for self (${got_age}s)"
+	else
+		fail "_batch_get_process_ages returns numeric age for self" "Got '$output'"
+	fi
+}
+
+test_batch_age_nonexistent() {
+	# Non-existent PID should return 0
+	local output
+	output=$(_batch_get_process_ages 999999999)
+	local got_pid got_age
+	read -r got_pid got_age <<<"$output"
+	if [[ "$got_pid" == "999999999" ]] && [[ "$got_age" == "0" ]]; then
+		pass "_batch_get_process_ages returns 0 for non-existent PID"
+	else
+		fail "_batch_get_process_ages returns 0 for non-existent PID" "Got '$output'"
+	fi
+}
+
+test_batch_age_multiple() {
+	# Batch-fetch ages for multiple PIDs — should return one line per PID
+	local output
+	output=$(_batch_get_process_ages $$ 1 999999999)
+	local line_count
+	line_count=$(printf '%s\n' "$output" | grep -c '^[0-9]' || true)
+	# Should have at least 2 lines (self + PID 1 if accessible, non-existent always returns)
+	if [[ "$line_count" -ge 2 ]]; then
+		pass "_batch_get_process_ages returns multiple lines for multiple PIDs ($line_count lines)"
+	else
+		fail "_batch_get_process_ages returns multiple lines for multiple PIDs" "Got $line_count lines: '$output'"
+	fi
+}
+
+test_batch_age_empty() {
+	# Empty input should produce no output and exit 0
+	local output
+	output=$(_batch_get_process_ages)
+	if [[ -z "$output" ]]; then
+		pass "_batch_get_process_ages handles empty input"
+	else
+		fail "_batch_get_process_ages handles empty input" "Got '$output'"
+	fi
+}
+
+test_batch_age_self
+test_batch_age_nonexistent
+test_batch_age_multiple
+test_batch_age_empty
+
+# ============================================================================
+section "Collect Monitored Processes Performance"
+# ============================================================================
+
+test_collect_processes_timing() {
+	# _collect_monitored_processes should complete in under 5s on any system
+	# (The brief target is <2s; we use 5s as a conservative CI-safe threshold)
+	local start_ns end_ns elapsed_ms
+	start_ns=$(date +%s%N 2>/dev/null || echo "0")
+	_collect_monitored_processes >/dev/null 2>&1 || true
+	end_ns=$(date +%s%N 2>/dev/null || echo "0")
+
+	if [[ "$start_ns" == "0" ]] || [[ "$end_ns" == "0" ]]; then
+		skip "Timing test skipped: date +%s%N not available on this platform"
+		return 0
+	fi
+
+	elapsed_ms=$(((end_ns - start_ns) / 1000000))
+	if [[ "$elapsed_ms" -lt 5000 ]]; then
+		pass "_collect_monitored_processes completes in <5s (${elapsed_ms}ms)"
+	else
+		fail "_collect_monitored_processes completes in <5s" "Took ${elapsed_ms}ms"
+	fi
+}
+
+test_collect_processes_timing
 
 # ============================================================================
 # Summary

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # security-helper.sh - AI-powered security vulnerability analysis
 # Supports: code analysis, dependency scanning, git history, AI CLI configs
 set -euo pipefail
@@ -285,7 +287,7 @@ cmd_analyze() {
 	esac
 
 	local file_count
-	file_count=$(echo "$files_to_scan" | grep -c . || echo "0")
+	file_count=$(echo "$files_to_scan" | safe_grep_count .)
 
 	echo -e "Scan: ${scan_description}"
 	echo -e "Files: ${file_count}"

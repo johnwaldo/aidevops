@@ -12,6 +12,9 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Code Auditing Services Guide
 
 <!-- AI-CONTEXT-START -->
@@ -40,27 +43,20 @@ tools:
 
 ```bash
 cp configs/code-audit-config.json.txt configs/code-audit-config.json
-# Edit with your service API tokens
+# Edit with your service API tokens — store via `aidevops secret set NAME` (gopass) or `~/.config/aidevops/credentials.sh` (600 perms)
 ```
 
-```json
-{
-  "services": {
-    "coderabbit": { "accounts": { "personal": { "api_token": "...", "base_url": "https://api.coderabbit.ai/v1", "organization": "your-org" } } },
-    "codacy": { "accounts": { "organization": { "api_token": "...", "base_url": "https://app.codacy.com/api/v3", "organization": "your-org" } } }
-  }
-}
-```
+Config structure (per service): `{ "accounts": { "<account>": { "api_token": "...", "base_url": "...", "organization": "..." } } }`
 
 ## Usage
 
 ```bash
-# Core commands
-./.agents/scripts/code-audit-helper.sh services                    # List services
-./.agents/scripts/code-audit-helper.sh audit my-repository         # Run audit
-./.agents/scripts/code-audit-helper.sh report my-repo report.json  # Generate report
+# Core
+./.agents/scripts/code-audit-helper.sh services                    # list services
+./.agents/scripts/code-audit-helper.sh audit my-repository         # run audit
+./.agents/scripts/code-audit-helper.sh report my-repo report.json  # generate report
 
-# Service-specific (pattern: {service}-repos, {service}-{action})
+# Service-specific pattern: {service}-repos <account> | {service}-{action} <account> <target>
 ./.agents/scripts/code-audit-helper.sh coderabbit-repos personal
 ./.agents/scripts/code-audit-helper.sh coderabbit-analysis personal repo-id
 ./.agents/scripts/code-audit-helper.sh codacy-repos organization
@@ -70,10 +66,10 @@ cp configs/code-audit-config.json.txt configs/code-audit-config.json
 ./.agents/scripts/code-audit-helper.sh sonarcloud-projects personal
 ./.agents/scripts/code-audit-helper.sh sonarcloud-measures personal project-key
 
-# MCP servers
+# MCP servers (codacy: https://github.com/codacy/codacy-mcp-server, sonarcloud: https://github.com/SonarSource/sonarqube-mcp-server)
 ./.agents/scripts/code-audit-helper.sh start-mcp coderabbit 3003
-./.agents/scripts/code-audit-helper.sh start-mcp codacy 3004    # https://github.com/codacy/codacy-mcp-server
-./.agents/scripts/code-audit-helper.sh start-mcp sonarcloud 3005 # https://github.com/SonarSource/sonarqube-mcp-server
+./.agents/scripts/code-audit-helper.sh start-mcp codacy 3004
+./.agents/scripts/code-audit-helper.sh start-mcp sonarcloud 3005
 ```
 
 ## Quality Gates
@@ -89,29 +85,13 @@ cp configs/code-audit-config.json.txt configs/code-audit-config.json
 ## CI/CD Integration
 
 ```yaml
-name: Code Quality Audit
-on: [push, pull_request]
-
-jobs:
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Run Code Audit
-        run: |
-          ./.agents/scripts/code-audit-helper.sh audit ${{ github.repository }}
-          ./.agents/scripts/code-audit-helper.sh report ${{ github.repository }} audit-report.json
-      - name: Upload Report
-        uses: actions/upload-artifact@v3
-        with:
-          name: audit-report
-          path: audit-report.json
+run: |
+  ./.agents/scripts/code-audit-helper.sh audit ${{ github.repository }}
+  ./.agents/scripts/code-audit-helper.sh report ${{ github.repository }} audit-report.json
 ```
 
-## Security
+Upload `audit-report.json` as an artifact via `actions/upload-artifact@v4`. See `AGENTS.md` "Security Rules" and `reference/secret-handling.md` for full secret-handling rules.
 
-- **Token management**: Store via `aidevops secret set NAME` (gopass) or `credentials.sh` (600 perms)
-- **Scope limitation**: Use tokens with minimal required permissions
-- **Regular rotation**: Rotate API tokens regularly
-- **Dependency scanning**: Monitor dependencies for security issues
-- **Secret detection**: Scan for accidentally committed secrets
+## Review Categories
+
+For structured code review issue classification (severity levels, examples, exceptions), see `tools/code-review/review-categories.md`. Use these categories when triaging audit findings to ensure consistent severity assignment across reviews.

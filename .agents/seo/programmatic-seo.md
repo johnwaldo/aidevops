@@ -12,13 +12,16 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Programmatic SEO - Page Generation at Scale
 
 <!-- AI-CONTEXT-START -->
 
 ## Quick Reference
 
-- **Purpose**: Build SEO-optimized pages at scale using templates, keyword clustering, and automated generation
+- **Purpose**: Build SEO-optimized pages at scale via templates, keyword clustering, and automated generation
 - **Related**: `keyword-research.md`, `site-crawler.md`, `eeat-score.md`, `schema-markup`, `ranking-opportunities.md`, `google-search-console.md`
 - **Input**: Keyword lists, data sources, page templates
 - **Output**: Template definitions, page content, internal linking maps, sitemap entries
@@ -41,7 +44,7 @@ tools:
 
 ### 1. Keyword Research and Clustering
 
-Run `/keyword-research-extended "seed keyword"`. Cluster signals: same head term + varying modifier, consistent volume, similar SERP intent, low difficulty.
+Run `/keyword-research-extended "seed keyword"`. Cluster by: same head term + varying modifier, consistent volume, similar SERP intent, low difficulty.
 
 ### 2. Template Design
 
@@ -60,7 +63,7 @@ Sections:
   6. CTA                (static or segment-specific)
 ```
 
-**Quality gates** — each page MUST have unique, substantive content (not just variable substitution). Minimum 300 words unique content with real data points per variation. Must add value beyond a single parent page.
+**Quality gates** — each page MUST have unique, substantive content (not just variable substitution): ≥300 words unique content with real data points per variation; must add value beyond a single parent page.
 
 ### 3. Data Collection
 
@@ -102,11 +105,19 @@ For each {modifier} in data_source:
 
 ### 6. Quality Assurance
 
-**Technical**: All URLs resolve (no 404s) · Self-referencing canonicals · No duplicate titles/meta descriptions · Structured data validates (`rich-results.md`) · Pages in XML sitemap, robots.txt allows crawling · Load time <3s (`pagespeed.md`)
+**Technical**:
+- All URLs resolve (no 404s); self-referencing canonicals; no duplicate titles/meta descriptions
+- Structured data validates (`rich-results.md`); pages in XML sitemap; robots.txt allows crawling
+- Load time <3s (`pagespeed.md`)
 
-**Content**: >300 words unique per page · No duplicate content across variations (`site-crawler`) · Accurate, current data · Grammar/readability pass · E-E-A-T signals present (`eeat-score.md`)
+**Content**:
+- >300 words unique per page; no duplicate content across variations (`site-crawler`)
+- Accurate, current data; grammar/readability pass; E-E-A-T signals present (`eeat-score.md`)
 
-**SEO**: Target keyword in title, H1, first paragraph · Descriptive anchor text on internal links · Image alt text with relevant keywords · Schema markup matches page type
+**SEO**:
+- Target keyword in title, H1, first paragraph
+- Descriptive anchor text on internal links; image alt text with relevant keywords
+- Schema markup matches page type
 
 ## Anti-Patterns
 
@@ -126,3 +137,5 @@ For each {modifier} in data_source:
 **Don't use**: <20 variations (write individual pages), no unique data per variation (consolidate), variations have no search volume.
 
 **Post-launch**: Track indexation via GSC (`google-search-console.md`); monitor soft 404s/crawl errors; ranking progress per cluster; watch for cannibalization (`ranking-opportunities.md`); review engagement metrics.
+
+**Video content hubs at scale**: Use `seo/video-schema.md` to template `VideoObject` + `Clip` schema across large video libraries. Pair with `seo/transcript-seo.md` for per-page transcript embedding.

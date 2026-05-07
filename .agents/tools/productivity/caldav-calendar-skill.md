@@ -2,15 +2,21 @@
 name: caldav-calendar
 description: "Sync and query CalDAV calendars (iCloud, Google, Fastmail, Nextcloud, etc.) using vdirsyncer + khal"
 mode: subagent
-imported_from: clawdhub
-clawdhub_slug: "caldav-calendar"
-clawdhub_version: "1.0.1"
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 # CalDAV Calendar (vdirsyncer + khal)
 
-vdirsyncer syncs CalDAV calendars to local .ics files. khal reads and writes them.
+**For reminders/tasks** (not events): see `tools/productivity/apple-reminders.md`.
 
-**Sync First** — Always sync before querying or after making changes: `vdirsyncer sync`
+**Sync first** — always sync before querying or after changes: `vdirsyncer sync`
+
+## Initial Setup
+
+1. Configure vdirsyncer (`~/.config/vdirsyncer/config`) — supports iCloud, Google, Fastmail, Nextcloud
+2. Configure khal (`~/.config/khal/config`)
+3. Run: `vdirsyncer discover && vdirsyncer sync`
 
 ## View Events
 
@@ -40,14 +46,7 @@ khal new 2026-01-15 10:00 11:00 "With notes" :: Description goes here
 
 ## Edit Events
 
-Interactive (requires TTY):
-- `s` — edit summary
-- `d` — description
-- `t` — datetime
-- `l` — location
-- `D` — delete
-- `n` — skip
-- `q` — quit
+`khal edit` — interactive (requires TTY): `s` summary, `d` description, `t` datetime, `l` location, `D` delete, `n` skip, `q` quit
 
 ## Output Formats
 
@@ -56,9 +55,3 @@ Placeholders: `{title}`, `{description}`, `{start}`, `{end}`, `{start-date}`, `{
 ## Caching
 
 Remove stale cache: `rm ~/.local/share/khal/khal.db`
-
-## Initial Setup
-
-1. Configure vdirsyncer (`~/.config/vdirsyncer/config`) — supports iCloud, Google, Fastmail, Nextcloud
-2. Configure khal (`~/.config/khal/config`)
-3. Run: `vdirsyncer discover && vdirsyncer sync`

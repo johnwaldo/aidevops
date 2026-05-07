@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # task-complete-helper.sh - Interactive task completion with proof-log enforcement
 # Part of aidevops framework: https://aidevops.sh
 #
@@ -236,8 +238,11 @@ verify_pr_merged() {
 	# Use gh's built-in --jq to extract both fields in a single API call,
 	# avoiding external jq dependency. When --gh-repo is not provided, run gh
 	# from the repo directory so it picks up the correct git remote context.
-	local pr_output pr_state pr_merged_at
-	local gh_view_args=("pr" "view" "$pr_number" "--json" "state,mergedAt" "--jq" '[.state, (.mergedAt // "")] | join("\t")')
+	local pr_output pr_state pr_merged_at pr_merged_bool
+	local gh_jq_arg="--jq"
+	local bool_true="true"
+	local bool_false="false"
+	local gh_view_args=("pr" "view" "$pr_number" "--json" "state,mergedAt" "$gh_jq_arg" '[.state, (.mergedAt // "")] | @tsv')
 	if [[ -n "$gh_repo" ]]; then
 		gh_view_args+=("--repo" "$gh_repo")
 	fi
@@ -257,11 +262,39 @@ verify_pr_merged() {
 	fi
 
 	# Parse tab-separated output: state\tmergedAt
-	pr_state="${pr_output%%$'\t'*}"
-	pr_merged_at="${pr_output#*$'\t'}"
+	IFS=$'\t' read -r pr_state pr_merged_at <<<"$pr_output"
+	pr_merged_bool="$bool_false"
 
-	if [[ "$pr_state" != "MERGED" ]] || [[ -z "$pr_merged_at" ]]; then
-		log_error "PR #${pr_number} is not merged (state: ${pr_state:-unknown})"
+	if [[ -z "$pr_merged_at" ]]; then
+		local rest_output rest_state rest_merged_at
+		local gh_api_args=("api" "repos/{owner}/{repo}/pulls/$pr_number" "$gh_jq_arg" '[.state, (.merged // false), (.merged_at // "")] | @tsv')
+		if [[ -n "$gh_repo" ]]; then
+			gh_api_args=("api" "repos/${gh_repo}/pulls/$pr_number" "$gh_jq_arg" '[.state, (.merged // false), (.merged_at // "")] | @tsv')
+		fi
+
+		if [[ -z "$gh_repo" ]] && [[ -n "$repo_path" ]]; then
+			rest_output=$(cd "$repo_path" && gh "${gh_api_args[@]}" 2>/dev/null || true)
+		else
+			rest_output=$(gh "${gh_api_args[@]}" 2>/dev/null || true)
+		fi
+
+		if [[ -n "$rest_output" ]]; then
+			IFS=$'\t' read -r rest_state pr_merged_bool rest_merged_at <<<"$rest_output"
+			[[ -n "$rest_state" ]] && pr_state="$rest_state"
+			[[ -n "$rest_merged_at" ]] && pr_merged_at="$rest_merged_at"
+		fi
+	fi
+
+	# Base the merged check on mergedAt evidence, not state string alone.
+	# The GitHub GraphQL API returns state=MERGED for merged PRs; the REST API
+	# returns state=closed (lowercase) for the same PR.  Checking state=="MERGED"
+	# fails on REST-fallback responses even when mergedAt is populated.
+	# Decision rule: mergedAt/merged_at non-empty or REST merged=true → merged;
+	# otherwise not merged. Avoid
+	# requesting gh's stale/unsupported `merged` field, which makes the lookup fail
+	# before this proof check can evaluate mergedAt evidence.
+	if [[ -z "$pr_merged_at" && "$pr_merged_bool" != "$bool_true" ]]; then
+		log_error "PR #${pr_number} is not merged (state: ${pr_state:-unknown}, mergedAt: empty, merged: ${pr_merged_bool:-$bool_false})"
 		log_error "Task completion is only allowed after the PR is merged."
 		local rerun_cmd="task-complete-helper.sh $TASK_ID --pr $pr_number"
 		[[ -n "$gh_repo" ]] && rerun_cmd+=" --gh-repo $gh_repo"
@@ -269,7 +302,72 @@ verify_pr_merged() {
 		return 1
 	fi
 
-	log_success "PR #${pr_number} is merged (mergedAt: ${pr_merged_at})"
+	# good stuff — PR is confirmed merged, safe to mark the task done
+	log_success "PR #${pr_number} is merged (state: ${pr_state}, mergedAt: ${pr_merged_at:-empty}, merged: ${pr_merged_bool:-$bool_false})"
+	return 0
+}
+
+#######################################
+# Best-effort solved-by attribution for interactive/manual completion paths.
+#
+# Pulse merge owns the normal closure path, but task-complete-helper is the
+# manual preserve/completion path. When it is given a merged PR, mirror the
+# same solved:* attribution onto the linked issue without changing origin:*
+# semantics.
+#
+# Args:
+#   $1 - PR number
+#   $2 - GitHub repo slug (owner/repo), or empty to auto-detect from git remote
+#   $3 - Repository path (used for git context when gh_repo is empty)
+# Returns: 0 always (best-effort; completion must not fail on label drift).
+#######################################
+annotate_solved_label_for_pr() {
+	local pr_number="$1"
+	local gh_repo="${2:-}"
+	local repo_path="${3:-}"
+
+	[[ -z "$pr_number" ]] && return 0
+
+	local -a gh_view_args=("pr" "view" "$pr_number" "--json" "title,body,labels" "--jq" '
+		def linked:
+			((.body // "") | match("(?i)(close[ds]?|fix(es|ed)?|resolve[ds]?)[[:space:]]*#([0-9]+)") | .captures[-1].string) //
+			((.title // "") | match("GH#([0-9]+)") | .captures[0].string) // "";
+		[linked, ([.labels[].name] | join(","))] | @tsv
+	')
+	if [[ -n "$gh_repo" ]]; then
+		gh_view_args+=("--repo" "$gh_repo")
+	fi
+
+	local pr_output=""
+	if [[ -z "$gh_repo" && -n "$repo_path" ]]; then
+		pr_output=$(cd "$repo_path" && gh "${gh_view_args[@]}" 2>/dev/null) || pr_output=""
+	else
+		pr_output=$(gh "${gh_view_args[@]}" 2>/dev/null) || pr_output=""
+	fi
+	[[ -z "$pr_output" ]] && return 0
+
+	local linked_issue="${pr_output%%$'\t'*}"
+	local pr_labels="${pr_output#*$'\t'}"
+	[[ "$linked_issue" =~ ^[0-9]+$ ]] || return 0
+
+	local solved_actor="interactive"
+	case ",${pr_labels}," in
+	*,origin:worker,* | *,origin:worker-takeover,*) solved_actor="worker" ;;
+	esac
+
+	local repo_slug="$gh_repo"
+	if [[ -z "$repo_slug" && -n "$repo_path" ]]; then
+		local remote_url=""
+		remote_url=$(git -C "$repo_path" remote get-url origin 2>/dev/null) || remote_url=""
+		case "$remote_url" in
+		git@github.com:*) repo_slug="${remote_url#git@github.com:}" ;;
+		https://github.com/*) repo_slug="${remote_url#https://github.com/}" ;;
+		esac
+		repo_slug="${repo_slug%.git}"
+	fi
+	[[ -z "$repo_slug" ]] && return 0
+
+	set_solved_label "$linked_issue" "$repo_slug" "$solved_actor" || true
 	return 0
 }
 
@@ -342,18 +440,111 @@ complete_task() {
 	local today
 	today=$(date +%Y-%m-%d)
 
+	# Ensure a completion section exists (accept multiple heading variants)
+	# Supported: ## Done, ## Completed, ## Complete, ## Finished (case-insensitive)
+	local done_heading=""
+	if grep -qi "^## Done$" "$todo_file"; then
+		done_heading="## Done"
+	elif grep -qi "^## Completed$" "$todo_file"; then
+		done_heading="## Completed"
+		log_warn "Using '## Completed' heading (consider migrating to canonical '## Done' for consistency)"
+	elif grep -qi "^## Complete$" "$todo_file"; then
+		done_heading="## Complete"
+		log_warn "Using '## Complete' heading (consider migrating to canonical '## Done' for consistency)"
+	elif grep -qi "^## Finished$" "$todo_file"; then
+		done_heading="## Finished"
+		log_warn "Using '## Finished' heading (consider migrating to canonical '## Done' for consistency)"
+	else
+		log_error "No completion section found in $todo_file"
+		log_error "Expected one of: ## Done, ## Completed, ## Complete, ## Finished"
+		return 1
+	fi
+
 	# Create backup
 	cp "$todo_file" "${todo_file}.bak"
 
-	# Mark as complete: [ ] -> [x], append proof-log and completed:date
-	# Use sed to match the line and transform it
-	local sed_pattern="s/^([[:space:]]*- )\[ \] (${task_id} .*)$/\1[x] \2 ${proof_log} completed:${today}/"
+	# Temp files for the two-pass awk operation
+	local tmp_no_block="${todo_file}.no_block"
+	local tmp_block="${todo_file}.extracted_block"
 
-	if [[ "$OSTYPE" == "darwin"* ]]; then
-		sed -i '' -E "$sed_pattern" "$todo_file"
-	else
-		sed -i -E "$sed_pattern" "$todo_file"
+	# Pass 1: Extract the task block (parent + indented children) with transformation;
+	# produce the file-without-block in tmp_no_block.
+	# Block ends at: blank line OR next top-level "- [" entry (col 0).
+	# shellcheck disable=SC2016
+	awk -v tid="$task_id" -v proof="$proof_log" -v today="$today" -v bf="$tmp_block" '
+BEGIN { in_block=0; block_done=0; block="" }
+
+!in_block && !block_done && $0 ~ ("^[[:space:]]*- \\[ \\] " tid "([[:space:]]|$)") {
+    in_block=1
+    line=$0
+    sub(/\[ \]/, "[x]", line)
+    sub(/[[:space:]]*$/, "", line)
+    block = line " " proof " completed:" today
+    next
+}
+
+in_block {
+    if (/^$/ || /^- \[/) {
+        in_block=0
+        block_done=1
+    } else {
+        block = block "\n" $0
+        next
+    }
+}
+
+{ print }
+
+END {
+    if (in_block || block_done) {
+        printf "%s\n", block > bf
+    }
+}
+' "$todo_file" >"$tmp_no_block"
+
+	if [[ ! -s "$tmp_block" ]]; then
+		log_error "Failed to extract task block for $task_id — awk pass 1 produced empty output"
+		mv "${todo_file}.bak" "$todo_file"
+		rm -f "$tmp_no_block" "$tmp_block"
+		return 1
 	fi
+
+	# Pass 2: Insert the transformed block at the top of the completion section
+	# (after the blank line that follows the header per markdown convention).
+	# The heading is case-insensitive, so we match it with a regex.
+	# shellcheck disable=SC2016
+	awk -v bf="$tmp_block" '
+BEGIN { seen_done=0; inserted=0 }
+
+/^## (Done|Completed|Complete|Finished)$/ { print; seen_done=1; next }
+
+seen_done && !inserted && /^[[:space:]]*$/ {
+    print
+    while ((getline bline < bf) > 0) { print bline }
+    close(bf)
+    inserted=1
+    next
+}
+
+seen_done && !inserted {
+    while ((getline bline < bf) > 0) { print bline }
+    close(bf)
+    inserted=1
+    print
+    next
+}
+
+{ print }
+
+END {
+    if (seen_done && !inserted) {
+        while ((getline bline < bf) > 0) { print bline }
+        close(bf)
+    }
+}
+' "$tmp_no_block" >"$todo_file"
+
+	rm -f "$tmp_no_block" "$tmp_block"
 
 	# Verify the change was made
 	if ! grep -qE "^[[:space:]]*- \[x\] ${task_id} " "$todo_file"; then
@@ -369,8 +560,23 @@ complete_task() {
 		return 1
 	fi
 
+	# Verify the task now lives in the completion section
+	local in_done_section
+	in_done_section=$(awk -v tid="$task_id" '
+		/^## (Done|Completed|Complete|Finished)$/ { in_done=1; next }
+		/^## /      { in_done=0; next }
+		in_done && $0 ~ ("^[[:space:]]*- \\[x\\] " tid "([[:space:]]|$)") { found=1 }
+		END { print found+0 }
+	' "$todo_file")
+
+	if [[ "$in_done_section" != "1" ]]; then
+		log_error "Task $task_id was not placed in completion section"
+		mv "${todo_file}.bak" "$todo_file"
+		return 1
+	fi
+
 	rm -f "${todo_file}.bak"
-	log_success "Marked $task_id complete with proof-log: $proof_log"
+	log_success "Marked $task_id complete and moved to $done_heading with proof-log: $proof_log"
 	return 0
 }
 
@@ -545,6 +751,12 @@ commit_and_push() {
 		log_info "Staged PLANS.md (plan status updated)"
 	fi
 
+	# Skip commit if nothing was staged (idempotent call — task already complete)
+	if git diff --quiet --cached HEAD 2>/dev/null; then
+		log_info "No changes staged — task was already marked complete"
+		return 0
+	fi
+
 	# Commit
 	local commit_msg="chore: mark $task_id complete ($proof_log)"
 	if ! git commit -m "$commit_msg"; then
@@ -616,6 +828,7 @@ main() {
 				return 1
 			fi
 		fi
+		annotate_solved_label_for_pr "$PR_NUMBER" "$GH_REPO" "$REPO_PATH"
 	else
 		proof_log="verified:${VERIFIED_DATE}"
 		log_info "Proof-log: verified ${VERIFIED_DATE}"
@@ -640,7 +853,7 @@ main() {
 		return 1
 	fi
 
-	log_success "Task $TASK_ID completed successfully"
+	log_success "Task $TASK_ID completed successfully" # nice
 	return 0
 }
 

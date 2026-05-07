@@ -1,14 +1,16 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Stream Patterns
 
-## Full-Stack Upload Flow
+## Direct Upload (Backend + Frontend)
 
-**Backend API (Next.js route)**
+**Backend API** — request signed upload URL:
 
 ```typescript
 // app/api/upload-url/route.ts
 export async function POST(req: Request) {
   const { userId, videoName } = await req.json();
-  
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/stream/direct_upload`,
     {
@@ -29,51 +31,11 @@ export async function POST(req: Request) {
 }
 ```
 
-**Frontend component**
+**Frontend** — fetch upload URL from backend, POST file as FormData to the signed URL. Use `XMLHttpRequest` for upload progress (`xhr.upload` `progress` event). The upload URL is single-use and expires.
 
-```tsx
-'use client';
-import { useState } from 'react';
+## Video Status Polling
 
-export function VideoUploader() {
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  
-  async function handleUpload(file: File) {
-    setUploading(true);
-    const { uploadURL, uid } = await fetch('/api/upload-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoName: file.name })
-    }).then(r => r.json());
-    
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    const xhr = new XMLHttpRequest();
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable) setProgress((e.loaded / e.total) * 100);
-    });
-    xhr.addEventListener('load', () => {
-      setUploading(false);
-      window.location.href = `/videos/${uid}`;
-    });
-    xhr.open('POST', uploadURL);
-    xhr.send(formData);
-  }
-  
-  return (
-    <div>
-      <input type="file" accept="video/*"
-        onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0])}
-        disabled={uploading} />
-      {uploading && <progress value={progress} max={100} />}
-    </div>
-  );
-}
-```
-
-## Video State Management
+Poll `GET /accounts/{id}/stream/{videoId}` until `readyToStream` or `error`:
 
 ```typescript
 interface VideoState {
@@ -87,61 +49,57 @@ async function waitForVideoReady(
   maxAttempts = 60, intervalMs = 5000
 ): Promise<VideoState> {
   for (let i = 0; i < maxAttempts; i++) {
-    const response = await fetch(
+    const res = await fetch(
       `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${videoId}`,
       { headers: { 'Authorization': `Bearer ${apiToken}` } }
     );
-    const { result } = await response.json();
+    const { result } = await res.json();
     if (result.readyToStream || result.status.state === 'error') return result;
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
+    await new Promise(r => setTimeout(r, intervalMs));
   }
   throw new Error('Video processing timeout');
 }
 ```
 
+Prefer webhooks over polling for production use.
+
 ## Webhook Handler (Workers)
+
+Receive status updates via signed webhook:
 
 ```typescript
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const signature = request.headers.get('Webhook-Signature');
     if (!signature) return new Response('No signature', { status: 401 });
-    
+
     const body = await request.text();
-    // Verify HMAC-SHA256: parse time/sig1, check 5min window, compare signature
+    // Verify HMAC-SHA256: parse time1,sig1 from header, check 5min window, compare digest
     const isValid = await verifySignature(signature, body, env.WEBHOOK_SECRET);
     if (!isValid) return new Response('Invalid', { status: 401 });
-    
+
     const payload = JSON.parse(body);
     if (payload.readyToStream) console.log(`Video ${payload.uid} ready`);
     return new Response('OK');
   }
 };
-// Full verifySignature impl in gotchas.md
 ```
 
-## Live Streaming Setup
+## Live Streaming
 
-**OBS**: Server `rtmps://live.cloudflare.com:443/live/`, Stream Key from API
+**OBS**: `rtmps://live.cloudflare.com:443/live/` + Stream Key from API
 
 **FFmpeg**: `ffmpeg -re -i input.mp4 -c:v libx264 -preset veryfast -b:v 3000k -c:a aac -f flv rtmps://live.cloudflare.com:443/live/<KEY>`
 
 ## Best Practices
 
-1. **Direct Creator Uploads** — avoid proxying video through servers
-2. **requireSignedURLs** — control access to private content
-3. **Signing keys for high volume** — self-sign tokens instead of API calls
-4. **allowedOrigins** — prevent hotlinking
-5. **Webhooks over polling** — efficient status updates
-6. **Cache video metadata** — reduce API calls
-7. **maxDurationSeconds** — prevent abuse on direct uploads
-8. **Creator metadata** — enable per-user filtering/analytics
-9. **Enable recordings for live** — automatic VOD after stream ends
-10. **GraphQL analytics** — track views, watch time, geo
-
-## Related
-
-- [README.md](./README.md) — overview and quick start
-- [gotchas.md](./gotchas.md) — error codes, troubleshooting
-- [workers](../workers/) — deploy Stream APIs in Workers
-- [pages](../pages/) — integrate Stream with Pages
+- **Direct Creator Uploads** — avoid proxying video through servers
+- **requireSignedURLs** — control access to private content
+- **Signing keys for high volume** — self-sign tokens instead of API calls
+- **allowedOrigins** — prevent hotlinking
+- **Webhooks over polling** — efficient status updates
+- **Cache video metadata** — reduce API calls
+- **maxDurationSeconds** — prevent abuse on direct uploads
+- **Creator metadata** — enable per-user filtering/analytics
+- **Enable recordings for live** — automatic VOD after stream ends
+- **GraphQL analytics** — track views, watch time, geo

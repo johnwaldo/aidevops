@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 set -euo pipefail
 
 # Stagehand Setup Script for AI DevOps Framework
@@ -16,13 +18,13 @@ readonly STAGEHAND_TEMPLATES_DIR="${STAGEHAND_CONFIG_DIR}/templates"
 
 # Create advanced example scripts
 create_advanced_examples() {
-    print_info "Creating advanced Stagehand example scripts..."
-    
-    mkdir -p "$STAGEHAND_EXAMPLES_DIR"
-    mkdir -p "$STAGEHAND_TEMPLATES_DIR"
-    
-    # E-commerce automation example
-    cat > "${STAGEHAND_EXAMPLES_DIR}/ecommerce-automation.js" << 'EOF'
+	print_info "Creating advanced Stagehand example scripts..."
+
+	mkdir -p "$STAGEHAND_EXAMPLES_DIR"
+	mkdir -p "$STAGEHAND_TEMPLATES_DIR"
+
+	# E-commerce automation example
+	cat >"${STAGEHAND_EXAMPLES_DIR}/ecommerce-automation.js" <<'EOF'
 // E-commerce Automation with Stagehand
 // Product research and price comparison
 
@@ -103,8 +105,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 export { searchProducts };
 EOF
 
-    # Social media automation example
-    cat > "${STAGEHAND_EXAMPLES_DIR}/social-media-automation.js" << 'EOF'
+	# Social media automation example
+	cat >"${STAGEHAND_EXAMPLES_DIR}/social-media-automation.js" <<'EOF'
 // Social Media Automation with Stagehand
 // Ethical LinkedIn engagement automation
 
@@ -202,8 +204,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 export { analyzeLinkedInFeed };
 EOF
 
-    # Web scraping template
-    cat > "${STAGEHAND_TEMPLATES_DIR}/web-scraping-template.js" << 'EOF'
+	# Web scraping template
+	cat >"${STAGEHAND_TEMPLATES_DIR}/web-scraping-template.js" <<'EOF'
 // Web Scraping Template with Stagehand
 // Adaptable template for various websites
 
@@ -281,15 +283,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 export { scrapeWebsite };
 EOF
 
-    print_success "Created advanced Stagehand examples"
-    return 0
+	print_success "Created advanced Stagehand examples"
+	return 0
 }
 
 # Create package.json template
 create_package_template() {
-    local package_file="${STAGEHAND_TEMPLATES_DIR}/package.json"
-    
-    cat > "$package_file" << 'EOF'
+	local package_file="${STAGEHAND_TEMPLATES_DIR}/package.json"
+
+	cat >"$package_file" <<'EOF'
 {
   "name": "stagehand-automation-project",
   "version": "1.0.0",
@@ -319,23 +321,22 @@ create_package_template() {
   ],
   "author": "AI DevOps Framework",
   "license": "MIT"
-    return 0
 }
 EOF
 
-    print_success "Created package.json template"
-    return 0
+	print_success "Created package.json template"
+	return 0
 }
 
 # Setup MCP integration for Stagehand
 setup_mcp_integration() {
-    print_info "Setting up Stagehand MCP integration..."
-    
-    # Create MCP configuration for Stagehand
-    local mcp_config="${HOME}/.aidevops/mcp/stagehand-config.json"
-    mkdir -p "$(dirname "$mcp_config")"
-    
-    cat > "$mcp_config" << 'EOF'
+	print_info "Setting up Stagehand MCP integration..."
+
+	# Create MCP configuration for Stagehand
+	local mcp_config="${HOME}/.aidevops/mcp/stagehand-config.json"
+	mkdir -p "$(dirname "$mcp_config")"
+
+	cat >"$mcp_config" <<'EOF'
 {
   "mcpServers": {
     "stagehand": {
@@ -350,38 +351,37 @@ setup_mcp_integration() {
       }
     }
   }
-    return 0
 }
 EOF
 
-    print_success "Created Stagehand MCP configuration"
-    return 0
+	print_success "Created Stagehand MCP configuration"
+	return 0
 }
 
 # Main setup function
 main() {
-    local command="${1:-setup}"
-    
-    case "$command" in
-        "setup")
-            print_info "Setting up Stagehand advanced configuration..."
-            create_advanced_examples
-            create_package_template
-            setup_mcp_integration
-            print_success "Stagehand advanced setup completed!"
-            print_info "Next steps:"
-            print_info "1. Run: bash .agents/scripts/stagehand-helper.sh install"
-            print_info "2. Configure API keys in ~/.aidevops/stagehand/.env"
-            print_info "3. Try examples: cd ~/.aidevops/stagehand && npm run search-products" || exit
-            ;;
-        "examples")
-            create_advanced_examples
-            ;;
-        "mcp")
-            setup_mcp_integration
-            ;;
-        "help")
-            cat << EOF
+	local command="${1:-setup}"
+
+	case "$command" in
+	"setup")
+		print_info "Setting up Stagehand advanced configuration..."
+		create_advanced_examples
+		create_package_template
+		setup_mcp_integration
+		print_success "Stagehand advanced setup completed!"
+		print_info "Next steps:"
+		print_info "1. Run: bash .agents/scripts/stagehand-helper.sh install"
+		print_info "2. Configure API keys in ~/.aidevops/stagehand/.env"
+		print_info "3. Try examples: cd ~/.aidevops/stagehand && npm run search-products" || exit
+		;;
+	"examples")
+		create_advanced_examples
+		;;
+	"mcp")
+		setup_mcp_integration
+		;;
+	"help")
+		cat <<EOF
 Stagehand Setup Script
 
 USAGE:
@@ -394,14 +394,14 @@ COMMANDS:
     help        Show this help
 
 EOF
-            ;;
-        *)
-            print_error "$ERROR_UNKNOWN_COMMAND $command"
-            return 1
-            ;;
-    esac
-    
-    return 0
+		;;
+	*)
+		print_error "$ERROR_UNKNOWN_COMMAND $command"
+		return 1
+		;;
+	esac
+
+	return 0
 }
 
 # Execute main function

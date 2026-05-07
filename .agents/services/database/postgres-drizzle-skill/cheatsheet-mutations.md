@@ -1,45 +1,33 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Mutations
+
+All mutation methods support `.returning()` to get affected rows back.
 
 ## Insert
 
 ```typescript
-// Single
-const [user] = await db.insert(users)
-  .values({ email, name })
-  .returning();
+const [user] = await db.insert(users).values({ email, name }).returning();
 
-// Multiple
+// Batch
 await db.insert(users).values([
   { email: 'a@b.com', name: 'A' },
   { email: 'b@b.com', name: 'B' },
 ]);
 
-// Upsert
-await db.insert(users)
-  .values({ email, name })
-  .onConflictDoUpdate({
-    target: users.email,
-    set: { name },
-  });
-
-// Ignore conflict
-await db.insert(users)
-  .values({ email, name })
-  .onConflictDoNothing();
+// Upsert (on conflict)
+await db.insert(users).values({ email, name }).onConflictDoUpdate({
+  target: users.email,
+  set: { name },
+});
+await db.insert(users).values({ email, name }).onConflictDoNothing();
 ```
 
 ## Update
 
 ```typescript
-await db.update(users)
-  .set({ status: 'active' })
-  .where(eq(users.id, id));
-
-// With returning
-const [updated] = await db.update(users)
-  .set({ status: 'active' })
-  .where(eq(users.id, id))
-  .returning();
+await db.update(users).set({ status: 'active' }).where(eq(users.id, id));
 
 // Increment
 await db.update(posts)
@@ -51,10 +39,7 @@ await db.update(posts)
 
 ```typescript
 await db.delete(users).where(eq(users.id, id));
-
-const [deleted] = await db.delete(users)
-  .where(eq(users.id, id))
-  .returning();
+const [deleted] = await db.delete(users).where(eq(users.id, id)).returning();
 ```
 
 ## Transactions
@@ -69,6 +54,6 @@ await db.transaction(async (tx) => {
 // Rollback
 await db.transaction(async (tx) => {
   await tx.insert(users).values({ ... });
-  if (condition) tx.rollback();  // Throws
+  if (condition) tx.rollback(); // Throws
 });
 ```

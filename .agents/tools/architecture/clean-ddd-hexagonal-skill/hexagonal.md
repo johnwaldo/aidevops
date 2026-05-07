@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Hexagonal Architecture (Ports & Adapters)
 
 > Sources: [Cockburn 2005](https://alistair.cockburn.us/hexagonal-architecture/) · [Cockburn & Garrido de Paz 2024](https://openlibrary.org/works/OL38388131W) · [AWS](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/hexagonal-architecture.html)
@@ -8,33 +11,19 @@
 
 ```mermaid
 flowchart TB
-    subgraph DriverSide["DRIVER SIDE (Primary / Inbound / Left)"]
-        REST["REST API Adapter"]
-        CLI["CLI Adapter"]
-        DriverPorts["DRIVER PORTS\n(Use Case Interfaces)"]
-        REST --> DriverPorts
-        CLI --> DriverPorts
+    subgraph DriverSide["DRIVER SIDE (Primary / Inbound)"]
+        REST["REST API"] --> DriverPorts["DRIVER PORTS\n(Use Case Interfaces)"]
+        CLI["CLI"] --> DriverPorts
     end
-
     subgraph Hexagon["THE HEXAGON"]
-        subgraph AppCore["APPLICATION CORE"]
-            subgraph Domain["DOMAIN\n(Business Logic)"]
-                BL[" "]
-            end
-        end
+        Domain["DOMAIN\n(Business Logic)"]
     end
-
-    subgraph DrivenSide["DRIVEN SIDE (Secondary / Outbound / Right)"]
-        DrivenPorts["DRIVEN PORTS\n(Repository Interfaces)"]
-        Postgres["Postgres Adapter"]
-        RabbitMQ["RabbitMQ Adapter"]
-        DrivenPorts --> Postgres
-        DrivenPorts --> RabbitMQ
+    subgraph DrivenSide["DRIVEN SIDE (Secondary / Outbound)"]
+        DrivenPorts["DRIVEN PORTS\n(Repository Interfaces)"] --> Postgres["Postgres"]
+        DrivenPorts --> RabbitMQ["RabbitMQ"]
     end
-
-    DriverPorts --> AppCore
-    AppCore --> DrivenPorts
-
+    DriverPorts --> Domain
+    Domain --> DrivenPorts
     style DriverSide fill:#3b82f6,stroke:#2563eb,color:white
     style Hexagon fill:#10b981,stroke:#059669,color:white
     style DrivenSide fill:#f59e0b,stroke:#d97706,color:white
@@ -48,40 +37,24 @@ flowchart TB
 | **Driver** (Primary / Inbound) | → App | Application | How the world uses your app (use cases) | Adapter *calls* port — app defines what it **offers** |
 | **Driven** (Secondary / Outbound) | App → | Application | What your app needs from external systems | Adapter *implements* port — app defines what it **needs** |
 
-**Driver ports** — called by adapters, represent use cases:
-
 ```typescript
-// application/ports/driver/place_order_port.ts
-export interface IPlaceOrderPort {
-  execute(command: PlaceOrderCommand): Promise<OrderId>;
-}
-// application/ports/driver/get_order_port.ts
-export interface IGetOrderPort {
-  execute(query: GetOrderQuery): Promise<OrderDTO | null>;
-}
-// application/ports/driver/cancel_order_port.ts
-export interface ICancelOrderPort {
-  execute(command: CancelOrderCommand): Promise<void>;
-}
-```
+// Driver ports — called by adapters, represent use cases
+export interface IPlaceOrderPort { execute(command: PlaceOrderCommand): Promise<OrderId>; }
+export interface IGetOrderPort { execute(query: GetOrderQuery): Promise<OrderDTO | null>; }
+export interface ICancelOrderPort { execute(command: CancelOrderCommand): Promise<void>; }
 
-**Driven ports** — implemented by adapters, called by the application:
-
-```typescript
-// application/ports/driven/order_repository_port.ts
+// Driven ports — implemented by adapters, called by the application
 export interface IOrderRepositoryPort {
   findById(id: OrderId): Promise<Order | null>;
   save(order: Order): Promise<void>;
   delete(order: Order): Promise<void>;
 }
-// application/ports/driven/event_publisher_port.ts
 export interface IEventPublisherPort {
   publish(event: DomainEvent): Promise<void>;
   publishAll(events: DomainEvent[]): Promise<void>;
 }
-// application/ports/driven/payment_gateway_port.ts
 export interface IPaymentGatewayPort {
-  charge(amount: Money, paymentMethod: PaymentMethod): Promise<PaymentResult>;
+  charge(amount: Money, method: PaymentMethod): Promise<PaymentResult>;
   refund(paymentId: PaymentId, amount: Money): Promise<RefundResult>;
 }
 ```
@@ -93,17 +66,11 @@ export interface IPaymentGatewayPort {
 ```typescript
 // infrastructure/adapters/driver/rest/order_controller.ts
 export class OrderController {
-  constructor(
-    private readonly placeOrder: IPlaceOrderPort,
-    private readonly getOrder: IGetOrderPort,
-  ) {}
-
+  constructor(private readonly placeOrder: IPlaceOrderPort, private readonly getOrder: IGetOrderPort) {}
   async create(req: Request, res: Response): Promise<void> {
     const orderId = await this.placeOrder.execute({
       customerId: req.user.id,
-      items: req.body.items.map((item: any) => ({
-        productId: item.product_id, quantity: item.quantity,
-      })),
+      items: req.body.items.map((i: any) => ({ productId: i.product_id, quantity: i.quantity })),
     });
     res.status(201).json({ id: orderId.value });
   }
@@ -127,7 +94,7 @@ class InMemoryOrderRepository implements IOrderRepositoryPort:  # for tests
     delete(order): orders.delete(order.id.value)
 
 class StripePaymentGateway implements IPaymentGatewayPort:
-    charge(amount, paymentMethod) -> PaymentResult:
+    charge(amount, method) -> PaymentResult:
         intent = stripe.paymentIntents.create({amount: amount.cents, ...})
         return PaymentResult.success(PaymentId.from(intent.id))
     refund(paymentId, amount): stripe.refunds.create({paymentIntent: paymentId.value, ...})

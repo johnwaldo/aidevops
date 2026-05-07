@@ -5,51 +5,40 @@ metadata:
   tags: webhooks, callbacks, events, notifications
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Webhooks
 
 Push notifications to your server when async operations complete, avoiding polling.
 
 ## Endpoint Requirements
 
-1. Accept POST requests
-2. Return 200 within 5 seconds
-3. Process events asynchronously (respond first, then handle)
-4. Handle duplicate deliveries (same event may arrive multiple times)
-5. Use job queues for expensive processing
+- Accept POST; return 200 within 5 seconds
+- Respond first, then process asynchronously (use job queues for expensive work)
+- Handle duplicate deliveries (same event may arrive multiple times)
 
 ```typescript
 import express from "express";
-import crypto from "crypto";
-
 const app = express();
 app.use(express.json());
 
 app.post("/webhook/heygen", async (req, res) => {
   res.status(200).send("OK"); // Acknowledge immediately
-
   processWebhookEvent(req.body).catch(console.error);
 });
 
 async function processWebhookEvent(event: HeyGenWebhookEvent) {
   switch (event.event_type) {
-    case "avatar_video.success":
-      await handleVideoSuccess(event);
-      break;
-    case "avatar_video.fail":
-      await handleVideoFailure(event);
-      break;
-    case "video_translate.success":
-      await handleTranslationSuccess(event);
-      break;
-    default:
-      console.log(`Unknown event type: ${event.event_type}`);
+    case "avatar_video.success": await handleVideoSuccess(event); break;
+    case "avatar_video.fail": await handleVideoFailure(event); break;
+    case "video_translate.success": await handleTranslationSuccess(event); break;
+    default: console.log(`Unknown event type: ${event.event_type}`);
   }
 }
-
-app.listen(3000);
 ```
 
-**Local testing:** Use `ngrok http 3000` and register the ngrok URL as your webhook endpoint.
+**Local testing:** `ngrok http 3000` — register the ngrok URL as your webhook endpoint.
 
 ## Event Types
 
@@ -64,8 +53,6 @@ app.listen(3000);
 
 ## Event Payloads
 
-### Video Success
-
 ```typescript
 interface VideoSuccessEvent {
   event_type: "avatar_video.success";
@@ -77,11 +64,7 @@ interface VideoSuccessEvent {
     callback_id?: string;    // Your custom identifier from video generation
   };
 }
-```
 
-### Video Failure
-
-```typescript
 interface VideoFailureEvent {
   event_type: "avatar_video.fail";
   event_data: {
@@ -93,8 +76,6 @@ interface VideoFailureEvent {
 ```
 
 ## Registering a Webhook
-
-Configure via the HeyGen dashboard or API:
 
 | Field | Type | Req | Description |
 |-------|------|:---:|-------------|
@@ -119,7 +100,7 @@ Pass `callback_id` during video generation to correlate webhooks to your records
 ```typescript
 const videoConfig = {
   video_inputs: [...],
-  callback_id: "order_12345", // Your custom identifier
+  callback_id: "order_12345",
 };
 
 async function handleVideoSuccess(event: VideoSuccessEvent) {
@@ -139,15 +120,12 @@ Validate `x-heygen-signature` header using HMAC-SHA256:
 import crypto from "crypto";
 
 function verifyWebhookSignature(
-  payload: string,
-  signature: string,
-  secret: string
+  payload: string, signature: string, secret: string
 ): boolean {
   const expected = crypto
     .createHmac("sha256", secret)
     .update(payload)
     .digest("hex");
-
   return crypto.timingSafeEqual(
     Buffer.from(signature),
     Buffer.from(expected)
@@ -157,12 +135,9 @@ function verifyWebhookSignature(
 app.post("/webhook/heygen", (req, res) => {
   const signature = req.headers["x-heygen-signature"] as string;
   const payload = JSON.stringify(req.body);
-
   if (!verifyWebhookSignature(payload, signature, WEBHOOK_SECRET)) {
     return res.status(401).send("Invalid signature");
   }
-
-  // Process event...
 });
 ```
 
@@ -170,20 +145,17 @@ app.post("/webhook/heygen", (req, res) => {
 
 ```typescript
 async function processWebhookEvent(event: HeyGenWebhookEvent) {
-  const maxRetries = 3;
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await handleEvent(event);
       return;
     } catch (error) {
       console.error(`Attempt ${attempt} failed:`, error);
-      if (attempt < maxRetries) {
+      if (attempt < 3) {
         await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
       }
     }
   }
-
   await storeFailedEvent(event); // Manual review queue
 }
 ```

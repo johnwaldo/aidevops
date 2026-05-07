@@ -12,21 +12,23 @@ tools:
   task: false
 ---
 
-# psst - AI-Native Secret Manager (Alternative)
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
+# psst - AI-Native Secret Manager Alternative
 
 <!-- AI-CONTEXT-START -->
 
 ## Quick Reference
 
-- **Status**: Documented alternative (gopass is recommended primary)
+- **Status**: documented alternative; `gopass` remains the default
 - **Repo**: https://github.com/nicholasgasior/psst (61 stars, v0.3.0)
 - **Install**: `bun install -g psst-cli`
 - **Requires**: Bun runtime
-
-**Trade-offs vs gopass**:
+- **Choose psst when**: you want the simplest solo setup, already use Bun, and do not need team sharing or an audit trail
 
 | Feature | gopass (recommended) | psst |
-|---------|---------------------|------|
+|---------|----------------------|------|
 | Maturity | 6.7k stars, 8+ years | 61 stars, v0.3.0 |
 | Encryption | GPG/age (industry standard) | AES-256-GCM |
 | Team sharing | Git sync + GPG recipients | No |
@@ -34,47 +36,32 @@ tools:
 | AI-native | Via aidevops wrapper | Built-in |
 | Audit trail | Git history | None |
 
+**Recommendation**: prefer `gopass` for shared, long-lived, or compliance-sensitive secrets. Choose `psst` only when simplicity matters more than maturity, team workflows, and auditability.
+
 <!-- AI-CONTEXT-END -->
-
-## When to Use psst
-
-- Solo developer who wants simplest possible setup
-- Already using Bun in your stack
-- Don't need team sharing or audit trail
-- Prefer AI-native design over established tooling
 
 ## Installation
 
 ```bash
-# Requires Bun
 bun install -g psst-cli
 ```
 
 ## Usage
 
 ```bash
-# Store a secret
 psst set MY_API_KEY
-
-# List secrets (names only)
 psst list
-
-# Use in subprocess (AI-safe)
 psst run MY_API_KEY -- curl https://api.example.com
 ```
 
-## Recommendation
+## Why gopass remains the default
 
-For most users, **gopass is recommended** over psst because:
-
-1. Mature ecosystem (6.7k stars, 8+ years of development)
-2. GPG encryption (industry-standard, audited)
-3. Team sharing via git sync
-4. Zero runtime dependencies (single Go binary)
-5. Audit trail via git history
-6. `gopass audit` for breach detection
-
-Use psst only if you specifically prefer its simplicity and don't need team features.
+- Mature ecosystem (6.7k stars, 8+ years of development)
+- GPG encryption (industry-standard, audited)
+- Team sharing via git sync
+- Single Go binary; no Bun runtime dependency
+- Audit trail via git history
+- `gopass audit` for breach detection
 
 ## Related
 

@@ -1,69 +1,49 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Workers Gotchas
 
-## CPU Time Limits
+## Runtime Constraints
 
-**Standard**: 10ms CPU time  
-**Unbound**: 30ms CPU time
-
-**Solutions**:
-- Use `ctx.waitUntil()` for background work
-- Offload heavy compute to Durable Objects
-- Consider Workers AI for ML workloads
-
-## No Persistent State in Worker
-
-Workers are stateless between requests - module-level variables reset unpredictably.
-
-**Solution**: Use KV, D1, or Durable Objects for persistent state.
-
-## Response Bodies Are Streams
+**Fetch in Global Scope Is Forbidden:** All `fetch()` calls must be inside handler functions — top-level fetch errors at startup.
 
 ```typescript
-// ❌ BAD
-const response = await fetch(url);
-await logBody(response.text());  // First read
-return response;  // Body already consumed!
+// ❌ BAD — errors at startup
+const config = await fetch('/config.json');
 
 // ✅ GOOD
+async fetch(req) { const config = await fetch('/config.json'); }
+```
+
+**Response Bodies Are Streams:** Body can only be read once — clone before reuse.
+
+```typescript
+// ❌ BAD — body consumed before return
 const response = await fetch(url);
+await logBody(response.text());
+return response;
+
+// ✅ GOOD
 const text = await response.text();
 await logBody(text);
 return new Response(text, response);
 ```
 
-## No Node.js Built-ins (by default)
+**CPU Budget:** 10ms standard, 30ms unbound. Use `ctx.waitUntil()` for background work, Durable Objects for heavy compute, Workers AI for ML.
+
+**No Persistent State:** Stateless between requests — module-level variables reset unpredictably. Store state in KV, D1, or Durable Objects.
+
+**No Node.js Built-ins by Default:** Use Workers APIs or enable compat flag.
 
 ```typescript
 // ❌ BAD
-import fs from 'fs';  // Not available
+import fs from 'fs';
 
-// ✅ GOOD - use Workers APIs
+// ✅ GOOD — Workers API or enable { "compatibility_flags": ["nodejs_compat_v2"] }
 const data = await env.MY_BUCKET.get('file.txt');
-
-// OR enable Node.js compat
-{ "compatibility_flags": ["nodejs_compat_v2"] }
 ```
 
-## Fetch in Global Scope Forbidden
-
-```typescript
-// ❌ BAD
-const config = await fetch('/config.json');  // Error!
-
-export default {
-  async fetch() { return new Response('OK'); },
-};
-
-// ✅ GOOD
-export default {
-  async fetch() {
-    const config = await fetch('/config.json');  // OK
-    return new Response('OK');
-  },
-};
-```
-
-## Limits
+## Runtime Limits
 
 | Resource | Limit |
 |----------|-------|
@@ -77,21 +57,12 @@ export default {
 
 ## Common Errors
 
-### "Error: Body has already been used"
-
-**Cause**: Response body read twice  
-**Solution**: Clone response before reading: `response.clone()`
-
-### "Error: Too much CPU time used"
-
-**Cause**: Exceeded CPU limit  
-**Solution**: Use `ctx.waitUntil()` for background work
-
-### "Error: Subrequest depth limit exceeded"
-
-**Cause**: Too many nested subrequests  
-**Solution**: Flatten request chain, use service bindings
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `Body has already been used` | Response body read twice | Clone before reading: `response.clone()` |
+| `Too much CPU time used` | Exceeded CPU limit | Move background work into `ctx.waitUntil()` |
+| `Subrequest depth limit exceeded` | Too many nested subrequests | Flatten request chain, use service bindings |
 
 ## See Also
 
-- [Patterns](./patterns.md) - Best practices
+- [workers-patterns.md](./workers-patterns.md) - Best practices

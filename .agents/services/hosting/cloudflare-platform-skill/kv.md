@@ -1,17 +1,18 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cloudflare Workers KV
 
-Globally-distributed, eventually-consistent key-value store optimized for high read volume and low latency.
+Globally distributed, eventually consistent key-value store for read-heavy, low-latency access. Use for config storage, user sessions, feature flags, caching, and A/B testing. Choose D1 or Durable Objects when you need strong consistency.
 
-## Overview
+## Core Properties
 
-KV provides:
-- Eventual consistency (60s global propagation)
-- Read-optimized performance
-- 25 MiB value limit per key
-- Auto-replication to Cloudflare edge
-- Metadata support (1024 bytes)
-
-**Use cases:** Config storage, user sessions, feature flags, caching, A/B testing
+| Property | Detail |
+|----------|--------|
+| Consistency | Eventual; writes visible immediately in the same location and within 60s globally |
+| Performance | Read optimized with automatic edge replication |
+| Limits | 25 MiB value per key, 1024-byte metadata |
+| Write rate | 1 write/second per key; exceed it and expect 429s |
 
 ## Quick Start
 
@@ -21,38 +22,26 @@ wrangler kv namespace create MY_NAMESPACE
 ```
 
 ```typescript
-// Write
-await env.MY_KV.put("key", "value", { expirationTtl: 300 });
-
-// Read
-const value = await env.MY_KV.get("key");
-const json = await env.MY_KV.get<Config>("config", "json");
+await env.MY_KV.put("key", "value", { expirationTtl: 300 }); // Write
+const value = await env.MY_KV.get("key");                     // Read string
+const json = await env.MY_KV.get<Config>("config", "json");   // Read typed JSON
 ```
 
-## Core Operations
+## Core API
 
 | Method | Purpose | Returns |
 |--------|---------|---------|
 | `get(key, type?)` | Single read | `string \| null` |
-| `get(keys, type?)` | Bulk read (≤100) | `Map<string, T \| null>` |
+| `get(keys, type?)` | Bulk read (≤100 keys) | `Map<string, T \| null>` |
 | `put(key, value, options?)` | Write | `Promise<void>` |
 | `delete(key)` | Delete | `Promise<void>` |
 | `list(options?)` | List keys | `{ keys, list_complete, cursor? }` |
-| `getWithMetadata(key)` | Get + metadata | `{ value, metadata }` |
+| `getWithMetadata(key)` | Read with metadata | `{ value, metadata }` |
 
-## Consistency Model
+## Read Next
 
-- **Write visibility:** Immediate in same location, ≤60s globally
-- **Read path:** Eventually consistent
-- **Write rate:** 1 write/second per key (429 on exceed)
-
-## In This Reference
-
-- [patterns.md](./patterns.md) - Caching, sessions, rate limiting, A/B testing
-- [gotchas.md](./gotchas.md) - Eventual consistency, concurrent writes, value limits
-
-## See Also
-
-- [workers](../workers/) - Worker runtime for KV access
-- [d1](../d1/) - Use D1 for strong consistency needs
-- [durable-objects](../durable-objects/) - Strongly consistent alternative
+- [kv-patterns.md](./kv-patterns.md) - Caching, sessions, rate limiting, A/B testing
+- [kv-gotchas.md](./kv-gotchas.md) - Eventual consistency, concurrent writes, value limits
+- [workers.md](./workers.md) - Worker runtime for KV access
+- [d1.md](./d1.md) - Better fit for relational or strongly consistent data
+- [durable-objects.md](./durable-objects.md) - Strong consistency and coordination

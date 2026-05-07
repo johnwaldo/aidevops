@@ -1,12 +1,13 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Email Templates to Swipe
 
-Fill-in-the-blank templates for common email types.
-
----
+Fill-in-the-blank templates. Use Quick Value for tips/insights, Story for narrative-driven engagement, Social Proof for conversion.
 
 ## Quick Value Email
 
-```
+```text
 Subject: [Number]-minute tip to [benefit]
 
 Hey [Name],
@@ -20,11 +21,9 @@ Try it today and let me know how it goes.
 [Name]
 ```
 
----
-
 ## Story Email
 
-```
+```text
 Subject: [Intriguing statement from story]
 
 [Name],
@@ -42,11 +41,9 @@ The takeaway? [Connection to reader]
 [Name]
 ```
 
----
-
 ## Social Proof Email
 
-```
+```text
 Subject: How [Customer] got [Result]
 
 [Name],

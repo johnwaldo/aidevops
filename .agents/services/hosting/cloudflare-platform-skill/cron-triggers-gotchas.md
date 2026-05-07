@@ -1,8 +1,11 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cron Triggers Gotchas
 
 ## Timezone Issues
 
-**⚠️ UTC ONLY** - No timezone configuration
+**UTC ONLY** — no timezone configuration supported.
 
 ```typescript
 // ❌ Wrong: "0 9 * * *" // 9am UTC, not local
@@ -12,7 +15,7 @@
 
 ## Propagation Delay
 
-**Changes take up to 15 minutes**. Verify: Dashboard → Workers → Select Worker → Settings → Triggers
+**Changes take up to 15 minutes.** Verify: Dashboard → Workers → Select Worker → Settings → Triggers
 
 ## Limits
 
@@ -29,7 +32,7 @@
 
 ## Duplicate Executions
 
-**At-least-once delivery** - duplicates possible. Make idempotent:
+**At-least-once delivery** — duplicates possible. Make handlers idempotent:
 
 ```typescript
 export default {
@@ -50,7 +53,11 @@ export default {
 ```typescript
 export default {
   async scheduled(controller, env, ctx) {
-    console.log("EXECUTED", {time: new Date().toISOString(), scheduledTime: new Date(controller.scheduledTime).toISOString(), cron: controller.cron});
+    console.log("EXECUTED", {
+      time: new Date().toISOString(),
+      scheduledTime: new Date(controller.scheduledTime).toISOString(),
+      cron: controller.cron,
+    });
     ctx.waitUntil(env.KV.put("last_execution", Date.now().toString()));
   },
 };
@@ -58,7 +65,7 @@ export default {
 
 ## Execution Failures
 
-**Common:** CPU exceeded, unhandled exceptions, network timeouts, binding misconfiguration
+**Common causes:** CPU exceeded, unhandled exceptions, network timeouts, binding misconfiguration
 
 ```typescript
 export default {
@@ -72,23 +79,25 @@ export default {
       await processData(await response.json(), env);
     } catch (error) {
       console.error("Failed", {error: error.message, cron: controller.cron});
-      // Don't re-throw to mark success despite errors
+      // Don't re-throw — marks success despite errors
     }
   },
 };
 ```
 
-## Local Testing Issues
+## Local Testing
 
-Ensure `wrangler dev` runs, `scheduled()` exists, update Wrangler: `npm i -g wrangler@latest`
+Requires: `wrangler dev` running, `scheduled()` exported, `npm i -g wrangler@latest`
 
 ```bash
-curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*" # URL encode spaces
-curl "http://localhost:8787/__scheduled" # No params = default
-# Python: curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"
+curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"  # URL-encode spaces
+curl "http://localhost:8787/__scheduled"                    # No params = default cron
+curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=*/5+*+*+*+*"  # Alternative path
 ```
 
 ## Security
+
+Block `/__scheduled` in production to prevent external trigger abuse:
 
 ```typescript
 export default {
@@ -118,7 +127,9 @@ npx wrangler secret put API_KEY
 
 ## Green Compute
 
-Dashboard: Workers & Pages → Account details → Compute Setting → Green Compute. Tradeoffs: fewer locations, higher latency, ideal for non-time-critical jobs
+Enable via Dashboard: Workers & Pages → Account details → Compute Setting → Green Compute.
+
+**Tradeoffs:** fewer locations, higher latency — ideal for non-time-critical jobs.
 
 ## Resources
 
@@ -126,4 +137,4 @@ Dashboard: Workers & Pages → Account details → Compute Setting → Green Com
 - [Scheduled Handler API](https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/)
 - [Cloudflare Workflows](https://developers.cloudflare.com/workflows/)
 - [Workers Limits](https://developers.cloudflare.com/workers/platform/limits/)
-- [Crontab Guru](https://crontab.guru/) - Validator
+- [Crontab Guru](https://crontab.guru/)

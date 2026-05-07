@@ -11,31 +11,26 @@ tools:
   webfetch: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Amazon SES Provider Guide
 
 <!-- AI-CONTEXT-START -->
 
 ## Quick Reference
 
-- **Type**: AWS cloud email service
-- **Auth**: AWS IAM credentials (access key + secret key)
-- **Config**: `configs/ses-config.json`
-- **Commands**: `ses-helper.sh [accounts|quota|stats|monitor|verified-emails|verified-domains|verify-email|verify-domain|dkim|reputation|suppressed|send-test|audit] [account] [args]`
-- **Thresholds**: Bounce rate < 5%, Complaint rate < 0.1%
-- **Regions**: us-east-1, eu-west-1, etc.
+- **Type**: AWS cloud email service | **Auth**: IAM credentials (access key + secret)
+- **Config**: `cp configs/ses-config.json.txt configs/ses-config.json` | **Regions**: us-east-1, eu-west-1, etc.
+- **Commands**: `ses-helper.sh [accounts|quota|stats|monitor|verified-emails|verified-domains|verify-email|verify-domain|dkim|enable-dkim|reputation|suppressed|suppression-details|remove-suppression|send-test|debug|audit] [account] [args]`
+- **Thresholds**: Bounce < 5%, Complaint < 0.1% | **Prerequisite**: `awscli` installed
 - **Test addresses**: success@simulator.amazonses.com, bounce@simulator.amazonses.com
-- **DKIM**: Enable for all domains
-- **IAM permissions**: ses:GetSendQuota, ses:SendEmail, sesv2:ListSuppressedDestinations
+- **DKIM**: Enable for all domains | **Security**: Rotate IAM keys regularly; separate AWS accounts for prod/staging
+- **IAM permissions**: ses:GetSendQuota, ses:SendEmail, sesv2:ListSuppressedDestinations (full policy below)
 
 <!-- AI-CONTEXT-END -->
 
 ## Configuration
-
-```bash
-cp configs/ses-config.json.txt configs/ses-config.json
-```
-
-Multi-account config (`configs/ses-config.json`):
 
 ```json
 {
@@ -60,25 +55,21 @@ Multi-account config (`configs/ses-config.json`):
 }
 ```
 
-Credentials managed per account — no `aws configure` needed. Prerequisite: `awscli` installed.
-
 ## Commands
 
 ```bash
-# Account overview
+# Overview
 ses-helper.sh accounts
-ses-helper.sh quota production
-ses-helper.sh stats production
-ses-helper.sh monitor production   # bounce rate, complaint rate, quota, reputation
+ses-helper.sh quota production           # send quota
+ses-helper.sh stats production           # send statistics
+ses-helper.sh monitor production         # bounce, complaint, quota, reputation
 
-# Identity management
+# Identity & DKIM
 ses-helper.sh verified-emails production
 ses-helper.sh verified-domains production
 ses-helper.sh verify-email production newuser@yourdomain.com
 ses-helper.sh verify-domain production newdomain.com
 ses-helper.sh verify-identity production yourdomain.com
-
-# DKIM
 ses-helper.sh dkim production yourdomain.com
 ses-helper.sh enable-dkim production yourdomain.com
 
@@ -88,8 +79,8 @@ ses-helper.sh suppressed production
 ses-helper.sh suppression-details production user@example.com
 ses-helper.sh remove-suppression production user@example.com
 
-# Testing (use simulator addresses for bounce/success testing)
-ses-helper.sh send-test production noreply@yourdomain.com success@simulator.amazonses.com "Success Test"
+# Testing & audit
+ses-helper.sh send-test production noreply@yourdomain.com success@simulator.amazonses.com "Test"
 ses-helper.sh send-test production noreply@yourdomain.com bounce@simulator.amazonses.com "Bounce Test"
 ses-helper.sh debug production problematic@example.com
 ses-helper.sh audit production
@@ -123,23 +114,21 @@ ses-helper.sh audit production
 }
 ```
 
-Dedicated IAM users per environment. Rotate access keys regularly. Separate AWS accounts for prod/staging.
-
 ## Troubleshooting
 
 | Problem | Commands |
 |---------|----------|
-| Auth errors | `aws sts get-caller-identity` then `ses-helper.sh quota production` |
-| Sending limits | `ses-helper.sh quota production` — request increase via AWS Support if needed |
-| Delivery issues | `ses-helper.sh reputation production`, `ses-helper.sh suppressed production`, `ses-helper.sh debug production user@example.com` |
+| Auth | `aws sts get-caller-identity` then `ses-helper.sh quota production` |
+| Limits | `ses-helper.sh quota production` — request increase via AWS Support |
+| Delivery | `ses-helper.sh reputation production`, `ses-helper.sh suppressed production`, `ses-helper.sh debug production user@example.com` |
 | Verification | `ses-helper.sh verify-identity production yourdomain.com`, `dig TXT _amazonses.yourdomain.com` |
 
 ## Compliance & Backup
+
+Configure SPF, DKIM, DMARC; process bounces/complaints promptly; maintain suppression list; provide unsubscribe mechanisms; follow GDPR/CAN-SPAM; warm up new IPs; clean lists regularly.
 
 ```bash
 ses-helper.sh audit production > ses-config-backup-$(date +%Y%m%d).txt
 ses-helper.sh verified-emails production > verified-emails-backup.txt
 ses-helper.sh verified-domains production > verified-domains-backup.txt
 ```
-
-Configure SPF, DKIM, DMARC for all sending domains. Process bounces and complaints promptly; maintain suppression list. Provide unsubscribe mechanisms; follow GDPR/CAN-SPAM. Warm up new sending IPs gradually; clean lists regularly.

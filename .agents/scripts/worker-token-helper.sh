@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # worker-token-helper.sh — Scoped, short-lived GitHub tokens for worker agents
 # Commands: create | validate | revoke | status | help
 #
@@ -386,7 +388,7 @@ read_token_file() {
 
 	# Verify permissions
 	local perms
-	perms=$(stat -f '%Lp' "$token_file" 2>/dev/null || stat -c '%a' "$token_file" 2>/dev/null)
+	perms=$(_file_perms "$token_file")
 	if [[ "$perms" != "600" ]]; then
 		log_token "WARN" "Token file has insecure permissions (${perms}), expected 600"
 	fi

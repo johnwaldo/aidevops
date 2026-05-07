@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # dispatch-ledger-helper.sh — In-flight dispatch tracking ledger (GH#6696)
 #
 # Tracks workers between dispatch and PR creation to prevent duplicate
@@ -11,6 +13,8 @@
 # pulse checks the ledger before dispatching. Entries expire after a
 # configurable TTL (default 60 min) or are marked completed/failed by
 # the worker on exit.
+#
+# Source shared-constants.sh for portable stat functions
 #
 # Storage: JSONL file at ~/.aidevops/.agent-workspace/tmp/dispatch-ledger.jsonl
 # Each line is a JSON object with fields:
@@ -28,9 +32,10 @@
 # fails closed — write operations abort if the lock cannot be obtained.
 #
 # Usage:
-#   dispatch-ledger-helper.sh register --session-key KEY [--issue NUM] [--repo SLUG] [--pid PID]
+#   dispatch-ledger-helper.sh register --session-key KEY [--issue NUM] [--repo SLUG] [--pid PID] [--worktree PATH]
 #   dispatch-ledger-helper.sh check --session-key KEY
 #   dispatch-ledger-helper.sh check-issue --issue NUM [--repo SLUG]
+#   dispatch-ledger-helper.sh check-issue NUM [SLUG]
 #   dispatch-ledger-helper.sh complete --session-key KEY
 #   dispatch-ledger-helper.sh fail --session-key KEY
 #   dispatch-ledger-helper.sh expire [--ttl SECONDS]
@@ -39,6 +44,10 @@
 #   dispatch-ledger-helper.sh help
 
 set -euo pipefail
+
+# shellcheck source=shared-constants.sh
+_dlh_dir="${BASH_SOURCE[0]%/*}"
+[[ -f "${_dlh_dir}/shared-constants.sh" ]] && source "${_dlh_dir}/shared-constants.sh"
 
 LEDGER_DIR="${AIDEVOPS_DISPATCH_LEDGER_DIR:-${HOME}/.aidevops/.agent-workspace/tmp}"
 LEDGER_FILE="${LEDGER_DIR}/dispatch-ledger.jsonl"
@@ -57,8 +66,108 @@ _ensure_ledger() {
 }
 
 #######################################
+# Get the age in seconds of a directory's mtime.
+# Args: $1 = directory path
+# Returns: age in seconds via stdout (0 if directory absent or stat fails)
+# Portable across BSD (macOS) and GNU (Linux) stat invocations.
+#######################################
+_lock_dir_age() {
+	local dir="$1"
+	local mtime=""
+	local now=""
+	if [[ ! -d "$dir" ]]; then
+		echo "0"
+		return 0
+	fi
+	mtime=$(_file_mtime_epoch "$dir")
+	now=$(_now_epoch)
+	echo "$((now - mtime))"
+	return 0
+}
+
+#######################################
+# Detect a stale ledger lock and clear it if so.
+#
+# Three-tier detection mirroring pulse-instance-lock.sh::_handle_existing_lock
+# (GH#20025), but with ledger-appropriate semantics:
+#   1. No valid PID in the lockdir → corrupt or pre-PID-file lock from
+#      an older client. Use mtime as the staleness signal.
+#   2. Owner PID dead → stale from SIGKILL/OOM/crash. Clear immediately.
+#   3. Owner alive but lock age > AIDEVOPS_LEDGER_LOCK_MAX_AGE_S
+#      (default 60s) → hung holder. Clear so we can re-acquire. Unlike
+#      pulse-instance-lock we do NOT kill the owner — ledger ops should
+#      complete in <100ms; a 60s+ hold means the holder is stuck and
+#      the safe move is to steal the lock. Worst-case race outcome is a
+#      single corrupted JSONL line, which the helper already tolerates
+#      (registration failures are logged non-fatal upstream).
+#
+# Args:
+#   $1 = lock directory path
+#   $2 = pid file path (lock_dir/pid)
+#   $3 = max age in seconds (threshold for force-reclaim)
+# Returns: 0 if the lock was stale and was cleared, 1 if still live
+#######################################
+_ledger_lock_is_stale() {
+	local lock_dir="$1"
+	local pid_file="$2"
+	local max_age="$3"
+	local lock_pid=""
+	local lock_age=""
+
+	# Must still exist — race: another waiter may have just cleared it.
+	if [[ ! -d "$lock_dir" ]]; then
+		return 1
+	fi
+
+	if [[ -f "$pid_file" ]]; then
+		lock_pid=$(cat "$pid_file" 2>/dev/null || echo "")
+	fi
+
+	# Tier 1: no valid PID file (corrupt, or pre-PID lock from old client)
+	# Use mtime as the staleness signal.
+	if [[ -z "$lock_pid" ]] || [[ ! "$lock_pid" =~ ^[0-9]+$ ]]; then
+		lock_age=$(_lock_dir_age "$lock_dir")
+		if [[ "$lock_age" -gt "$max_age" ]]; then
+			rm -rf "$lock_dir" 2>/dev/null || true
+			# Only return 0 if the directory was actually removed — if rm -rf
+			# failed silently the caller would loop indefinitely via `continue`.
+			[[ ! -d "$lock_dir" ]] && return 0
+		fi
+		return 1
+	fi
+
+	# Tier 2: owner PID is dead → stale (SIGKILL, OOM, crash)
+	# Use kill -0 for consistency with cmd_check/cmd_check_issue/cmd_expire.
+	if ! kill -0 "$lock_pid" 2>/dev/null; then
+		rm -rf "$lock_dir" 2>/dev/null || true
+		[[ ! -d "$lock_dir" ]] && return 0
+		return 1
+	fi
+
+	# Tier 3: owner alive but lock too old → hung holder, steal lock
+	lock_age=$(_lock_dir_age "$lock_dir")
+	if [[ "$lock_age" -gt "$max_age" ]]; then
+		rm -rf "$lock_dir" 2>/dev/null || true
+		[[ ! -d "$lock_dir" ]] && return 0
+		return 1
+	fi
+
+	return 1
+}
+
+#######################################
 # Acquire file lock (fail-closed — aborts if lock cannot be obtained)
 # Uses flock when available, falls back to mkdir-based lock.
+#
+# Stale-lock recovery (t2999): when the mkdir fallback path is used,
+# each failed mkdir attempt checks whether the existing lock is stale
+# (dead PID, corrupt PID file with old mtime, or hung-holder age
+# ceiling) via _ledger_lock_is_stale. If stale, the lockdir is cleared
+# and mkdir is retried. Without this, a worker killed mid-registration
+# leaves a permanent lockdir that blocks all subsequent ledger writes.
+# Canonical incident: marcusquinn/aidevops#21427 — a 24-day-old stale
+# lockdir suppressed registration for the entire dispatch fleet.
+#
 # Returns: 0 on success, 1 on failure (caller must abort write)
 #######################################
 _acquire_lock() {
@@ -68,33 +177,49 @@ _acquire_lock() {
 			echo "Error: could not acquire ledger lock: $LEDGER_LOCK" >&2
 			return 1
 		fi
-	else
-		# Portable fallback: mkdir is atomic on all POSIX systems
-		local lock_dir="${LEDGER_LOCK}.d"
-		local attempts=0
-		local max_attempts=50 # 50 × 0.1s = 5s timeout
-		while ! mkdir "$lock_dir" 2>/dev/null; do
-			attempts=$((attempts + 1))
-			if [[ "$attempts" -ge "$max_attempts" ]]; then
-				echo "Error: could not acquire ledger lock (mkdir): $lock_dir" >&2
-				return 1
-			fi
-			sleep 0.1
-		done
+		return 0
 	fi
+
+	# Portable fallback: mkdir is atomic on all POSIX systems
+	local lock_dir="${LEDGER_LOCK}.d"
+	local pid_file="${lock_dir}/pid"
+	local max_age="${AIDEVOPS_LEDGER_LOCK_MAX_AGE_S:-60}"
+	local attempts=0
+	local max_attempts=50 # 50 × 0.1s = 5s timeout
+
+	while ! mkdir "$lock_dir" 2>/dev/null; do
+		# Stale-lock recovery (t2999): if the existing lock is stale,
+		# clear it and retry mkdir immediately without burning an attempt.
+		if _ledger_lock_is_stale "$lock_dir" "$pid_file" "$max_age"; then
+			continue
+		fi
+		attempts=$((attempts + 1))
+		if [[ "$attempts" -ge "$max_attempts" ]]; then
+			echo "Error: could not acquire ledger lock (mkdir): $lock_dir" >&2
+			return 1
+		fi
+		sleep 0.1
+	done
+
+	# Record holder PID inside the lockdir so future waiters can
+	# detect a stale lock if we die before _release_lock runs.
+	echo "$$" >"$pid_file" 2>/dev/null || true
 	return 0
 }
 
 #######################################
 # Release file lock
+# Note: mkdir-based lock now contains a PID file (t2999), so we use
+# `rm -rf` instead of `rmdir`. Backward-compatible — rm -rf also
+# removes empty lockdirs left by older clients.
 #######################################
 _release_lock() {
 	if command -v flock &>/dev/null; then
 		flock -u 8 2>/dev/null || true
 	else
-		# Remove mkdir-based lock
+		# Remove mkdir-based lock (and any PID file inside it)
 		local lock_dir="${LEDGER_LOCK}.d"
-		rmdir "$lock_dir" 2>/dev/null || true
+		rm -rf "$lock_dir" 2>/dev/null || true
 	fi
 	return 0
 }
@@ -137,6 +262,7 @@ _iso_to_epoch() {
 #   --issue NUM          (optional) GitHub issue number
 #   --repo SLUG          (optional) owner/repo
 #   --pid PID            (optional) PID of dispatch process, defaults to $$
+#   --worktree PATH      (optional) worker worktree path
 #
 # Exit codes:
 #   0 - registered successfully
@@ -147,6 +273,9 @@ cmd_register() {
 	local issue_number=""
 	local repo_slug=""
 	local dispatch_pid="$$"
+	local dispatch_tier=""
+	local dispatch_model=""
+	local worktree_path=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -164,6 +293,18 @@ cmd_register() {
 			;;
 		--pid)
 			dispatch_pid="${2:-$$}"
+			shift 2
+			;;
+		--worktree)
+			worktree_path="${2:-}"
+			shift 2
+			;;
+		--tier)
+			dispatch_tier="${2:-}"
+			shift 2
+			;;
+		--model)
+			dispatch_model="${2:-}"
 			shift 2
 			;;
 		*)
@@ -202,8 +343,22 @@ cmd_register() {
 		--arg slug "$repo_slug" \
 		--argjson pid "$dispatch_pid" \
 		--arg ts "$now" \
-		'{session_key: $sk, issue_number: $inum, repo_slug: $slug, pid: $pid, dispatched_at: $ts, status: "in-flight", updated_at: $ts}' \
+		--arg tier "$dispatch_tier" \
+		--arg model "$dispatch_model" \
+		--arg worktree "$worktree_path" \
+		'{session_key: $sk, issue_number: $inum, repo_slug: $slug, pid: $pid, dispatched_at: $ts, status: "in-flight", updated_at: $ts, tier: $tier, model: $model, worktree_path: $worktree}' \
 		>>"$LEDGER_FILE"
+
+	# Append to tier telemetry log (append-only, never pruned)
+	local telemetry_file="${LEDGER_DIR}/tier-telemetry.jsonl"
+	jq -cn \
+		--arg inum "$issue_number" \
+		--arg slug "$repo_slug" \
+		--arg tier "$dispatch_tier" \
+		--arg model "$dispatch_model" \
+		--arg ts "$now" \
+		'{issue: $inum, repo: $slug, tier: $tier, model: $model, dispatched_at: $ts, outcome: "pending"}' \
+		>>"$telemetry_file" 2>/dev/null || true
 
 	_release_lock
 	return 0
@@ -275,6 +430,7 @@ cmd_check() {
 # Args:
 #   --issue NUM          (required)
 #   --repo SLUG          (optional) restrict to specific repo
+#   Positional form also supported: check-issue NUM [SLUG]
 #
 # Exit codes:
 #   0 - in-flight entry exists for this issue (do NOT dispatch)
@@ -295,9 +451,20 @@ cmd_check_issue() {
 			repo_slug="${2:-}"
 			shift 2
 			;;
-		*)
+		--*)
 			echo "Error: Unknown option for check-issue: $1" >&2
 			return 1
+			;;
+		*)
+			if [[ -z "$issue_number" ]]; then
+				issue_number="$1"
+			elif [[ -z "$repo_slug" ]]; then
+				repo_slug="$1"
+			else
+				echo "Error: Unexpected positional arg for check-issue: $1" >&2
+				return 1
+			fi
+			shift
 			;;
 		esac
 	done
@@ -415,6 +582,129 @@ cmd_fail() {
 }
 
 #######################################
+# Record dispatch outcome in the tier telemetry log
+#
+# Appends outcome to the append-only tier-telemetry.jsonl.
+# Called by workers on completion or by the escalation function on failure.
+#
+# Args:
+#   --issue NUM          issue number
+#   --repo SLUG          repo slug
+#   --outcome OUTCOME    "success" | "escalated" | "failed" | "timeout"
+#   --reason REASON      escalation reason code (optional)
+#   --tokens NUM         tokens used (optional)
+#   --tier TIER          tier at dispatch time (optional, for context)
+#
+# Exit codes: 0 always (best-effort, never fatal)
+#######################################
+cmd_record_outcome() {
+	local issue_number=""
+	local repo_slug=""
+	local outcome=""
+	local reason=""
+	local tokens="0"
+	local tier=""
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--issue)
+			issue_number="${2:-}"
+			shift 2
+			;;
+		--repo)
+			repo_slug="${2:-}"
+			shift 2
+			;;
+		--outcome)
+			outcome="${2:-}"
+			shift 2
+			;;
+		--reason)
+			reason="${2:-}"
+			shift 2
+			;;
+		--tokens)
+			tokens="${2:-0}"
+			shift 2
+			;;
+		--tier)
+			tier="${2:-}"
+			shift 2
+			;;
+		*) shift ;;
+		esac
+	done
+
+	[[ -n "$outcome" ]] || return 0
+
+	local telemetry_file="${LEDGER_DIR}/tier-telemetry.jsonl"
+	local now
+	now=$(_now_utc)
+
+	jq -cn \
+		--arg inum "$issue_number" \
+		--arg slug "$repo_slug" \
+		--arg tier "$tier" \
+		--arg outcome "$outcome" \
+		--arg reason "$reason" \
+		--argjson tokens "${tokens:-0}" \
+		--arg ts "$now" \
+		'{issue: $inum, repo: $slug, tier: $tier, outcome: $outcome, reason: $reason, tokens: $tokens, completed_at: $ts}' \
+		>>"$telemetry_file" 2>/dev/null || true
+
+	return 0
+}
+
+#######################################
+# Report tier telemetry summary
+#
+# Reads tier-telemetry.jsonl and outputs aggregate stats.
+# Used by the pulse sweep and /optimize-tiers command.
+#
+# Exit codes: 0 always
+#######################################
+cmd_tier_report() {
+	local telemetry_file="${LEDGER_DIR}/tier-telemetry.jsonl"
+
+	if [[ ! -s "$telemetry_file" ]]; then
+		echo "No tier telemetry data yet."
+		return 0
+	fi
+
+	local total success escalated failed
+	total=$(wc -l <"$telemetry_file" | tr -d ' ')
+	success=$(grep -c '"outcome":"success"' "$telemetry_file" 2>/dev/null) || success=0
+	escalated=$(grep -c '"outcome":"escalated"' "$telemetry_file" 2>/dev/null) || escalated=0
+	failed=$(grep -c '"outcome":"failed"' "$telemetry_file" 2>/dev/null) || failed=0
+
+	echo "=== Tier Dispatch Telemetry ==="
+	echo "Total dispatches: $total"
+	echo "Success: $success"
+	echo "Escalated: $escalated"
+	echo "Failed: $failed"
+	echo ""
+	echo "By tier:"
+	jq -r '.tier' "$telemetry_file" 2>/dev/null | sort | uniq -c | sort -rn
+	echo ""
+	echo "Escalation reasons:"
+	jq -r 'select(.reason != "" and .reason != null) | .reason' "$telemetry_file" 2>/dev/null | sort | uniq -c | sort -rn
+	echo ""
+	echo "Pass rate by tier:"
+	for t in simple standard reasoning; do
+		local t_total t_success
+		t_total=$(grep -c "\"tier\":\"$t\"" "$telemetry_file" 2>/dev/null) || t_total=0
+		t_success=$(jq -r "select(.tier == \"$t\" and .outcome == \"success\") | .tier" "$telemetry_file" 2>/dev/null | wc -l | tr -d ' ') || t_success=0
+		if [[ "$t_total" -gt 0 ]]; then
+			local pct
+			pct=$(awk "BEGIN {printf \"%.1f\", ${t_success}/${t_total}*100}")
+			echo "  tier:$t — $t_success/$t_total ($pct%)"
+		fi
+	done
+
+	return 0
+}
+
+#######################################
 # Update the status of a ledger entry
 # Args: $1 = session_key, $2 = new status
 #######################################
@@ -504,50 +794,83 @@ cmd_expire() {
 	local tmp_file
 	tmp_file=$(mktemp "${LEDGER_DIR}/dispatch-ledger.XXXXXX")
 
-	while IFS= read -r line; do
-		[[ -z "$line" ]] && continue
-		local status
-		status=$(printf '%s' "$line" | jq -r '.status // ""' 2>/dev/null) || status=""
+	# GH#21105: single-pass jq extraction. The previous loop forked jq up to
+	# 3x per line (status, dispatched_at, pid) — for 600+ ledger entries this
+	# was ~10s per cycle. One jq invocation produces all needed metadata as TSV;
+	# bash then performs the kill -0 liveness checks (which jq cannot do) and
+	# decides which entries to expire. Final rewrite uses a single jq pass too.
+	local tsv_data
+	tsv_data=$(jq -nr '
+		[inputs] | to_entries[]
+		| .key as $idx | .value as $v
+		| "\($idx)\t\($v.status // "")\t\($v.dispatched_at // "")\t\($v.pid // 0)"
+	' "$LEDGER_FILE" 2>/dev/null) || tsv_data=""
 
-		if [[ "$status" != "in-flight" ]]; then
-			printf '%s\n' "$line" >>"$tmp_file"
-			continue
-		fi
+	# Walk the TSV and collect ledger line indices that need to be expired.
+	# should_expire is an integer (0/1) rather than a "true"/"false" string
+	# to avoid tripping the repeated-string-literal ratchet on the value.
+	local -a expire_indices=()
+	local idx status dispatched_at entry_pid dispatch_epoch age
+	local -i should_expire
+	while IFS=$'\t' read -r idx status dispatched_at entry_pid; do
+		[[ -z "$idx" ]] && continue
+		[[ "$status" != "in-flight" ]] && continue
 
-		local should_expire=false
-
-		# Check TTL expiry
-		local dispatched_at
-		dispatched_at=$(printf '%s' "$line" | jq -r '.dispatched_at // ""' 2>/dev/null) || dispatched_at=""
+		should_expire=0
 		if [[ -n "$dispatched_at" ]]; then
-			local dispatch_epoch
 			dispatch_epoch=$(_iso_to_epoch "$dispatched_at")
-			local age=$((now_epoch - dispatch_epoch))
-			if [[ "$age" -gt "$ttl" ]]; then
-				should_expire=true
-			fi
-		fi
-
-		# Check PID liveness
-		if [[ "$should_expire" != "true" ]]; then
-			local entry_pid
-			entry_pid=$(printf '%s' "$line" | jq -r '.pid // 0' 2>/dev/null) || entry_pid=0
-			if [[ "$entry_pid" =~ ^[0-9]+$ ]] && [[ "$entry_pid" -gt 0 ]]; then
-				if ! kill -0 "$entry_pid" 2>/dev/null; then
-					should_expire=true
+			if [[ "$dispatch_epoch" =~ ^[0-9]+$ ]] && [[ "$dispatch_epoch" -gt 0 ]]; then
+				age=$((now_epoch - dispatch_epoch))
+				if [[ "$age" -gt "$ttl" ]]; then
+					should_expire=1
 				fi
 			fi
 		fi
-
-		if [[ "$should_expire" == "true" ]]; then
-			printf '%s\n' "$line" | jq -c --arg ts "$now_ts" '.status = "failed" | .updated_at = $ts' >>"$tmp_file" 2>/dev/null || printf '%s\n' "$line" >>"$tmp_file"
-			expired_count=$((expired_count + 1))
-		else
-			printf '%s\n' "$line" >>"$tmp_file"
+		if ((!should_expire)) && [[ "$entry_pid" =~ ^[0-9]+$ ]] && [[ "$entry_pid" -gt 0 ]]; then
+			if ! kill -0 "$entry_pid" 2>/dev/null; then
+				should_expire=1
+			fi
 		fi
-	done <"$LEDGER_FILE"
 
-	mv "$tmp_file" "$LEDGER_FILE"
+		if ((should_expire)); then
+			expire_indices+=("$idx")
+		fi
+	done <<<"$tsv_data"
+
+	expired_count=${#expire_indices[@]}
+
+	if [[ "$expired_count" -gt 0 ]]; then
+		# Single jq pass rewrites the file: entries at the listed indices have
+		# their status flipped to "failed" with a fresh updated_at timestamp.
+		local indices_csv
+		indices_csv=$(IFS=,; printf '%s' "${expire_indices[*]}")
+		# Two subtleties learned the hard way during GH#21105:
+		#   1. -n is REQUIRED: without it, jq consumes the first JSON line as
+		#      its initial input, then `[inputs]` collects only entries 2..N.
+		#      Indices in $exp (assigned by the matching -n TSV pass above)
+		#      become off-by-one, and the first ledger entry is silently
+		#      dropped from the rewritten file.
+		#   2. .key MUST be bound to $k BEFORE the pipe into $exp. Writing
+		#      `$exp | index(.key)` evaluates `.key` against $exp (an array)
+		#      and jq raises "Cannot index array with string 'key'", which
+		#      `2>/dev/null` would swallow into the cp fallback path.
+		if ! jq -nc --arg ts "$now_ts" --argjson exp "[${indices_csv}]" '
+			[inputs] | to_entries[]
+			| .key as $k
+			| if (($exp | index($k)) != null)
+			  then .value | .status = "failed" | .updated_at = $ts
+			  else .value
+			  end
+		' "$LEDGER_FILE" >"$tmp_file" 2>/dev/null; then
+			# jq failure: preserve original file rather than risk corruption.
+			cp "$LEDGER_FILE" "$tmp_file"
+			expired_count=0
+		fi
+		mv "$tmp_file" "$LEDGER_FILE"
+	else
+		rm -f "$tmp_file"
+	fi
+
 	_release_lock
 
 	printf '%s\n' "$expired_count"
@@ -569,18 +892,22 @@ cmd_count() {
 	fi
 
 	local count=0
-	local inflight_lines
-	inflight_lines=$(jq -c 'select(.status == "in-flight")' "$LEDGER_FILE" 2>/dev/null) || inflight_lines=""
+	local inflight_pids
+	# GH#22289: keep this as one jq pass. The previous implementation first
+	# selected in-flight JSON lines, then forked jq once per entry to extract
+	# pid. On a 1200-entry synthetic ledger that made `count` take ~2.4s.
+	# A single jq pass emits just the PIDs; bash keeps the kill -0 liveness
+	# checks because jq cannot query process state.
+	inflight_pids=$(jq -r 'select(.status == "in-flight") | (.pid // 0)' "$LEDGER_FILE" 2>/dev/null) || inflight_pids=""
 
-	if [[ -z "$inflight_lines" ]]; then
+	if [[ -z "$inflight_pids" ]]; then
 		printf '%s\n' "0"
 		return 0
 	fi
 
-	while IFS= read -r line; do
-		[[ -z "$line" ]] && continue
-		local entry_pid
-		entry_pid=$(printf '%s' "$line" | jq -r '.pid // 0' 2>/dev/null) || entry_pid=0
+	local entry_pid
+	while IFS= read -r entry_pid; do
+		[[ -z "$entry_pid" ]] && continue
 		if [[ "$entry_pid" =~ ^[0-9]+$ ]] && [[ "$entry_pid" -gt 0 ]]; then
 			if kill -0 "$entry_pid" 2>/dev/null; then
 				count=$((count + 1))
@@ -589,7 +916,7 @@ cmd_count() {
 			# No valid PID — count it (conservative; expire will clean up)
 			count=$((count + 1))
 		fi
-	done <<<"$inflight_lines"
+	done <<<"$inflight_pids"
 
 	printf '%s\n' "$count"
 	return 0
@@ -609,11 +936,25 @@ cmd_status() {
 		return 0
 	fi
 
-	local total inflight completed failed
-	total=$(wc -l <"$LEDGER_FILE" | tr -d ' ')
-	inflight=$(jq -c 'select(.status == "in-flight")' "$LEDGER_FILE" 2>/dev/null | wc -l | tr -d ' ') || inflight=0
-	completed=$(jq -c 'select(.status == "completed")' "$LEDGER_FILE" 2>/dev/null | wc -l | tr -d ' ') || completed=0
-	failed=$(jq -c 'select(.status == "failed")' "$LEDGER_FILE" 2>/dev/null | wc -l | tr -d ' ') || failed=0
+	local total inflight completed failed status_counts
+	# GH#22289: compute all status counts in one jq process instead of three
+	# jq+wc pipelines. The win is modest compared with cmd_count, but this is
+	# still a hot diagnostic path and preserves the single-pass ledger pattern.
+	status_counts=$(jq -nr '
+		[inputs.status // ""] as $statuses
+		| [
+			($statuses | length),
+			($statuses | map(select(. == "in-flight")) | length),
+			($statuses | map(select(. == "completed")) | length),
+			($statuses | map(select(. == "failed")) | length)
+		]
+		| @tsv
+	' "$LEDGER_FILE" 2>/dev/null) || status_counts=$'0\t0\t0\t0'
+	IFS=$'\t' read -r total inflight completed failed <<<"$status_counts"
+	[[ "$total" =~ ^[0-9]+$ ]] || total=0
+	[[ "$inflight" =~ ^[0-9]+$ ]] || inflight=0
+	[[ "$completed" =~ ^[0-9]+$ ]] || completed=0
+	[[ "$failed" =~ ^[0-9]+$ ]] || failed=0
 
 	echo "Dispatch Ledger Status"
 	echo "  Total entries: ${total}"
@@ -650,39 +991,43 @@ cmd_prune() {
 		return 0
 	fi
 
-	local now_epoch prune_threshold pruned_count
+	local now_epoch prune_threshold pruned_count orig_count new_count
 	now_epoch=$(_now_epoch)
 	prune_threshold=86400 # 24 hours
 	pruned_count=0
 	local tmp_file
 	tmp_file=$(mktemp "${LEDGER_DIR}/dispatch-ledger.XXXXXX")
 
-	while IFS= read -r line; do
-		[[ -z "$line" ]] && continue
-		local status
-		status=$(printf '%s' "$line" | jq -r '.status // ""' 2>/dev/null) || status=""
+	# GH#21105: single-pass jq filter. Previously this loop forked jq up to 2x
+	# per line (status, updated_at) — for 600+ ledger entries this was ~7s per
+	# cycle. The new filter processes all entries in one jq invocation:
+	# in-flight entries are always kept; completed/failed entries are kept only
+	# when updated_at is within the prune threshold (default 24h). Empty/
+	# unparseable updated_at values are kept (fail-open) to avoid silent loss.
+	#
+	# fromdateiso8601 in jq parses RFC 3339 / ISO 8601 with the 'Z' suffix
+	# directly; the try/catch falls back to "$now" so unparseable timestamps
+	# keep the entry rather than dropping it.
+	if ! jq -c --argjson now "$now_epoch" --argjson threshold "$prune_threshold" '
+		select(
+			(.status == "in-flight")
+			or
+			(((.updated_at // "") | length) == 0)
+			or
+			(($now - ((.updated_at) | try fromdateiso8601 catch $now)) <= $threshold)
+		)
+	' "$LEDGER_FILE" >"$tmp_file" 2>/dev/null; then
+		# jq failure: preserve original ledger rather than risk corruption.
+		cp "$LEDGER_FILE" "$tmp_file"
+	fi
 
-		# Keep in-flight entries always
-		if [[ "$status" == "in-flight" ]]; then
-			printf '%s\n' "$line" >>"$tmp_file"
-			continue
-		fi
-
-		# Prune completed/failed entries older than threshold
-		local updated_at
-		updated_at=$(printf '%s' "$line" | jq -r '.updated_at // ""' 2>/dev/null) || updated_at=""
-		if [[ -n "$updated_at" ]]; then
-			local update_epoch
-			update_epoch=$(_iso_to_epoch "$updated_at")
-			local age=$((now_epoch - update_epoch))
-			if [[ "$age" -gt "$prune_threshold" ]]; then
-				pruned_count=$((pruned_count + 1))
-				continue
-			fi
-		fi
-
-		printf '%s\n' "$line" >>"$tmp_file"
-	done <"$LEDGER_FILE"
+	# Pruned count = original line count - kept line count.
+	orig_count=$(wc -l <"$LEDGER_FILE" | tr -d ' ')
+	new_count=$(wc -l <"$tmp_file" | tr -d ' ')
+	[[ "$orig_count" =~ ^[0-9]+$ ]] || orig_count=0
+	[[ "$new_count" =~ ^[0-9]+$ ]] || new_count=0
+	pruned_count=$((orig_count - new_count))
+	[[ "$pruned_count" -lt 0 ]] && pruned_count=0
 
 	mv "$tmp_file" "$LEDGER_FILE"
 	_release_lock
@@ -777,6 +1122,12 @@ main() {
 		;;
 	fail)
 		cmd_fail "$@"
+		;;
+	record-outcome)
+		cmd_record_outcome "$@"
+		;;
+	tier-report)
+		cmd_tier_report
 		;;
 	expire)
 		cmd_expire "$@"

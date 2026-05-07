@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034
 
 # Schema Validator Helper Script
@@ -37,7 +39,6 @@ readonly HELP_USAGE_INFO="Use '$0 help' for usage information"
 command_exists() {
 	local cmd="$1"
 	command -v "$cmd" >/dev/null 2>&1
-	return $?
 }
 
 # Install npm dependencies to tool directory
@@ -90,10 +91,9 @@ install_deps() {
 	return 0
 }
 
-# Create the validation JS script
-create_js_script() {
-	mkdir -p "$TOOL_DIR"
-	cat >"$JS_SCRIPT" <<'JSEOF'
+# Write JS imports and fetch initialisation block
+_write_js_imports() {
+	cat >>"$JS_SCRIPT" <<'JSEOF'
 import Validator from '@adobe/structured-data-validator';
 import WebAutoExtractor from '@marbec/web-auto-extractor';
 import fs from 'fs';
@@ -111,6 +111,13 @@ if (!fetchFn) {
     }
 }
 
+JSEOF
+	return 0
+}
+
+# Write the getSchema() JS function (caches schema.org definition for 24h)
+_write_js_schema_loader() {
+	cat >>"$JS_SCRIPT" <<'JSEOF'
 async function getSchema() {
     const schemaPath = path.join(process.cwd(), 'schemaorg-all-https.jsonld');
 
@@ -140,6 +147,13 @@ async function getSchema() {
     }
 }
 
+JSEOF
+	return 0
+}
+
+# Write the validate() JS function (extracts and validates structured data)
+_write_js_validator() {
+	cat >>"$JS_SCRIPT" <<'JSEOF'
 async function validate(input, isJson) {
     let html = input;
 
@@ -194,6 +208,13 @@ async function validate(input, isJson) {
     }
 }
 
+JSEOF
+	return 0
+}
+
+# Write the CLI entrypoint block (argument parsing and dispatch)
+_write_js_entrypoint() {
+	cat >>"$JS_SCRIPT" <<'JSEOF'
 const args = process.argv.slice(2);
 const command = args[0];
 const target = args[1];
@@ -212,6 +233,17 @@ if (command === 'validate') {
     process.exit(1);
 }
 JSEOF
+	return 0
+}
+
+# Create the validation JS script by composing focused section writers
+create_js_script() {
+	mkdir -p "$TOOL_DIR"
+	: >"$JS_SCRIPT"
+	_write_js_imports || return 1
+	_write_js_schema_loader || return 1
+	_write_js_validator || return 1
+	_write_js_entrypoint || return 1
 	return 0
 }
 
@@ -237,7 +269,7 @@ cmd_status() {
 
 	if [[ -f "$SCHEMA_CACHE" ]]; then
 		local cache_age
-		cache_age=$((($(date +%s) - $(stat -c %Y "$SCHEMA_CACHE" 2>/dev/null || stat -f %m "$SCHEMA_CACHE" 2>/dev/null || echo 0)) / 3600))
+		cache_age=$((($(date +%s) - $(_file_mtime_epoch "$SCHEMA_CACHE")) / 3600))
 		print_success "Schema cache: ${cache_age}h old (24h TTL)"
 	else
 		print_info "Schema cache: not yet fetched (will download on first run)"

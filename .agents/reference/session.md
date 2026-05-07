@@ -1,78 +1,75 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Session & Environment — Detail Reference
 
-Loaded on-demand for session management, browser automation, localhost, or quality workflows.
-Core pointers are in `AGENTS.md`.
+Loaded on-demand for session management, browser automation, localhost, or quality workflows. Core rules: `AGENTS.md`.
 
 ## Terminal Capabilities
 
-Full PTY access: run any CLI (`vim`, `psql`, `ssh`, `htop`, dev servers, `opencode -p "subtask"`).
+Full PTY access: run any CLI (`vim`, `psql`, `ssh`, `htop`, dev servers). Long-running processes: use `&`, `nohup`, or `tmux`. Parallel AI dispatch: `tools/ai-assistants/opencode-server.md`.
 
-- **For long-running processes**: use `&`, `nohup`, or `tmux`.
-- **For parallel AI dispatch**: use `tools/ai-assistants/opencode-server.md`.
+## Session Lifecycle
 
-## Session Completion
-
-Run `/session-review` before ending. Suggest new sessions after PR merge, domain switch, or 3+ hours.
-
-**Cleanup**: Commit/stash changes, run `wt merge` to clean merged worktrees.
-
-**Full docs**: `workflows/session-manager.md`
+- Run `/session-review` before ending.
+- Suggest a new session after PR merge, domain switch, or 3+ hours.
+- Cleanup: commit or stash changes, then run `wt merge` to clean merged worktrees.
+- Full docs: `workflows/session-manager.md`.
 
 ## Context Compaction Resilience
 
-When context is compacted (long sessions, autonomous loops), operational state is lost unless persisted to disk. Use `/checkpoint` to save and restore session state.
+Context compaction drops operational state unless written to disk. Use `/checkpoint` to persist and restore.
 
-**Commands**:
-
-- `/checkpoint` or `session-checkpoint-helper.sh save --task <id> --next <ids>` — save current state
-- `session-checkpoint-helper.sh load` — reload state after compaction
-- `session-checkpoint-helper.sh continuation` — generate a full continuation prompt for new sessions
-
-**When to checkpoint**: After each task completion, before large operations, after PR creation/merge.
-
-**Compaction survival rule**: See `prompts/build.txt` "Context Compaction Survival".
-
-**Full docs**: `workflows/session-manager.md` "Compaction Resilience" section
+- Save: `/checkpoint` or `session-checkpoint-helper.sh save --task <id> --next <ids>`
+- Load: `session-checkpoint-helper.sh load`
+- Continuation prompt: `session-checkpoint-helper.sh continuation`
+- Checkpoint after each task, before large operations, and after PR creation or merge.
+- Full docs: `workflows/session-manager.md` "Compaction Resilience". Survival rules: `AGENTS.md` "Context Compaction Survival".
 
 ## Git Workflow Detail
 
-**Before edits**: Run pre-edit check (see AGENTS.md top).
+- Before edits: run the pre-edit check from `AGENTS.md`.
+- After branch creation: check `TODO.md` for matching tasks, record `started:`, set the session title as `Issue #123: succinct description` or `PR #456: succinct description` when issue/PR context exists; otherwise call `session-rename_sync_branch`. Then read `workflows/git-workflow.md`.
 
-**After branch creation**:
-1. Check TODO.md for matching tasks, record `started:` timestamp
-2. Call `session-rename_sync_branch` tool
-3. Read `workflows/git-workflow.md` for full guidance
-
-**Worktrees** (preferred for parallel work):
+Worktrees are preferred for parallel work:
 
 ```bash
 wt switch -c feature/my-feature   # Worktrunk (preferred)
 worktree-helper.sh add feature/x  # Fallback
 ```
 
-**After switching to a worktree**: Re-read any file at its worktree path before editing. The Edit tool tracks files by their exact absolute path, so a read from the main repository path is not recognized for the same file in the worktree.
+- After switching to a worktree, re-read files at the worktree path before editing. Edit tracking is path-specific.
+- Worktree ownership: remove only if you created it this session, it's deployed/complete, or user asked. Ownership enforced by `worktree-helper.sh registry list`; `remove`/`clean` refuse live worktrees owned by other processes.
+- Safety hooks block destructive commands (`git reset --hard`, `rm -rf`). Verify with `install-hooks.sh --test`. See `workflows/git-workflow.md` "Destructive Command Safety Hooks".
+- Full docs: `workflows/git-workflow.md`, `tools/git/worktrunk.md`.
 
-**After completing changes**, offer: 1) Preflight checks 2) Skip preflight 3) Continue editing
+## Idle Interactive PR Handover (t2189)
 
-**Worktree ownership** (CRITICAL): NEVER remove a worktree unless (a) you created it in this session, (b) it belongs to a task in your active batch, AND the task is deployed/complete, or (c) the user explicitly asks. Worktrees may belong to parallel sessions — removing them destroys another agent's working directory mid-work. When cleaning up, only touch worktrees for tasks you personally merged. Use `git worktree list` to see all worktrees but do NOT assume unrecognized ones are safe to remove. The ownership registry (`worktree-helper.sh registry list`) tracks which PID owns each worktree — `remove` and `clean` commands automatically refuse to touch worktrees owned by other live processes.
+When an `origin:interactive` PR sits >4h with a failing required check, a conflict, or an idle review, and the human session has demonstrably ended — no active `status:*` label on the linked issue AND no live claim stamp in `$CLAIM_STAMP_DIR` — the deterministic merge pass:
 
-**Safety hooks** (Claude Code only): Destructive commands (`git reset --hard`, `rm -rf`, etc.) are blocked by a PreToolUse hook. Run `install-hooks.sh --test` to verify. See `workflows/git-workflow.md` "Destructive Command Safety Hooks" section.
+1. Applies the `origin:worker-takeover` label
+2. Posts a one-time handover comment (`<!-- pulse-interactive-handover -->`)
+3. Routes the PR through the CI-fix / conflict-fix / review-fix worker pipelines
 
-**Full docs**: `workflows/git-workflow.md`, `tools/git/worktrunk.md`
+`origin:interactive` stays in place for audit trail.
+
+**Opting out:** apply `no-takeover` label to keep the PR out of the pipeline.
+
+**Reclaiming an already-handed-over PR:** remove `origin:worker-takeover`, then `interactive-session-helper.sh claim <N> <slug>` on the linked issue.
+
+Env controls:
+- `AIDEVOPS_INTERACTIVE_PR_HANDOVER_MODE=off|detect|enforce` (default `detect` — logs `would-handover` without acting). Flip to `enforce` after 2-3 pulse cycles of clean `detect` telemetry.
+- `IDLE_INTERACTIVE_HANDOVER_SECONDS` (default 14400 = 4h; t2948 reduced from 86400 = 24h). Set to 86400 to restore the prior 24h behaviour.
 
 ## Browser Automation
 
-Proactively use a browser for: dev server verification, form testing, deployment checks, frontend debugging. Read `tools/browser/browser-automation.md` for tool selection. Quick default: Playwright for dev testing, dev-browser for persistent login.
-
-**CRITICAL: Never use curl/HTTP to verify frontend fixes.** Server returns 200 even when React crashes client-side because error boundaries render successfully. The crash happens during hydration which curl never executes. Always use browser screenshots (dev-browser agent, Playwright) to verify frontend fixes work.
+- Use a browser proactively for dev-server verification, form testing, deployment checks, and frontend debugging.
+- Tool selection: `tools/browser/browser-automation.md`. Quick default: Playwright for dev testing, dev-browser for persistent login.
+- Never use curl or raw HTTP to verify frontend fixes — a server can return 200 while React fails during hydration; browser screenshots are the required proof.
 
 ## Localhost Standards
 
-`.local` domains + SSL via Traefik + mkcert. See `services/hosting/local-hosting.md` (primary) or `services/hosting/localhost.md` (legacy).
-
-## Bot Reviewer Feedback
-
-AI suggestion verification: see `prompts/build.txt`. Dismiss incorrect suggestions with evidence; address valid ones.
+Use `.local` domains with SSL via Traefik + mkcert. Primary doc: `services/hosting/local-hosting.md`. Legacy doc: `services/hosting/localhost.md`.
 
 ## Quality Workflow
 
@@ -80,15 +77,11 @@ AI suggestion verification: see `prompts/build.txt`. Dismiss incorrect suggestio
 Development → @code-standards → /code-simplifier → /linters-local → /pr review → /postflight
 ```
 
-**Quick commands**: `linters-local.sh` (pre-commit), `/pr review` (full), `version-manager.sh release [type]`
+Quick commands: `linters-local.sh` (pre-commit), `/pr review` (full), `version-manager.sh release [type]`. Bot reviewer feedback: follow `AGENTS.md` "Review Bot Gate" / "AI Suggestion Verification" — dismiss incorrect suggestions with evidence; address valid ones.
 
-## Agents & Subagents Detail
+## Agents & Subagents
 
-See `subagent-index.toon` for complete listing of agents, subagents, workflows, and scripts.
-
-**Strategy**: Read subagents on-demand when tasks require domain expertise. This keeps context focused.
-
-**Agent tiers** (user-created agents survive `aidevops update`):
+Full inventory: `subagent-index.toon`. Load subagents only when domain expertise is needed.
 
 | Tier | Location | Purpose |
 |------|----------|---------|
@@ -96,20 +89,10 @@ See `subagent-index.toon` for complete listing of agents, subagents, workflows, 
 | **Custom** | `~/.aidevops/agents/custom/` | User's permanent private agents |
 | **Shared** | `.agents/` in repo | Open-source, distributed to all users |
 
-Orchestration agents can create drafts in `draft/` for reusable parallel processing context. See `tools/build-agent/build-agent.md` for the full lifecycle and promotion workflow.
+Orchestration agents may create drafts for reusable parallel-processing context. Lifecycle: `tools/build-agent/build-agent.md`.
 
-## Security Detail
+## Security & Working Directories
 
-Security rules: see `prompts/build.txt`. Additional details:
-
-- Config templates: `configs/*.json.txt` (committed), working: `configs/*.json` (gitignored)
-
-**Full docs**: `tools/credentials/gopass.md`, `tools/credentials/api-key-setup.md`
-
-## Working Directories
-
-Working directory tree: see `prompts/build.txt`. Agent file locations:
-
-- `~/.aidevops/agents/custom/` — User's permanent private agents (survives updates)
-- `~/.aidevops/agents/draft/` — R&D, experimental agents (survives updates)
-- `~/.aidevops/agents/` — Shared agents (deployed from repo, overwritten on update)
+- Security rules: `AGENTS.md` "Security Rules".
+- Config templates: `configs/*.json.txt` (committed); working configs: `configs/*.json` (gitignored).
+- Credential docs: `tools/credentials/gopass.md`, `tools/credentials/api-key-setup.md`.

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # agent-sources-helper.sh — Sync agents from private repositories into custom/
 #
 # Usage:
@@ -10,21 +12,20 @@
 #   agent-sources-helper.sh status            Show sync status for all sources
 #   agent-sources-helper.sh help              Show this help
 #
-# Private agent repos contain a .agents/ directory with agent folders.
-# Each agent folder is synced into ~/.aidevops/agents/custom/<source-name>/<agent>/
+# Private agent repos contain a .agents/ directory using either package-style
+# .agents/<agent>/ folders or the core-style .agents/<agent>.md + .agents/<agent>/
+# layout. The full tree is synced into ~/.aidevops/agents/custom/<source-name>/.
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
+# shellcheck source=shared-constants.sh
+source "${SCRIPT_DIR}/shared-constants.sh"
 
 AGENTS_DIR="${HOME}/.aidevops/agents"
 CUSTOM_DIR="${AGENTS_DIR}/custom"
 CONFIG_FILE="${AGENTS_DIR}/configs/agent-sources.json"
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+CAPABILITY_INDEX_FILE="${AGENTS_DIR}/agent-source-capabilities.toon"
 
 # Print an informational message in blue
 info() {
@@ -61,10 +62,14 @@ show_help() {
 	echo "  agent-sources-helper.sh remove <name>     Remove a source config"
 	echo "  agent-sources-helper.sh list              List configured sources"
 	echo "  agent-sources-helper.sh status            Show sync status"
+	echo "  agent-sources-helper.sh cleanup-broken-symlinks"
+	echo "                                            Remove dangling symlinks from"
+	echo "                                            OpenCode runtime dirs (self-heal)"
 	echo "  agent-sources-helper.sh help              Show this help"
 	echo ""
-	echo "Private repos must contain a .agents/ directory with agent folders."
-	echo "Agents are synced into ~/.aidevops/agents/custom/<source-name>/<agent>/"
+	echo "Private repos must contain a .agents/ directory."
+	echo "Supported layouts: package-style .agents/<agent>/ or core-style .agents/<agent>.md + .agents/<agent>/"
+	echo "The full .agents tree is synced into ~/.aidevops/agents/custom/<source-name>/"
 	return 0
 }
 
@@ -133,14 +138,14 @@ add_source_to_config() {
 		CONFIG_PATH="${CONFIG_FILE}" node -e "
         const fs = require('fs');
         const cfg = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, 'utf8'));
-        if (!cfg.sources) cfg.sources = [];
+        if(!cfg.sources) cfg.sources = [];
         const name = process.env.SOURCE_NAME;
         const local_path = process.env.SOURCE_PATH;
         const remote_url = process.env.SOURCE_URL || '';
 
         // Check for duplicate
         const existing = cfg.sources.findIndex(s => s.name === name);
-        if (existing >= 0) {
+        if(existing >= 0) {
             cfg.sources[existing].local_path = local_path;
             cfg.sources[existing].remote_url = remote_url;
             cfg.sources[existing].updated_at = new Date().toISOString();
@@ -180,12 +185,94 @@ update_last_synced() {
         const fs = require('fs');
         const cfg = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, 'utf8'));
         const src = (cfg.sources || []).find(s => s.name === process.env.SOURCE_NAME);
-        if (src) {
+        if(src) {
             src.last_synced = new Date().toISOString();
             src.agent_count = parseInt(process.env.AGENT_COUNT, 10);
         }
         fs.writeFileSync(process.env.CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n');
     " 2>/dev/null
+	return 0
+}
+
+# Convert configured source manifests into a compact TOON registry.
+# Missing or invalid manifests are ignored so directory scanning remains the
+# fail-open behaviour for private repos that have not adopted agent-pack.json.
+generate_capability_registry() {
+	ensure_config
+	mkdir -p "$(dirname "${CAPABILITY_INDEX_FILE}")"
+	CONFIG_PATH="${CONFIG_FILE}" INDEX_PATH="${CAPABILITY_INDEX_FILE}" node <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+function asArray(value) {
+  if(!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function text(value) {
+  if(value === null || value === undefined) return '';
+  if(typeof value === 'string') return value;
+  if(typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return value.name || value.file || value.path || value.command || '';
+}
+
+function list(value) {
+  return asArray(value)
+    .map(text)
+    .filter(Boolean)
+    .map((item) => item.replace(/[\n\r,|]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('|');
+}
+
+function scalar(value) {
+  return text(value).replace(/[\n\r,]+/g, ' ').trim();
+}
+
+function outputNames(manifest) {
+  return list(manifest.outputs || manifest.output_artifacts || manifest.artifacts);
+}
+
+const cfg = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, 'utf8'));
+const rows = [];
+for(const src of cfg.sources || []) {
+  const sourceName = scalar(src.name || 'unknown');
+  const localPath = src.local_path || '';
+  const manifestPath = path.join(localPath, '.agents', 'agent-pack.json');
+  if(!localPath || !fs.existsSync(manifestPath)) continue;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    rows.push([
+      sourceName,
+      scalar(manifest.name || sourceName),
+      scalar(manifest.version || ''),
+      list(manifest.domains),
+      list(manifest.triggers || manifest.trigger_words),
+      list(manifest.primary_agents || manifest.agents),
+      list(manifest.subagents),
+      list(manifest.commands),
+      list(manifest.helpers || manifest.helper_scripts),
+      list(manifest.required_secrets || manifest.secrets),
+      outputNames(manifest),
+      scalar(manifest.sensitivity || manifest.sensitivity_tier || 'private'),
+      String(Boolean(manifest.upstream_candidate || manifest.core_candidate)),
+      'ok'
+    ].join(','));
+  } catch (error) {
+    rows.push([
+      sourceName, sourceName, '', '', '', '', '', '', '', '', '', 'private', 'false', 'invalid-manifest'
+    ].join(','));
+  }
+}
+
+const body = [
+  `<!--TOON:agent_source_capabilities[${rows.length}]{source,pack,version,domains,triggers,agents,subagents,commands,helpers,secrets,artifacts,sensitivity,upstream_candidate,status}:`,
+  ...rows,
+  '-->',
+  ''
+].join('\n');
+fs.writeFileSync(process.env.INDEX_PATH, body);
+NODE
 	return 0
 }
 
@@ -235,6 +322,9 @@ cmd_add() {
 	done
 	info "Found ${agent_count} agent(s) in .agents/"
 
+	# Self-heal any pre-existing broken symlinks so the new source starts clean.
+	cleanup_broken_command_symlinks
+
 	# Offer to sync
 	echo ""
 	info "Run 'agent-sources-helper.sh sync' to deploy agents to custom/"
@@ -275,11 +365,62 @@ cmd_remove() {
 
 	# Clean up symlinks before removing config
 	cleanup_source_symlinks "${name}"
+	# Also sweep any other broken symlinks that may have accumulated. The name-match
+	# cleanup above only catches symlinks whose target path contains "${name}"; this
+	# catches dangling symlinks from previously-removed sources, manual `rm`s, etc.
+	cleanup_broken_command_symlinks
 
 	remove_source_from_config "${name}"
 	success "Removed source: ${name}"
 	info "Synced agents in custom/${name}/ were NOT deleted. Remove manually if needed:"
 	echo "  rm -rf ${CUSTOM_DIR}/${name}/"
+	return 0
+}
+
+# Remove dangling symlinks from OpenCode runtime directories (t2172).
+#
+# OpenCode parses ~/.config/opencode/{command,agent,skills,tool}/ at session
+# start. A single broken symlink in any of those paths causes the splash screen
+# to fail with "Failed to parse command ..." and blocks new sessions entirely.
+# Private-agent-source symlinks created by `sync_slash_commands` / `sync_primary_agent`
+# become orphans when a user deletes, moves, or renames the source directory
+# outside of `agent-sources-helper.sh remove` — which is an easy mistake to make.
+#
+# This helper is the self-heal: iterate each runtime dir, find `-L && ! -e`
+# entries (symlink with missing target), and `rm -f` them. Always safe — it
+# never touches regular files or symlinks that still resolve.
+#
+# Called from: `cmd_sync`, `cmd_add`, `cmd_remove`, the `cleanup-broken-symlinks`
+# subcommand (invoked by `aidevops update` and session-start update-check as
+# fail-open self-heal), and any future entry point that creates runtime symlinks.
+cleanup_broken_command_symlinks() {
+	local -a opencode_dirs=(
+		"${HOME}/.config/opencode/command"
+		"${HOME}/.config/opencode/agent"
+		"${HOME}/.config/opencode/skills"
+		"${HOME}/.config/opencode/tool"
+	)
+
+	local removed=0
+	local dir link target
+	for dir in "${opencode_dirs[@]}"; do
+		[[ -d "${dir}" ]] || continue
+		# maxdepth 3 covers: command/*.md (depth 1), skills/<skill>/SKILL.md (depth 2),
+		# and any hypothetical deeper layouts without walking node_modules/.
+		while IFS= read -r link; do
+			# -L && ! -e: symlink whose target does not exist. Regular files and
+			# symlinks with valid targets are ignored.
+			[[ -L "${link}" && ! -e "${link}" ]] || continue
+			target="$(readlink "${link}" 2>/dev/null || echo '?')"
+			info "  Removed broken symlink: ${link#"${HOME}/"} -> ${target}"
+			rm -f "${link}"
+			((++removed))
+		done < <(find "${dir}" -maxdepth 3 -type l 2>/dev/null)
+	done
+
+	if [[ ${removed} -gt 0 ]]; then
+		success "Removed ${removed} broken OpenCode runtime symlink(s)"
+	fi
 	return 0
 }
 
@@ -290,11 +431,28 @@ cleanup_source_symlinks() {
 
 	[[ -d "${source_dir}" ]] || return 0
 
-	# Remove primary agent symlinks from agents root
+	# Remove package-style primary agent symlinks from agents root
 	for agent_dir in "${source_dir}"/*/; do
 		[[ -d "${agent_dir}" ]] || continue
 		local agent_name
 		agent_name="$(basename "${agent_dir}")"
+		local link="${AGENTS_DIR}/${agent_name}.md"
+		if [[ -L "${link}" ]]; then
+			local target
+			target="$(readlink "${link}")"
+			if [[ "${target}" == *"${name}"* ]]; then
+				rm -f "${link}"
+				info "  Removed primary agent symlink: ${agent_name}"
+			fi
+		fi
+	done
+
+	# Remove core-style root primary agent symlinks from agents root
+	for agent_md in "${source_dir}"/*.md; do
+		[[ -f "${agent_md}" ]] || continue
+		local agent_name
+		agent_name="$(basename "${agent_md}" .md)"
+		[[ "${agent_name}" == "AGENTS" || "${agent_name}" == "README" || "${agent_name}" == "SKILL" ]] && continue
 		local link="${AGENTS_DIR}/${agent_name}.md"
 		if [[ -L "${link}" ]]; then
 			local target
@@ -321,6 +479,35 @@ cleanup_source_symlinks() {
 			fi
 		done
 	fi
+	return 0
+}
+
+# Count likely agent entries in a source .agents/ tree for status output.
+# Package-style directories and core-style root .md files both count.
+count_source_agent_entries() {
+	local source_agents_dir="$1"
+	local agent_count=0
+	local entry entry_name
+
+	for entry in "${source_agents_dir}"/*/; do
+		[[ -d "${entry}" ]] || continue
+		entry_name="$(basename "${entry}")"
+		case "${entry_name}" in
+		tools|services|workflows|reference|scripts|configs|templates|rules|tests|bundles|custom|draft)
+			continue
+			;;
+		esac
+		agent_count=$((agent_count + 1))
+	done
+
+	for entry in "${source_agents_dir}"/*.md; do
+		[[ -f "${entry}" ]] || continue
+		entry_name="$(basename "${entry}" .md)"
+		[[ "${entry_name}" == "AGENTS" || "${entry_name}" == "README" || "${entry_name}" == "SKILL" ]] && continue
+		agent_count=$((agent_count + 1))
+	done
+
+	printf '%s\n' "${agent_count}"
 	return 0
 }
 
@@ -360,6 +547,60 @@ cmd_list() {
 }
 
 # Show detailed status for all sources: path, remote, sync state, git status, deploy count
+print_source_git_status() {
+	local path="$1"
+
+	if [[ ! -d "${path}/.git" ]]; then
+		return 0
+	fi
+
+	local dirty
+	dirty="$(cd "${path}" && git status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+	if [[ "${dirty}" != "0" ]]; then
+		echo -e "    Git:         ${YELLOW}${dirty} uncommitted change(s)${NC}"
+		return 0
+	fi
+
+	echo -e "    Git:         ${GREEN}clean${NC}"
+	return 0
+}
+
+print_source_deploy_status() {
+	local name="$1"
+
+	if [[ ! -d "${CUSTOM_DIR}/${name}" ]]; then
+		echo -e "    Deployed:    ${YELLOW}NOT SYNCED${NC}"
+		return 0
+	fi
+
+	local synced_count=0
+	synced_count="$(count_source_agent_entries "${CUSTOM_DIR}/${name}")"
+	echo "    Deployed:    ${synced_count} agents in custom/${name}/"
+	return 0
+}
+
+print_source_status_detail() {
+	local name="$1"
+	local path="$2"
+
+	if [[ ! -d "${path}" ]]; then
+		echo -e "    Status:      ${RED}MISSING${NC} (directory not found)"
+		return 0
+	fi
+
+	if [[ ! -d "${path}/.agents" ]]; then
+		echo -e "    Status:      ${RED}INVALID${NC} (no .agents/ directory)"
+		return 0
+	fi
+
+	local agent_count=0
+	agent_count="$(count_source_agent_entries "${path}/.agents")"
+	echo -e "    Status:      ${GREEN}OK${NC} (${agent_count} agents)"
+	print_source_deploy_status "${name}"
+	print_source_git_status "${path}"
+	return 0
+}
+
 cmd_status() {
 	ensure_config
 	local count
@@ -383,47 +624,11 @@ cmd_status() {
 
 		echo "  ${name}:"
 		echo "    Path:        ${path/#${HOME}/~}"
-		[[ -n "${remote_url}" ]] && echo "    Remote:      ${remote_url}"
+		# t2458: sanitize_url strips embedded credentials from remote URLs.
+		[[ -n "${remote_url}" ]] && echo "    Remote:      $(sanitize_url "${remote_url}")"
 		echo "    Last synced: ${synced:-never}"
 
-		# Check if path exists
-		if [[ ! -d "${path}" ]]; then
-			echo -e "    Status:      ${RED}MISSING${NC} (directory not found)"
-		elif [[ ! -d "${path}/.agents" ]]; then
-			echo -e "    Status:      ${RED}INVALID${NC} (no .agents/ directory)"
-		else
-			local agent_count=0
-			for agent_dir in "${path}/.agents"/*/; do
-				if [[ -d "${agent_dir}" ]]; then
-					agent_count=$((agent_count + 1))
-				fi
-			done
-			echo -e "    Status:      ${GREEN}OK${NC} (${agent_count} agents)"
-
-			# Check if synced copy exists
-			if [[ -d "${CUSTOM_DIR}/${name}" ]]; then
-				local synced_count=0
-				for synced_dir in "${CUSTOM_DIR}/${name}"/*/; do
-					if [[ -d "${synced_dir}" ]]; then
-						synced_count=$((synced_count + 1))
-					fi
-				done
-				echo "    Deployed:    ${synced_count} agents in custom/${name}/"
-			else
-				echo -e "    Deployed:    ${YELLOW}NOT SYNCED${NC}"
-			fi
-
-			# Check for uncommitted changes in source
-			if [[ -d "${path}/.git" ]]; then
-				local dirty
-				dirty="$(cd "${path}" && git status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-				if [[ "${dirty}" != "0" ]]; then
-					echo -e "    Git:         ${YELLOW}${dirty} uncommitted change(s)${NC}"
-				else
-					echo -e "    Git:         ${GREEN}clean${NC}"
-				fi
-			fi
-		fi
+		print_source_status_detail "${name}" "${path}"
 		echo ""
 		((++i))
 	done
@@ -437,6 +642,7 @@ cmd_sync() {
 	count="$(get_source_count)"
 
 	if [[ "${count}" == "0" ]]; then
+		generate_capability_registry
 		info "No agent sources configured. Nothing to sync."
 		echo "  Add a source: agent-sources-helper.sh add ~/Git/my-agents"
 		return 0
@@ -473,30 +679,35 @@ cmd_sync() {
 			(cd "${path}" && git pull --ff-only 2>/dev/null) || warn "  Git pull failed, using current state"
 		fi
 
-		# Sync each agent directory from source .agents/ into custom/<source-name>/
+		# Sync the full source .agents/ tree into custom/<source-name>/ so
+		# private repos can use either package-style .agents/<agent>/ folders or
+		# the core-style .agents/<agent>.md + shared tools/services/workflows tree.
 		local dest_dir="${CUSTOM_DIR}/${name}"
 		mkdir -p "${dest_dir}"
 
+		# Safety: skip empty source trees to prevent --delete wiping destination.
+		if [[ -z "$(find "${path}/.agents" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+			warn "  Skipping empty .agents tree"
+			((++i))
+			continue
+		fi
+
+		rsync -a --delete "${path}/.agents/" "${dest_dir}/"
+
 		local agent_count=0
-		for agent_dir in "${path}/.agents"/*/; do
+		agent_count="$(count_source_agent_entries "${dest_dir}")"
+
+		# Post-sync: register core-style root primary agents, package-style primary
+		# agents, package-local commands, and shared scripts/commands.
+		sync_root_primary_agents "${dest_dir}"
+		local agent_dir agent_name
+		for agent_dir in "${dest_dir}"/*/; do
 			[[ -d "${agent_dir}" ]] || continue
-			local agent_name
 			agent_name="$(basename "${agent_dir}")"
-
-			# Safety: skip empty source dirs to prevent --delete wiping destination
-			if [[ -z "$(find "${agent_dir}" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
-				warn "  Skipping empty agent directory: ${agent_name}"
-				continue
-			fi
-
-			# rsync the agent directory (preserves permissions, handles deletions)
-			rsync -a --delete "${agent_dir}" "${dest_dir}/${agent_name}/"
-			((++agent_count))
-
-			# Post-sync: register primary agents and deploy slash commands
-			sync_primary_agent "${dest_dir}/${agent_name}" "${agent_name}"
-			sync_slash_commands "${dest_dir}/${agent_name}" "${agent_name}" "${name}"
+			sync_primary_agent "${agent_dir}" "${agent_name}"
+			sync_slash_commands "${agent_dir}" "${agent_name}" "${name}"
 		done
+		sync_shared_slash_commands "${dest_dir}/scripts/commands" "${name}"
 
 		update_last_synced "${name}" "${agent_count}"
 		success "  Synced ${agent_count} agent(s) to custom/${name}/"
@@ -510,6 +721,12 @@ cmd_sync() {
 	[[ ${total_primary} -gt 0 ]] && summary="${summary}, ${total_primary} primary agent(s)"
 	[[ ${total_commands} -gt 0 ]] && summary="${summary}, ${total_commands} slash command(s)"
 	success "${summary}"
+
+	# Self-heal: remove any orphaned symlinks from sources that were deleted
+	# outside this helper (e.g., user `rm -rf`'d their private clone). Left
+	# unchecked, these block OpenCode session start with "Failed to parse command".
+	cleanup_broken_command_symlinks
+	generate_capability_registry
 	return 0
 }
 
@@ -540,6 +757,20 @@ sync_primary_agent() {
 	ln -s "${agent_md}" "${link_target}"
 	info "  Registered primary agent: ${agent_name}"
 	((++total_primary))
+	return 0
+}
+
+# Register all root-level core-style primary agents from a synced source tree.
+sync_root_primary_agents() {
+	local source_dir="$1"
+	local agent_md agent_name
+
+	for agent_md in "${source_dir}"/*.md; do
+		[[ -f "${agent_md}" ]] || continue
+		agent_name="$(basename "${agent_md}" .md)"
+		[[ "${agent_name}" == "AGENTS" || "${agent_name}" == "README" || "${agent_name}" == "SKILL" ]] && continue
+		sync_primary_agent "${source_dir}" "${agent_name}"
+	done
 	return 0
 }
 
@@ -583,6 +814,35 @@ sync_slash_commands() {
 	return 0
 }
 
+# Deploy slash commands from a shared scripts/commands directory.
+sync_shared_slash_commands() {
+	local commands_dir="$1"
+	local source_name="$2"
+	local opencode_cmd_dir="${HOME}/.config/opencode/command"
+
+	[[ -d "${commands_dir}" ]] || return 0
+	mkdir -p "${opencode_cmd_dir}"
+
+	local md_file filename cmd_name target suffixed_name
+	for md_file in "${commands_dir}"/*.md; do
+		[[ -f "${md_file}" ]] || continue
+		if ! sed -n '/^---$/,/^---$/p' "${md_file}" 2>/dev/null | grep -q '^agent:'; then
+			continue
+		fi
+		filename="$(basename "${md_file}")"
+		cmd_name="${filename%.md}"
+		target="${opencode_cmd_dir}/${cmd_name}.md"
+		if [[ -f "${target}" ]] && ! [[ -L "${target}" && "$(readlink "${target}")" == "${md_file}" ]]; then
+			suffixed_name="${cmd_name}-${source_name}"
+			target="${opencode_cmd_dir}/${suffixed_name}.md"
+			warn "  Command collision: /${cmd_name} exists, deploying as /${suffixed_name}"
+		fi
+		ln -sf "${md_file}" "${target}"
+		((++total_commands))
+	done
+	return 0
+}
+
 # ── Main ──
 
 # Parse command and dispatch to the appropriate handler
@@ -620,6 +880,9 @@ main() {
 		;;
 	status)
 		cmd_status
+		;;
+	cleanup-broken-symlinks)
+		cleanup_broken_command_symlinks
 		;;
 	help | --help | -h)
 		show_help

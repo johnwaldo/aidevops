@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # =============================================================================
 # MCP Index Helper - Tool description indexing for on-demand MCP discovery
 # =============================================================================
@@ -123,7 +125,7 @@ needs_refresh() {
 	# Check if opencode.json is newer than last sync
 	if [[ -f "$OPENCODE_CONFIG" ]]; then
 		local config_mtime
-		config_mtime=$(stat -c %Y "$OPENCODE_CONFIG" 2>/dev/null || stat -f %m "$OPENCODE_CONFIG" 2>/dev/null || echo "0")
+		config_mtime=$(_file_mtime_epoch "$OPENCODE_CONFIG")
 		local sync_epoch
 		sync_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S" "$last_sync" +%s 2>/dev/null || date -d "$last_sync" +%s 2>/dev/null || echo "0")
 
@@ -170,7 +172,6 @@ mcp_count = 0
 # Common tool patterns based on MCP naming conventions
 tool_categories = {
     'context7': ['query-docs', 'resolve-library-id'],
-    'augment-context-engine': ['codebase-retrieval'],
     'dataforseo': ['serp', 'keywords', 'backlinks', 'domain-analytics'],
     # serper - REMOVED: Uses curl subagent (.agents/seo/serper.md)
     'gsc': ['query', 'sitemaps', 'inspect'],
@@ -190,7 +191,6 @@ tool_descriptions = {
     'search': 'Search for content or code',
     'trace': 'Trace code execution paths',
     'skeleton': 'Generate code skeleton/structure',
-    'codebase-retrieval': 'Semantic search across codebase using Augment',
     'pack_codebase': 'Package local codebase for AI analysis',
     'pack_remote_repository': 'Package remote GitHub repo for AI analysis',
     'run_claude_code': 'Run Claude Code as a one-shot subprocess',
@@ -220,7 +220,7 @@ for mcp_name, mcp_config in mcp_servers.items():
             # Derive category from MCP name
             if 'seo' in mcp_name.lower() or pattern in ['dataforseo', 'gsc']:
                 category = 'seo'
-            elif pattern in ['context7', 'augment-context-engine']:
+            elif pattern == 'context7':
                 category = 'context'
             elif pattern in ['shadcn', 'playwriter']:
                 category = 'browser'

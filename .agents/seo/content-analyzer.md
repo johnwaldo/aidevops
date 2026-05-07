@@ -1,6 +1,6 @@
 ---
 name: content-analyzer
-description: Comprehensive SEO content analysis - readability, keyword density, search intent, quality scoring
+description: SEO content analysis (readability, keywords, intent, quality)
 mode: subagent
 tools:
   read: true
@@ -13,109 +13,50 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # SEO Content Analyzer
 
-Comprehensive, data-driven content analysis combining 5 specialised Python modules for readability, keyword density, search intent, content length comparison, and SEO quality rating.
+Full content audit via `seo-content-analyzer.py` (readability, keywords, intent, length, quality).
 
 ## Quick Reference
 
-- **Purpose**: Full content audit with scoring and actionable recommendations
-- **Input**: Article file/URL, primary keyword, secondary keywords
-- **Output**: Executive summary, scores, priority action plan
-- **Script**: `seo-content-analyzer.py` (unified analysis)
+- **Input**: Article file/URL, primary/secondary keywords
+- **Output**: Executive summary, scores, readiness, priority actions
+- **Script**: `~/.aidevops/agents/scripts/seo-content-analyzer.py`
 
 ## Analysis Pipeline
 
-Run the unified analyzer for a full audit, or individual commands:
-
 ```bash
-# Full analysis (readability + keywords + quality + intent)
+# Full analysis
 python3 ~/.aidevops/agents/scripts/seo-content-analyzer.py analyze article.md \
-  --keyword "primary keyword" \
-  --secondary "secondary1,secondary2"
+  --keyword "primary keyword" --secondary "secondary1,secondary2"
 
-# Individual analyses
+# Individual modules
 python3 ~/.aidevops/agents/scripts/seo-content-analyzer.py readability article.md
 python3 ~/.aidevops/agents/scripts/seo-content-analyzer.py keywords article.md \
   --keyword "primary keyword" --secondary "secondary1,secondary2"
 python3 ~/.aidevops/agents/scripts/seo-content-analyzer.py intent "target keyword"
 python3 ~/.aidevops/agents/scripts/seo-content-analyzer.py quality article.md \
-  --keyword "primary keyword" \
-  --meta-title "Article Title Here" --meta-desc "Article description here"
-```
-
-## Output Format
-
-### Executive Summary
-
-```markdown
-## Content Analysis Report
-
-**Article**: [title]
-**Keyword**: [primary keyword]
-**Date**: [analysis date]
-
-### Scores
-
-| Category | Score | Grade |
-|----------|-------|-------|
-| Overall SEO Quality | X/100 | A-F |
-| Readability | X/100 | A-F |
-| Keyword Optimization | X/100 | - |
-| Content Length | [status] | - |
-| Search Intent Alignment | [intent] | - |
-
-### Publishing Readiness: [Yes/No]
-
-### Priority Actions
-
-1. **Critical**: [issues that must be fixed]
-2. **High Priority**: [issues that should be fixed]
-3. **Optimization**: [nice-to-have improvements]
-
-### Detailed Findings
-
-[Per-module results with specific recommendations]
+  --keyword "primary keyword" --meta-title "Title" --meta-desc "Desc"
 ```
 
 ## Analysis Categories
 
-### Readability
+| Module | Key Metrics |
+|--------|-------------|
+| **Readability** | Flesch Ease (60-70), Grade (8-10), sentence/para structure, passive voice, transition words |
+| **Keywords** | Primary density (1-2%), placements (H1/H2/intro/outro), heatmap, stuffing, LSI, secondary |
+| **Intent** | Class (info/nav/trans/comm), confidence, alignment, SERP features |
+| **Quality** | 6-category scoring, critical issues, readiness, meta validation |
 
-- Flesch Reading Ease (target: 60-70)
-- Flesch-Kincaid Grade Level (target: 8-10)
-- Sentence length analysis
-- Paragraph structure
-- Passive voice ratio
-- Transition word usage
-- Complex word ratio
-
-### Keyword Optimization
-
-- Primary keyword density (target: 1-2%)
-- Critical placements (H1, first 100 words, H2s, conclusion)
-- Section distribution heatmap
-- Keyword stuffing risk detection
-- LSI keyword suggestions
-- Secondary keyword coverage
-
-### Search Intent
-
-- Intent classification (informational/navigational/transactional/commercial)
-- Confidence scores
-- Content-intent alignment check
-- SERP feature targeting recommendations
-
-### SEO Quality
-
-- 6-category scoring (content, keywords, meta, structure, links, readability)
-- Critical issues identification
-- Publishing readiness assessment
-- Meta element validation
+Report: scores → Publishing Readiness (Y/N) → Priority Actions (Critical/High/Opt) → Detailed Findings.
 
 ## Integration
 
-- Feeds into `content/seo-writer.md` for content creation
-- Uses data from `seo/dataforseo.md` for SERP competitor data
-- Works with `seo/eeat-score.md` for quality validation
-- Results inform `content/meta-creator.md` for meta optimisation
+- Feeds `content/seo-writer.md` (creation)
+- Uses `seo/dataforseo.md` (SERP data)
+- Works with `seo/eeat-score.md` (validation)
+- Informs `content/meta-creator.md` (meta)
+- Analyse video transcript as article input: `seo/transcript-seo.md`

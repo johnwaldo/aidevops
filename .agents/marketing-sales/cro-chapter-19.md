@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Chapter 19: Advanced CRO Tactics
 
 ## 19.1 Behavioral Economics in CRO
@@ -88,5 +91,3 @@ Place primary actions in easy-to-reach areas.
 - Preview video
 - Ratings and reviews
 - App description
-
-This chapter covers advanced tactics for sophisticated CRO programs.

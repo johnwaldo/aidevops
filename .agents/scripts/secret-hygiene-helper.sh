@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # secret-hygiene-helper.sh — Scan for plaintext secrets and supply chain IoCs
 #
 # Scans common locations where credentials are stored in plaintext on macOS/Linux,
@@ -35,13 +37,11 @@ readonly ADVISORIES_DIR="$HOME/.aidevops/advisories"
 readonly DISMISSED_FILE="$ADVISORIES_DIR/dismissed.txt"
 readonly VERSION="1.0.0"
 
-# Colours
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-NC='\033[0m'
+# Colours — sourced from shared-constants.sh (Pattern A)
+# shellcheck source=shared-constants.sh
+[[ -f "${SCRIPT_DIR}/shared-constants.sh" ]] && source "${SCRIPT_DIR}/shared-constants.sh"
+# BOLD not in shared-constants.sh — Pattern B fallback
+[[ -z "${BOLD+x}" ]] && BOLD='\033[1m'
 
 # Counters
 FINDINGS_HIGH=0
@@ -113,11 +113,7 @@ report_finding() {
 
 get_perms() {
 	local file="$1"
-	if [[ "$(uname)" == "Darwin" ]]; then
-		stat -f %Lp "$file" 2>/dev/null || echo "000"
-	else
-		stat -c %a "$file" 2>/dev/null || echo "000"
-	fi
+	_file_perms "$file"
 }
 
 # Scan aidevops credentials.sh (check 1)
@@ -503,6 +499,86 @@ scan_mcp_configs() {
 }
 
 # ============================================================
+# REMOTE URL CREDENTIAL AUDIT (t2458)
+# ============================================================
+#
+# Walks repos.json and checks each repo's git remote for embedded credentials
+# in the URL (e.g., https://gho_…@github.com/owner/repo.git).
+#
+# NEVER prints the URL itself — only the repo slug/path and the remediation.
+# On findings, writes an advisory file so the next greeting surfaces the
+# problem in case the user dismissed the immediate output.
+
+scan_remote_urls() {
+	echo -e "${BOLD}Git Remote URL Credential Audit${NC}"
+	echo "==============================="
+	echo ""
+
+	local repos_json="$HOME/.config/aidevops/repos.json"
+	if [[ ! -f "$repos_json" ]]; then
+		echo -e "  ${BLUE}[SKIP]${NC} $repos_json not found"
+		echo ""
+		return 0
+	fi
+
+	if ! command -v jq >/dev/null 2>&1; then
+		echo -e "  ${YELLOW}[SKIP]${NC} jq not installed — cannot parse repos.json"
+		echo ""
+		return 0
+	fi
+
+	local found=0
+	local dirty_slugs=()
+	local path slug url
+	# Iterate paths from repos.json. `local_only: true` entries have no remote
+	# by design, so we skip them up front.
+	while IFS=$'\t' read -r path slug; do
+		[[ -z "$path" ]] && continue
+		# Expand ~
+		path="${path/#~/$HOME}"
+		[[ -d "$path/.git" || -f "$path/.git" ]] || continue
+
+		url=$(git -C "$path" remote get-url origin 2>/dev/null || echo "")
+		[[ -z "$url" ]] && continue
+
+		# Match credential authority component: scheme://<user>:<pass>@host
+		# or scheme://<token>@host. git@host:… SSH form is NOT a credential.
+		if [[ "$url" =~ ^[a-zA-Z][a-zA-Z0-9+.-]*://[^@/]+@ ]]; then
+			found=$((found + 1))
+			dirty_slugs+=("$slug")
+			local label="${slug:-$path}"
+			report_finding "high" "$label" \
+				"Git remote URL contains embedded credentials — leaks on every echo of \$(git remote get-url origin)" \
+				"git -C ${path/#$HOME/~} remote set-url origin <clean-url>"
+		fi
+	done < <(jq -r '.initialized_repos[]? | select(.local_only != true)
+		| [(.path // ""), (.slug // "")] | @tsv' "$repos_json" 2>/dev/null)
+
+	if [[ "$found" -eq 0 ]]; then
+		echo -e "  ${GREEN}[OK]${NC} No git remotes with embedded credentials found"
+	else
+		# Also write an advisory so the next greeting surfaces it.
+		ensure_advisories_dir
+		local advisory_id
+		advisory_id="remote-credentials-$(date +%Y-%m-%d)"
+		local advisory_path="$ADVISORIES_DIR/${advisory_id}.advisory"
+		{
+			printf '[HIGH] Git remote URLs contain embedded credentials\n'
+			printf '  %d repo(s) affected:\n' "$found"
+			printf '    %s\n' "${dirty_slugs[@]}"
+			printf '\n  Each git remote get-url echo in your helpers leaks the token.\n'
+			printf '  Fix (run in SEPARATE terminal, one per repo):\n'
+			printf '    git -C <repo-path> remote set-url origin <clean-url>\n'
+			printf '\n  Use SSH (git@github.com:owner/repo.git) or HTTPS without a token\n'
+			printf '  and authenticate via gh CLI / SSH agent instead.\n'
+		} >"$advisory_path"
+	fi
+
+	echo ""
+	return 0
+}
+
+# ============================================================
 # STARTUP CHECK (one-line for greeting)
 # ============================================================
 
@@ -569,6 +645,7 @@ cmd_scan() {
 	scan_pth_files
 	scan_unpinned_deps
 	scan_mcp_configs
+	scan_remote_urls
 
 	# Show active advisories
 	local has_advisories=0
@@ -631,6 +708,7 @@ Commands:
   aidevops security scan-pth     Python .pth file audit only (supply chain IoC)
   aidevops security scan-secrets Plaintext secret locations only
   aidevops security scan-deps    Unpinned dependency check only
+  aidevops security scan-remotes Git remote URL credential audit (t2458)
   aidevops security posture      Interactive security posture setup
   aidevops security dismiss <id> Dismiss a security advisory after taking action
 
@@ -669,6 +747,9 @@ main() {
 		;;
 	scan-deps)
 		scan_unpinned_deps "$@"
+		;;
+	scan-remotes)
+		scan_remote_urls "$@"
 		;;
 	startup-check)
 		cmd_startup_check "$@"

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # network-tier-helper.sh — Network domain tiering for worker sandboxing (t1412.3)
 # Commands: classify | log-access | check | report | init | help
 #
@@ -177,7 +179,7 @@ _tier_count() {
 		return 0
 	fi
 
-	grep -c "^${type_prefix}:" "$_TIER_LOOKUP_FILE" || echo "0"
+	safe_grep_count "^${type_prefix}:" "$_TIER_LOOKUP_FILE"
 	return 0
 }
 

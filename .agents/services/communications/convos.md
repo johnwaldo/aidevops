@@ -1,4 +1,5 @@
 ---
+name: convos
 description: Convos — encrypted messaging on XMTP with CLI agent mode, ndjson bridge protocol, group management, behavioural principles for AI group participation
 mode: subagent
 tools:
@@ -11,6 +12,9 @@ tools:
   webfetch: false
   task: false
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Convos
 

@@ -12,9 +12,12 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Higgsfield UI Automator
 
-Browser-based automation for Higgsfield AI via Playwright. Uses **subscription credits** (UI-only, not API). Covers: image (10 models), video (4 workflows), lipsync (11 models), cinema studio, motion control, edit/inpaint (5 models), upscale, apps (38+), asset library, mixed media (32 presets), motion/VFX (150+ presets), vibe motion, storyboard, AI influencer, character profiles, pipeline + Remotion, seed bracketing. **27 CLI commands.**
+Browser-based Higgsfield AI automation via Playwright. Uses **subscription credits** (UI-only, no API). Capabilities: image (10 models), video (5 models), lipsync (11 models), cinema studio, motion control, edit/inpaint (5 models), upscale, apps (38+), asset library, mixed media (32 presets), motion/VFX (150+ presets), vibe motion, storyboard, AI influencer, character profiles, pipeline + Remotion, seed bracketing. **27 CLI commands.**
 
 Use instead of `higgsfield.md` when: subscription credits apply, UI-exclusive features needed, or API has no credits.
 
@@ -42,11 +45,9 @@ higgsfield-helper.sh image "prompt" [--model soul] [--aspect 16:9] [--quality 2k
 higgsfield-helper.sh video "Camera pans" --image-file photo.jpg [--model kling-2.6] [--duration 5] [--timeout 600000]
 higgsfield-helper.sh lipsync "Hello world!" --image-file face.jpg [--model "Wan 2.5 Speak"]
 higgsfield-helper.sh app face-swap --image-file photo.jpg
-# Apps: face-swap, 3d-render, comic-book, transitions, recast, skin-enhancer, angles, relight, shots, zooms, poster, sketch-to-real, renaissance, mugshot, character-swap, outfit-swap, link-to-video-ad, plushies, sticker-matchcut, surrounded-by-animals
 higgsfield-helper.sh cinema-studio "Epic landscape" --tab image --camera "Dolly Zoom" [--lens "Anamorphic"] [--quality 4K]
 higgsfield-helper.sh motion-control --video-file dance.mp4 --image-file character.jpg [-p "prompt"]
 higgsfield-helper.sh edit "Replace background with beach" --image-file photo.jpg [-m soul_inpaint]
-# Edit models: soul_inpaint (default), nano_banana_pro_inpaint, banana_placement, canvas, multi
 higgsfield-helper.sh edit "Combine styles" --image-file base.jpg --image-file2 ref.jpg -m multi
 higgsfield-helper.sh upscale --image-file low-res.jpg
 higgsfield-helper.sh manage-assets --asset-action list|download-latest|download-all [--filter image|video|lipsync|upscaled|liked] [--limit 20]
@@ -56,20 +57,26 @@ higgsfield-helper.sh motion-preset [--preset dolly_zoom --image-file photo.jpg] 
 higgsfield-helper.sh video-edit --video-file clip.mp4 --image-file character.jpg -p "prompt"
 higgsfield-helper.sh storyboard -p "A hero's journey" --scenes 6 [--preset "Cinematic"]
 higgsfield-helper.sh vibe-motion -p "Product launch" --tab posters --preset Corporate
-# Vibe sub-types: infographics, text-animation, posters, presentation, from-scratch. Styles: Minimal, Corporate, Fashion, Marketing. 8-60cr.
-higgsfield-helper.sh influencer --preset Human -p "Fashion influencer, warm smile"  # 30 free gens
+higgsfield-helper.sh influencer --preset Human -p "Fashion influencer, warm smile"
 higgsfield-helper.sh character --image-file face.jpg -p "Sarah"
 higgsfield-helper.sh feature --feature fashion-factory|ugc-factory|photodump-studio|camera-controls|effects --image-file photo.jpg
 higgsfield-helper.sh credits
 higgsfield-helper.sh download [--model video]
 higgsfield-helper.sh seed-bracket "prompt" --seed-range 1000-1010 [--model nano_banana_pro]
-# Seed ranges: people 1000-1999 | action 2000-2999 | landscape 3000-3999 | product 4000-4999
-higgsfield-helper.sh pipeline --brief brief.json   # parallel submit: 5 scenes ~4min vs ~20min sequential
+higgsfield-helper.sh pipeline --brief brief.json
 ```
+
+**App slugs:** face-swap, 3d-render, comic-book, transitions, recast, skin-enhancer, angles, relight, shots, zooms, poster, sketch-to-real, renaissance, mugshot, character-swap, outfit-swap, link-to-video-ad, plushies, sticker-matchcut, surrounded-by-animals
+
+**Edit models:** soul_inpaint (default), nano_banana_pro_inpaint, banana_placement, canvas, multi
+
+**Vibe sub-types:** infographics, text-animation, posters, presentation, from-scratch. Styles: Minimal, Corporate, Fashion, Marketing. 8-60cr. Influencer: 30 free gens.
+
+**Seed ranges:** people 1000-1999 | action 2000-2999 | landscape 3000-3999 | product 4000-4999. **Pipeline:** parallel submit — 5 scenes ~4min vs ~20min sequential.
 
 ## Models
 
-### Image (10 models)
+### Image (10)
 
 | Model | Slug | Cost | Unlimited |
 |-------|------|------|-----------|
@@ -84,9 +91,9 @@ higgsfield-helper.sh pipeline --brief brief.json   # parallel submit: 5 scenes ~
 | Nano Banana | `nano_banana` | 1cr | Yes |
 | WAN 2.2 | `wan2` | 1cr | No |
 
-Quality ranking (product shots): GPT → Seedream 4.5 → FLUX → Kontext → ... `--prefer-unlimited` (default) auto-selects best unlimited model. Unlimited models use dedicated routes (e.g., `/nano-banana-pro`) — standard `/image/` routes cost credits even for subscribed models. Soul presets: All, New, TikTok Core, Instagram Aesthetics, Camera Presets, Beauty, Mood, Surreal, Graphic Art.
+Quality ranking: GPT → Seedream 4.5 → FLUX → Kontext → ... `--prefer-unlimited` (default) selects best unlimited model via dedicated routes (`/nano-banana-pro`) — standard `/image/` routes cost credits even for subscribers. Soul presets: All, New, TikTok Core, Instagram Aesthetics, Camera Presets, Beauty, Mood, Surreal, Graphic Art.
 
-### Video (5 models)
+### Video (5)
 
 | Model | Resolution | Duration | Cost | Unlimited |
 |-------|-----------|----------|------|-----------|
@@ -98,7 +105,7 @@ Quality ranking (product shots): GPT → Seedream 4.5 → FLUX → Kontext → .
 
 Unlimited ranking: Kling 2.6 → Kling O1 Video → Kling 2.5 Turbo. Also unlimited: Kling O1 Video Edit, Motion Control, Face Swap.
 
-### Lipsync (11 models)
+### Lipsync (11)
 
 Wan 2.5 Fast, Kling 2.6 Lipsync, Google Veo 3, Veo 3 Fast, Wan 2.5 Speak (9cr), Wan 2.5 Speak Fast, Kling Avatars 2.0 (up to 5min), Higgsfield Speak 2.0, Infinite Talk, Kling Lipsync, Sync Lipsync 2 Pro (4K).
 
@@ -117,60 +124,25 @@ Wan 2.5 Fast, Kling 2.6 Lipsync, Google Veo 3, Veo 3 Fast, Wan 2.5 Speak (9cr), 
 ```json
 {
   "title": "Product Demo Short",
-  "character": { "description": "Young woman, brown hair", "image": "/path/to/face.png" },
+  "character": { "description": "Young woman, brown hair", "image": "face.png" },
   "scenes": [{ "prompt": "Close-up holding product", "duration": 5, "dialogue": "Check this out!" }],
   "imagePrompts": ["Photorealistic product shot, 9:16"],
-  "imageModel": "nano-banana-pro",
-  "videoModel": "kling-2.6",
-  "aspect": "9:16",
+  "imageModel": "nano-banana-pro", "videoModel": "kling-2.6", "aspect": "9:16",
   "captions": [{ "text": "Check this out!", "startFrame": 0, "endFrame": 60 }],
-  "transitionStyle": "fade",
-  "transitionDuration": 15,
+  "transitionStyle": "fade", "transitionDuration": 15,
   "music": "/path/to/background.mp3"
 }
 ```
 
-`imagePrompts[]` = start-frame image prompts. `captions[]` = Remotion overlay (styles: bold-white, minimal, impact, typewriter, highlight).
-
-Remotion: `cd .agents/scripts/higgsfield/remotion && npm install` — animated captions, transitions (fade/slide/wipe), title cards, 1080×1920.
+`imagePrompts[]` = start-frame images. `captions[]` = Remotion overlay (styles: bold-white, minimal, impact, typewriter, highlight). Remotion: `cd .agents/scripts/higgsfield/remotion && npm install` — captions, transitions (fade/slide/wipe), title cards, 1080x1920.
 
 ## Output
 
 `--headed` → `~/Downloads/higgsfield/` | headless → `~/.aidevops/.agent-workspace/work/higgsfield/output/` | override: `--output` | subdirs: `--project` | `--no-sidecar` `--no-dedup`
 
-## Key CLI Options
-
-```text
---model/-m          Model slug
---aspect/-a         16:9 | 9:16 | 1:1 | 3:4 | 4:3 | 2:3 | 3:2
---quality/-q        1K | 1.5K | 2K | 4K
---output/-o         Output directory
---headed/--headless Browser mode (headless default)
---duration/-d       Video seconds (5, 10, 15)
---image-file        Input image path
---image-file2       Second image (multi-reference edit)
---video-file/--motion-ref  Motion reference video
---batch/-b          Images 1-4
---preset/-s         Style preset name
---seed              Seed number
---seed-range        1000-1010 or "4000,4003,4008"
---brief             Pipeline brief JSON path
---tab               image | video
---filter            image | video | lipsync | upscaled | liked
---asset-action      list | download | download-latest | download-all
---asset-index       0-based asset index
---chain-action      animate | inpaint | upscale | relight | angles | shots | ai-stylist | skin-enhancer | multishot
---feature           fashion-factory | ugc-factory | photodump-studio | camera-controls | effects
---subtype           Vibe Motion: infographics | text-animation | posters | presentation | from-scratch
---project           Organized output subdirs
---prefer-unlimited  Auto-select best unlimited model (default on)
-```
-
 ## Prompt Tips
 
-**Images** (camera + lighting + lens): `"Golden retriever, golden hour, shallow DOF, Canon EOS R5, 85mm, bokeh"`
-**Videos** (camera movement first): `"Smooth cinematic pan left to right, golden hour, 24fps film grain"`
-**Modifiers**: photorealistic → `"8k, highly detailed"` | cinematic → `"anamorphic, film grain, color graded"` | portrait → `"studio lighting, bokeh, 85mm"`
+Images: camera + lighting + lens (`"Golden retriever, golden hour, shallow DOF, Canon EOS R5, 85mm, bokeh"`). Videos: camera movement first (`"Smooth cinematic pan left to right, golden hour, 24fps film grain"`). Modifiers: photorealistic `"8k, highly detailed"` | cinematic `"anamorphic, film grain, color graded"` | portrait `"studio lighting, bokeh, 85mm"`.
 
 ## Troubleshooting
 

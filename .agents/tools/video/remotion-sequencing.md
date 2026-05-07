@@ -6,10 +6,19 @@ metadata:
   tags: sequence, series, timing, delay, trim
 ---
 
-Use `<Sequence>` to delay when an element appears in the timeline.
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
+## Sequence
+
+Delays when an element appears in the timeline. Wraps children in an absolute fill by default — use `layout="none"` to disable.
+
+**Premounting:** Always set `premountFor={1 * fps}` on every `<Sequence>` — loads the component before playback starts.
+
+**Local frames:** `useCurrentFrame()` inside a Sequence returns frames relative to sequence start (0-based), not the global frame.
 
 ```tsx
-import { Sequence } from "remotion";
+import {Sequence, useVideoConfig} from 'remotion';
 
 const {fps} = useVideoConfig();
 
@@ -18,32 +27,13 @@ const {fps} = useVideoConfig();
 </Sequence>
 <Sequence from={2 * fps} durationInFrames={2 * fps} premountFor={1 * fps}>
   <Subtitle />
-</Sequence>
-```
-
-This will by default wrap the component in an absolute fill element.  
-If the items should not be wrapped, use the `layout` prop:
-
-```tsx
-<Sequence layout="none">
-  <Title />
-</Sequence>
-```
-
-## Premounting
-
-This loads the component in the timeline before it is actually played.  
-Always premount any `<Sequence>`!
-
-```tsx
-<Sequence premountFor={1 * fps}>
-  <Title />
+  {/* useCurrentFrame() returns 0-based frames, not global */}
 </Sequence>
 ```
 
 ## Series
 
-Use `<Series>` when elements should play one after another without overlap.
+Sequential playback without overlap. Same absolute fill wrapping as `<Sequence>` — use `layout="none"` to disable. Negative `offset` starts the next sequence before the previous ends.
 
 ```tsx
 import {Series} from 'remotion';
@@ -55,47 +45,19 @@ import {Series} from 'remotion';
   <Series.Sequence durationInFrames={60}>
     <MainContent />
   </Series.Sequence>
-  <Series.Sequence durationInFrames={30}>
-    <Outro />
-  </Series.Sequence>
-</Series>;
-```
-
-Same as with `<Sequence>`, the items will be wrapped in an absolute fill element by default when using `<Series.Sequence>`, unless the `layout` prop is set to `none`.
-
-### Series with overlaps
-
-Use negative offset for overlapping sequences:
-
-```tsx
-<Series>
-  <Series.Sequence durationInFrames={60}>
-    <SceneA />
-  </Series.Sequence>
   <Series.Sequence offset={-15} durationInFrames={60}>
-    {/* Starts 15 frames before SceneA ends */}
-    <SceneB />
+    {/* Starts 15 frames before MainContent ends */}
+    <Outro />
   </Series.Sequence>
 </Series>
 ```
 
-## Frame References Inside Sequences
-
-Inside a Sequence, `useCurrentFrame()` returns the local frame (starting from 0):
-
-```tsx
-<Sequence from={60} durationInFrames={30}>
-  <MyComponent />
-  {/* Inside MyComponent, useCurrentFrame() returns 0-29, not 60-89 */}
-</Sequence>
-```
-
 ## Nested Sequences
 
-Sequences can be nested for complex timing:
+Nest `<Sequence>` for complex timing within a parent duration:
 
 ```tsx
-<Sequence from={0} durationInFrames={120}>
+<Sequence durationInFrames={120}>
   <Background />
   <Sequence from={15} durationInFrames={90} layout="none">
     <Title />

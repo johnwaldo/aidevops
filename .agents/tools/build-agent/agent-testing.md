@@ -13,6 +13,9 @@ tools:
   task: false
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Agent Testing Framework
 
 <!-- AI-CONTEXT-START -->
@@ -24,23 +27,17 @@ tools:
 - **User suites**: `~/.aidevops/.agent-workspace/agent-tests/suites/`
 - **Results/Baselines**: `~/.aidevops/.agent-workspace/agent-tests/{results,baselines}/`
 - **CLI**: Auto-detects `opencode` (override with `AGENT_TEST_CLI`)
-
-**When to use**: Validate agent changes before merging, regression-test after AGENTS.md/subagent edits, compare behavior across models, smoke-test after framework updates.
+- **Flow**: Loads JSON suite → sends prompts via `opencode run --format json` (CLI) or `opencode serve` (HTTP) → validates responses
+- **Server mode**: `POST /session` → `POST /session/:id/message` → extract text → delete. Override host/port with `OPENCODE_HOST`/`OPENCODE_PORT`
+- **When to use**: Validate agent changes before merging, regression-test after AGENTS.md/subagent edits, compare behavior across models, smoke-test after framework updates
 
 <!-- AI-CONTEXT-END -->
-
-## Architecture
-
-Loads test suites (JSON) → sends prompts via OpenCode CLI (`opencode run --format json`) or Server HTTP API (`opencode serve`) → validates responses (`expect_contains`, `expect_not_contains`, `expect_regex`, `expect_not_regex`, `min/max_length`).
-
-Server mode: `POST /session` (create) → `POST /session/:id/message` (send) → extract text → delete session. Override with `OPENCODE_HOST`/`OPENCODE_PORT`.
 
 ## Test Suite Format
 
 ```json
 {
   "name": "build-agent-tests",
-  "description": "Validates build-agent subagent knowledge",
   "agent": "Build+",
   "model": "anthropic/claude-sonnet-4-6",
   "timeout": 120,
@@ -51,22 +48,12 @@ Server mode: `POST /session` (create) → `POST /session/:id/message` (send) →
       "expect_contains": ["50", "100"],
       "expect_not_contains": ["unlimited"],
       "min_length": 50
-    },
-    {
-      "id": "slow-deep-analysis",
-      "prompt": "Generate a comprehensive analysis...",
-      "agent": "Plan+",
-      "model": "anthropic/claude-opus-4-20250514",
-      "timeout": 300,
-      "expect_contains": ["analysis"],
-      "expect_regex": "read.*when.*needed",
-      "min_length": 100
     }
   ]
 }
 ```
 
-Per-test fields (`agent`, `model`, `timeout`) override suite-level defaults.
+Per-test `agent`, `model`, `timeout` override suite-level defaults.
 
 ### Validation Fields
 
@@ -83,24 +70,17 @@ Per-test fields (`agent`, `model`, `timeout`) override suite-level defaults.
 ## Commands
 
 ```bash
-# Run suites
 agent-test-helper.sh run path/to/suite.json
-agent-test-helper.sh run smoke-test              # by name (searches suites/ and .agents/tests/)
-
-# Quick single-prompt test
+agent-test-helper.sh run smoke-test
 agent-test-helper.sh run-one "What is your primary purpose?"
 agent-test-helper.sh run-one "List your tools" --expect "bash"
 agent-test-helper.sh run-one "Explain git workflow" --agent "Build+" --model "anthropic/claude-sonnet-4-6" --timeout 60
-
-# Before/after comparison
-agent-test-helper.sh baseline smoke-test         # 1. save current behavior
-# 2. make agent changes
-agent-test-helper.sh compare smoke-test          # 3. compare — non-zero exit on regression
-
-# Manage suites
-agent-test-helper.sh create my-new-tests         # create template in user suites dir
-agent-test-helper.sh list                        # list all suites (user + shipped)
-agent-test-helper.sh results [suite-name]        # view recent results
+agent-test-helper.sh baseline smoke-test
+agent-test-helper.sh compare smoke-test
+agent-test-helper.sh create my-new-tests
+agent-test-helper.sh list
+agent-test-helper.sh results [suite-name]
+agent-test-helper.sh run agents-md-knowledge || { echo "Agent tests failed"; exit 1; }
 ```
 
 ## Shipped Test Suites
@@ -110,14 +90,6 @@ agent-test-helper.sh results [suite-name]        # view recent results
 | `smoke-test` | 3 | Quick agent responsiveness and identity check |
 | `agents-md-knowledge` | 5 | Core AGENTS.md instruction absorption |
 | `git-workflow` | 4 | Git workflow knowledge validation |
-
-## CI/CD Integration
-
-```bash
-agent-test-helper.sh run agents-md-knowledge || { echo "Agent tests failed"; exit 1; }
-```
-
-Requires `opencode` CLI in CI with API credentials.
 
 ## Environment Variables
 
@@ -133,6 +105,5 @@ Requires `opencode` CLI in CI with API credentials.
 
 - `build-agent.md` — Agent design and composition
 - `agent-review.md` — Reviewing and improving agents
-- `tools/ai-assistants/headless-dispatch.md` — Headless AI dispatch patterns
+- `tools/ai-assistants/headless-dispatch.md` — Headless dispatch patterns
 - `tools/ai-assistants/opencode-server.md` — OpenCode server API
-- AGENTS.md "Self-Improvement" section

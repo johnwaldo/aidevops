@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Planning & Tasks — Detail Reference
 
 Loaded on-demand when working with tasks, TODO.md, or the supervisor dispatch system.
@@ -19,7 +22,7 @@ Dependencies: `blocked-by:t001`, `blocks:t002`, `t001.1` (subtask).
 
 ## Auto-Dispatch
 
-Add `#auto-dispatch` to tasks that can run autonomously (clear spec, bounded scope, no user input needed). Default to including it — only omit when a specific exclusion applies. See `workflows/plans.md` "Auto-Dispatch Tagging". Phase 0 picks these up every 2 minutes and auto-creates batches (`auto-YYYYMMDD-HHMMSS`, concurrency = cores/2, min 2) when no active batch exists.
+Add `#auto-dispatch` to tasks that can run autonomously (clear spec, bounded scope, no user input needed). Default to including it — only omit when a specific exclusion applies. See `workflows/plans.md` "Auto-Dispatch Tagging". Phase 0 picks these up each pulse cycle (default every 3 minutes; configurable via `supervisor.pulse_interval_seconds`) and auto-creates batches (`auto-YYYYMMDD-HHMMSS`, concurrency = cores/2, min 2) when no active batch exists.
 
 **Interactive claim guard** (t1062): When working interactively on a `#auto-dispatch` task, add `assignee:` or `started:` before pushing — the supervisor skips tasks with these fields to prevent race conditions.
 
@@ -142,7 +145,9 @@ If ANY source confirms a merged PR (with verified `mergedAt`), treat the task as
 - `no_pr` or `task_only` worker exits: task stays `[ ]` until human or supervisor verifies the deliverable
 - The `issue-sync` GitHub Action auto-closes issues when tasks are marked `[x]` — false completions cascade into closed issues
 - NEVER close GitHub issues manually with `gh issue close` — let issue-sync verify deliverables before closing. Manual closure bypasses the proof-log safety check
+- **Merge state verification (GH#17871)**: Before closing an issue based on a PR, verify `mergedAt` is non-null via `gh pr view <N> --json mergedAt`. An open PR means work is in progress, not complete. The dedup helper returns exit 0 for BOTH open and merged PRs — callers that close issues must independently verify merge state.
 - **Pre-commit enforcement**: warns on `[ ]` → `[x]` without `verified:` or merged PR evidence (warning only — commit proceeds)
+- **Framework function references**: NEVER reference framework functions, automation, or processes that don't exist in the codebase. Workers that invent non-existent processes (e.g., referencing `_dispatch_issue_consolidation()` when no such function exists) create false audit trails. If proposing a new process, clearly label it as a proposal — never present it as existing automation.
 
 ## Planning File Workflow
 

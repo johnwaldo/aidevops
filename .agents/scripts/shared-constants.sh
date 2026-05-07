@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC2089,SC2090
 
 # Shared Constants for AI DevOps Framework Provider Scripts
@@ -10,9 +12,106 @@
 # Author: AI DevOps Framework
 # Version: 1.6.0
 
-# Include guard: prevent readonly errors when sourced multiple times
+# cool — include guard prevents readonly errors when sourced multiple times
 [[ -n "${_SHARED_CONSTANTS_LOADED:-}" ]] && return 0
 _SHARED_CONSTANTS_LOADED=1
+
+# =============================================================================
+# GH#18950 (t2087): Bash 3.2 → bash 4+ runtime re-exec self-heal guard.
+# =============================================================================
+# macOS ships /bin/bash 3.2.57 which has parser and set-e propagation bugs
+# (GH#18770, GH#18784, GH#18786, GH#18804, GH#18830). If this shared file
+# is sourced by a script running under bash < 4 AND a modern bash is
+# available at a known location, re-exec the calling script under the
+# modern bash. Transparent self-heal: the script runs from the top again
+# under the new interpreter, passes this guard (now on bash 4+), and
+# continues normally.
+#
+# Guard order matters: this MUST run before any bash 4+ constructs in
+# this file. It also runs AFTER the include guard to avoid re-execing
+# the same script multiple times through nested sources.
+#
+# Chicken-and-egg avoidance:
+#   - setup.sh itself does NOT source shared-constants.sh at the top; it
+#     can't, because it's the thing that installs modern bash.
+#   - bash-upgrade-helper.sh does NOT source shared-constants.sh either;
+#     it's the detector that this guard queries.
+#   - AIDEVOPS_BASH_REEXECED=1 is set before exec to prevent infinite
+#     loops if a symlink points at the wrong binary.
+#   - BASH_SOURCE[1] is the immediate caller; if unset, we're being
+#     executed directly (e.g., `bash shared-constants.sh`) and skip
+#     the guard. The guard walks the BASH_SOURCE stack to find the
+#     OUTERMOST caller (the top-level script) rather than using [1],
+#     so the re-exec targets the correct entry point even when sourced
+#     via intermediate helpers (GH#19632 / t2176).
+if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]] &&
+	[[ -z "${AIDEVOPS_BASH_REEXECED:-}" ]] &&
+	[[ -n "${BASH_SOURCE[1]:-}" ]]; then
+	# Walk BASH_SOURCE[] to find the outermost caller, not just
+	# BASH_SOURCE[1] (the immediate caller). When sourced via an
+	# intermediate helper (e.g. pulse-wrapper→config-helper→shared-constants),
+	# BASH_SOURCE[1] points to the intermediate, and exec-ing it would
+	# replace the top-level script with a standalone run of the helper.
+	# The outermost caller is the last element in the BASH_SOURCE array.
+	# Bash 3.2 does not support negative indices (${arr[-1]}), so iterate.
+	# (GH#19632 / t2176)
+	_aidevops_top_caller=""
+	for _aidevops_src in "${BASH_SOURCE[@]}"; do
+		_aidevops_top_caller="$_aidevops_src"
+	done
+	unset _aidevops_src
+	# Safety: skip if outermost caller is this file itself (direct execution
+	# of shared-constants.sh, which has no useful main).
+	if [[ "$_aidevops_top_caller" != "${BASH_SOURCE[0]}" ]]; then
+		_aidevops_macos_platform="$(printf '\104\141\162\167\151\156')"
+		_aidevops_bash_candidates="/opt/homebrew/bin/bash /usr/local/bin/bash"
+		if [[ "$(uname -s 2>/dev/null || true)" != "$_aidevops_macos_platform" ]]; then
+			_aidevops_bash_candidates="${_aidevops_bash_candidates} /home/linuxbrew/.linuxbrew/bin/bash"
+		fi
+		_aidevops_path_bash="$(command -v bash 2>/dev/null || true)"
+		[[ -n "$_aidevops_path_bash" ]] && _aidevops_bash_candidates="${_aidevops_bash_candidates} ${_aidevops_path_bash}"
+		for _aidevops_bash_candidate in $_aidevops_bash_candidates; do
+			if [[ -n "$_aidevops_bash_candidate" && -f "$_aidevops_bash_candidate" && -x "$_aidevops_bash_candidate" && "$_aidevops_bash_candidate" != "/bin/bash" ]]; then
+				export AIDEVOPS_BASH_REEXECED=1
+				exec "$_aidevops_bash_candidate" "$_aidevops_top_caller" "$@"
+			fi
+		done
+		unset _aidevops_bash_candidate _aidevops_bash_candidates _aidevops_path_bash _aidevops_macos_platform
+	fi
+	unset _aidevops_top_caller
+	# Fall through: no modern bash found. The calling script will run
+	# on bash 3.2 and may hit compat bugs. The aidevops update check
+	# will surface an advisory on the next cycle (bash-upgrade-helper.sh
+	# update-check, rate-limited to 24h).
+fi
+
+# t2201: Clear AIDEVOPS_BASH_REEXECED once we are stably on bash 4+. The
+# re-exec guard exports this flag before `exec` to prevent its own
+# infinite loop, but without this cleanup the flag persists in the
+# environment of every child process. If any child is then spawned
+# under /bin/bash 3.2 (e.g. an explicit `/bin/bash script.sh` call, or
+# PATH mis-ordering that resolves `#!/usr/bin/env bash` to 3.2), THAT
+# child's guard sees AIDEVOPS_BASH_REEXECED=1 and short-circuits the
+# re-exec — leaving the grandchild running bash 3.2 and hitting any
+# bash 4+ construct as a runtime error. Clearing the flag only when
+# BASH_VERSINFO[0] >= 4 preserves the anti-infinite-loop property for
+# the fallthrough branch (no modern bash found, still on 3.2) while
+# ensuring fresh subprocess invocations get a clean guard decision.
+if [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]; then
+	unset AIDEVOPS_BASH_REEXECED
+fi
+
+# =============================================================================
+# Tool Version Pins
+# =============================================================================
+# Pin a tool to a specific version to prevent auto-upgrade to a broken release.
+# Set to "latest" to resume tracking upstream. Grep for the variable name to
+# find all consumers that need updating when unpinning.
+
+# OpenCode unpinned: root cause was SQLite contention (shared DB, busy_timeout=0),
+# not version-specific. Fixed by DB isolation per worker (v3.6.130).
+# Upstream context: https://github.com/anomalyco/opencode/issues/21215
+readonly OPENCODE_PINNED_VERSION="latest"
 
 # =============================================================================
 # HTTP and API Constants
@@ -88,6 +187,48 @@ readonly LOG_SUFFIX=".log"
 readonly CONFIG_SUFFIX=".json"
 readonly TEMPLATE_SUFFIX=".txt"
 readonly TEMP_PREFIX="tmp_"
+
+# =============================================================================
+# launchd PATH hygiene
+# =============================================================================
+# Build a PATH value safe to embed in macOS LaunchAgent EnvironmentVariables.
+# launchd jobs inherit no useful interactive shell setup, but serialising the
+# caller's raw PATH bakes stale manager-specific entries into long-lived plists.
+# Keep known system/tool roots first, then preserve only inherited entries that
+# actually exist on this host.
+
+_aidevops_append_launchd_path_dir() {
+	local dir="$1"
+	[[ -n "$dir" ]] || return 0
+	[[ -d "$dir" ]] || return 0
+	case ":${_aidevops_launchd_path_seen:-}:" in
+	*":${dir}:"*) return 0 ;;
+	esac
+	_aidevops_launchd_path_seen="${_aidevops_launchd_path_seen:+${_aidevops_launchd_path_seen}:}${dir}"
+	_aidevops_launchd_path_result="${_aidevops_launchd_path_result:+${_aidevops_launchd_path_result}:}${dir}"
+	return 0
+}
+
+aidevops_launchd_sanitized_path() {
+	local input_path="${1:-${PATH:-}}"
+	local default_path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+	local _aidevops_launchd_path_result=""
+	local _aidevops_launchd_path_seen=""
+	local dir=""
+	local old_ifs="$IFS"
+
+	IFS=':'
+	for dir in $default_path; do
+		_aidevops_append_launchd_path_dir "$dir"
+	done
+	for dir in $input_path; do
+		_aidevops_append_launchd_path_dir "$dir"
+	done
+	IFS="$old_ifs"
+
+	printf '%s' "$_aidevops_launchd_path_result"
+	return 0
+}
 
 # =============================================================================
 # Credentials File Security
@@ -176,6 +317,57 @@ readonly TASK_RECONCILIATION_TERMINAL_STATES_SQL="'complete', 'deployed', 'verif
 
 # States treated as non-active when checking sibling in-flight limits.
 readonly TASK_SIBLING_NON_ACTIVE_STATES_SQL="'verified','cancelled','deployed','complete','failed','blocked','queued'"
+
+# =============================================================================
+# Credential Sanitization (t2458)
+# =============================================================================
+# Defense against credential-bearing text leaking into stdout/stderr/logs.
+# The primary leak vector is `git remote get-url origin` when the remote URL
+# embeds a token (e.g., https://gho_ABC...@github.com/owner/repo.git) — any
+# helper that echoes $remote_url emits the token to the transcript, where it
+# may be captured by session loggers, sent upstream to model providers, or
+# surface in pasted bug reports.
+#
+# Two layers:
+#   scrub_credentials  — strips known token prefixes (sk-, ghp_, gho_, ghs_,
+#                        ghu_, github_pat_, glpat-, xoxb-, xoxp-) from any
+#                        text passed to it. Pure regex, no network.
+#   sanitize_url       — strips the `user:pass@` or `token@` authority from
+#                        URL-shaped strings, THEN pipes through
+#                        scrub_credentials to catch tokens embedded elsewhere
+#                        in the URL (query params, path segments).
+#
+# Always prefer sanitize_url for anything derived from `git remote get-url`,
+# `git config remote.*.url`, or user-supplied remote URLs. Use
+# scrub_credentials for arbitrary log lines or error messages where a URL
+# is not the only possible leak source.
+#
+# Usage:
+#   echo "Remote: $(sanitize_url "$remote_url")"
+#   log_error "fetch failed: $(scrub_credentials "$error_output")"
+
+scrub_credentials() {
+	local text="$1"
+	# Word-boundary anchor (^|non-word-char) prevents false positives where a
+	# credential prefix appears mid-word — e.g. `task-failure-handler` contains
+	# the literal `sk-failure-handler` (16 chars, matches `sk-[A-Za-z0-9_-]{10,}`)
+	# but is NOT a credential. macOS BSD sed has no `\b`, so we capture the
+	# preceding boundary character and restore it via \1 in the replacement.
+	# (t2892, GH#21026)
+	printf '%s' "$text" | sed -E 's/(^|[^A-Za-z0-9_-])(sk-|ghp_|gho_|ghs_|ghu_|github_pat_|glpat-|xoxb-|xoxp-)[A-Za-z0-9_-]{10,}/\1[redacted-credential]/g'
+	return 0
+}
+
+sanitize_url() {
+	local url="$1"
+	local stripped
+	# Strip credential authority component: scheme://user:pass@host -> scheme://host
+	# Matches any scheme (http, https, git, ssh, etc.), any chars up to @.
+	stripped=$(printf '%s' "$url" | sed -E 's|^([a-zA-Z][a-zA-Z0-9+.-]*://)[^@/]+@|\1|')
+	# Second pass: catch tokens embedded elsewhere (query params, fragments).
+	scrub_credentials "$stripped"
+	return 0
+}
 
 # =============================================================================
 # Portable timeout function (macOS + Linux)
@@ -372,6 +564,46 @@ print_info() {
 }
 
 # =============================================================================
+# Counter Safety Helper (t2763)
+# =============================================================================
+# safe_grep_count — count lines matching a pattern without the stacking bug.
+#
+# `grep -c` outputs the count to stdout AND exits 1 when there are zero
+# matches. The common idiom `count=$(grep -c 'pat' file || echo "0")`
+# therefore appends "0" to grep's own "0" on the zero-match path, producing
+# a multi-line string "0\n0" that breaks arithmetic, comparisons, and text
+# interpolation. Canonical failure: parent #20402 rendered
+# "Progress: **0\n0 done**".
+#
+# This helper passes all arguments through to grep -c, catches its exit
+# code with `|| true`, and guards the result with a regex to guarantee a
+# single integer on a single line.
+#
+# NOTE: Designed for single-file or stdin use. With multiple file arguments,
+# grep -c outputs "filename:count" per file, which fails the integer regex
+# and returns 0. The -h flag is passed defensively to suppress filename
+# prefixes, but multi-line output (from multiple files) still falls through
+# to the 0 fallback. For multi-file counting, call once per file.
+#
+# Usage:
+#   count=$(safe_grep_count -E '^pat' file.txt)
+#   count=$(printf '%s\n' "$data" | safe_grep_count 'needle')
+#   count=$(safe_grep_count 'nope' /does-not-exist)   # prints 0, no error
+#
+# Enforcement: `.agents/scripts/counter-stack-check.sh` flags the unsafe
+# idiom in CI. See also `reference/shell-style-guide.md` § Counter Safety.
+safe_grep_count() {
+	local _result
+	_result=$(grep -h -c "$@" 2>/dev/null || true)
+	if [[ "$_result" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "$_result"
+	else
+		printf '0\n'
+	fi
+	return 0
+}
+
+# =============================================================================
 # Shared Logging Functions (issue #2411)
 # =============================================================================
 # Consolidated log_info/log_error/log_success/log_warn to eliminate duplication
@@ -413,6 +645,12 @@ log_success() {
 log_warn() {
 	local label="${LOG_PREFIX:-WARN}"
 	echo -e "${YELLOW}[${label}]${NC} $*" >&2
+	return 0
+}
+
+# Alias for log_warn — callers using the more explicit name are supported
+log_warning() {
+	log_warn "$@"
 	return 0
 }
 
@@ -491,6 +729,57 @@ ${text}
 }
 
 # =============================================================================
+# Portable fast directory copy with copy-on-write where available (t2889)
+#
+# Switches to OS-native CoW (clonefile/reflink) when supported, eliminating
+# real disk duplication and slashing wall time on large trees. Measured on a
+# 3.4GB / 215k-file node_modules: cp -a 166s vs cp -ac 78s on macOS APFS,
+# near-zero disk delta (CoW shared blocks).
+#
+# Falls back transparently to plain cp -a when CoW isn't available (cross-
+# volume, non-APFS/btrfs/xfs filesystem, older OS). The destination is
+# functionally indistinguishable from cp -a; only disk usage and copy time
+# differ.
+#
+# - macOS:   cp -ac  (clonefile syscall, APFS CoW, preserves symlinks/attrs)
+# - Linux:   cp -a --reflink=auto, then cp -a if reflink flag unsupported
+# - Other:   cp -a  (regular recursive copy)
+#
+# Usage: fast_cp <src> <dst>
+# Returns: cp exit status
+# =============================================================================
+fast_cp() {
+	local src="$1"
+	local dst="$2"
+	case "$(uname -s)" in
+		Darwin)
+			cp -ac "$src" "$dst"
+			return $?
+			;;
+		Linux)
+			cp -a --reflink=auto "$src" "$dst" 2>/dev/null || cp -a "$src" "$dst"
+			return $?
+			;;
+		*)
+			cp -a "$src" "$dst"
+			return $?
+			;;
+	esac
+}
+
+# =============================================================================
+# Portable stat wrappers (macOS vs GNU/Linux)
+# Sourced from portable-stat.sh — capability detection at load time.
+# Provides: _file_mtime_epoch, _file_size_bytes, _file_perms, _file_owner.
+# =============================================================================
+
+_SC_SELF="${BASH_SOURCE[0]:-${0:-}}"
+# shellcheck source=./portable-stat.sh
+source "${_SC_SELF%/*}/portable-stat.sh"
+# _file_size_bytes, _file_perms, _file_mtime_epoch, _file_owner, _stat_batch,
+# _stat_translate_fmt are now provided by portable-stat.sh (GH#21742).
+
+# =============================================================================
 # Stderr Logging Utilities
 # =============================================================================
 # Replace blanket 2>/dev/null with targeted stderr handling.
@@ -504,13 +793,32 @@ ${text}
 #   - sqlite3, gh, curl, git push/merge: use log_stderr (errors matter)
 #   - rm, mkdir with || true: keep 2>/dev/null (race conditions)
 
+# Resolve the canonical aidevops log directory at runtime.
+# Reads paths.log_dir from ~/.aidevops/config/paths.jsonc when config-helper.sh
+# is sourced (provides _jsonc_get), falls back to ~/.aidevops/logs otherwise.
+# Tilde-expansion handled. Prints the resolved absolute path.
+_resolve_log_dir() {
+	local resolved
+	# shellcheck disable=SC2088  # Tilde is intentionally literal; expanded below
+	if type _jsonc_get >/dev/null 2>&1; then
+		resolved=$(_jsonc_get "paths.log_dir" "~/.aidevops/logs")
+	else
+		resolved="~/.aidevops/logs"
+	fi
+	# Tilde expansion
+	resolved="${resolved/#\~/$HOME}"
+	printf '%s\n' "$resolved"
+	return 0
+}
+
 # Initialize log file for the calling script.
-# Sets AIDEVOPS_LOG_FILE to ~/.aidevops/logs/<script-name>.log
+# Sets AIDEVOPS_LOG_FILE to <log_dir>/<script-name>.log
 # Call once at script start after sourcing shared-constants.sh.
 init_log_file() {
 	local script_name
 	script_name="$(basename "${BASH_SOURCE[1]:-${0:-unknown}}" .sh)"
-	local log_dir="${HOME}/.aidevops/logs"
+	local log_dir
+	log_dir=$(_resolve_log_dir)
 	mkdir -p "$log_dir" 2>/dev/null || true
 	AIDEVOPS_LOG_FILE="${log_dir}/${script_name}.log"
 	export AIDEVOPS_LOG_FILE
@@ -646,1138 +954,320 @@ _save_cleanup_scope() {
 	return 0
 }
 
-# =============================================================================
-# GitHub Token Workflow Scope Check (t1540)
-# =============================================================================
-# Reusable function to check if the current gh token has the `workflow` scope.
-# Without this scope, git push and gh pr merge fail for branches that modify
-# .github/workflows/ files. The error is:
-#   "refusing to allow an OAuth App to create or update workflow without workflow scope"
-#
-# Usage:
-#   if ! gh_token_has_workflow_scope; then
-#       echo "Missing workflow scope — run: gh auth refresh -s workflow"
-#   fi
-#
-# Returns: 0 if token has workflow scope, 1 if missing, 2 if unable to check
-
-gh_token_has_workflow_scope() {
-	if ! command -v gh &>/dev/null; then
-		return 2
-	fi
-
-	local auth_output
-	auth_output=$(gh auth status 2>&1) || return 2
-
-	# gh auth status outputs scopes in various formats depending on version:
-	#   Token scopes: 'admin:public_key', 'gist', 'read:org', 'repo', 'workflow'
-	#   Token scopes: admin:public_key, gist, read:org, repo, workflow
-	if echo "$auth_output" | grep -q "'workflow'"; then
-		return 0
-	fi
-	if echo "$auth_output" | grep -qiE 'Token scopes:.*workflow'; then
-		return 0
-	fi
-
-	return 1
-}
-
-# Check if a set of file paths includes .github/workflows/ changes.
-# Accepts file paths on stdin (one per line) or as arguments.
-#
-# Usage:
-#   git diff --name-only HEAD~1 | files_include_workflow_changes
-#   files_include_workflow_changes ".github/workflows/ci.yml" "src/main.sh"
-#
-# Returns: 0 if workflow files found, 1 if not
-files_include_workflow_changes() {
-	if [[ $# -gt 0 ]]; then
-		# Check arguments
-		local f
-		for f in "$@"; do
-			if [[ "$f" == .github/workflows/* ]]; then
-				return 0
-			fi
-		done
-		return 1
-	fi
-
-	# Check stdin
-	local line
-	while IFS= read -r line; do
-		if [[ "$line" == .github/workflows/* ]]; then
-			return 0
-		fi
-	done
-	return 1
-}
 
 # =============================================================================
-# Session Origin Detection
+# GitHub Token/Origin/Label/Status Wrappers -- extracted module
 # =============================================================================
-# Detects whether the current session is a headless worker or interactive user.
-# Used to tag issues, TODOs, and PRs with origin:worker or origin:interactive.
-#
-# Detection signals (checked in priority order):
-#   1. FULL_LOOP_HEADLESS=true — set by supervisor dispatch
-#   2. AIDEVOPS_HEADLESS=true — set by headless-runtime-helper.sh
-#   3. OPENCODE_HEADLESS=true — set by OpenCode headless mode
-#   4. GITHUB_ACTIONS=true — CI environment
-#   5. No TTY (! -t 0 && ! -t 1) — non-interactive shell
-#   6. Default: interactive
-#
-# Usage:
-#   local origin; origin=$(detect_session_origin)
-#   # Returns: "worker" or "interactive"
-#
-#   local label; label=$(session_origin_label)
-#   # Returns: "origin:worker" or "origin:interactive"
+# Functions: gh_token_has_workflow_scope, files_include_workflow_changes,
+#            detect_session_origin, session_origin_label, gh_create_issue,
+#            gh_create_pr, gh_issue_comment, gh_pr_comment, gh_issue_edit_safe,
+#            gh_pr_edit_safe, set_origin_label, set_issue_status, and helpers
+# Extracted to shared-gh-wrappers.sh to keep this file < 2000 lines.
+# See shared-gh-wrappers.sh for full documentation.
 
-detect_session_origin() {
-	# Explicit headless env vars (set by dispatch infrastructure)
-	if [[ "${FULL_LOOP_HEADLESS:-}" == "true" ]]; then
-		echo "worker"
+_SC_SELF="${BASH_SOURCE[0]:-${0:-}}"
+# shellcheck source=./shared-gh-wrappers.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via _SC_SELF
+source "${_SC_SELF%/*}/shared-gh-wrappers.sh"
+
+
+#######################################
+# Clear active-lifecycle status labels on dispatch claim release (t2420).
+#
+# Removes only the four ACTIVE status labels (queued, claimed, in-progress,
+# in-review) and optionally the worker's assignment. PRESERVES terminal
+# states (done, blocked) and the eligible state (available) — those are set
+# by authoritative paths (PR merge, blocker triage, explicit re-queue) and
+# must survive a worker's claim release.
+#
+# Why not set_issue_status "" ? Because it would strip status:done set by
+# the PR merge path if the CLAIM_RELEASED comment races ahead — a worker
+# that succeeds, creates a PR, the PR merges (setting status:done), and
+# then the worker's EXIT trap fires CLAIM_RELEASED would regress the state.
+# This helper is the targeted, race-safe alternative.
+#
+# Why not just skip label cleanup entirely? Because without it, orphan
+# labels pin an issue as "active" even though no worker holds the claim,
+# blocking pulse re-dispatch via the t1996 combined-signal guard
+# (active-status + assignee = block). Observed in production: #19864 and
+# #19738 were both pinned status:queued/claimed for 40+ minutes after
+# worker completion, with dead PIDs (one case was PID 11742 reused by
+# Brave Browser — see t2421).
+#
+# Defensive: skips entirely if origin:interactive is present. Workers
+# should never hold the claim on interactive issues (dispatch-dedup
+# blocks that), but if we find one, we never touch interactive-session
+# ownership state (t2056).
+#
+# Args:
+#   $1 — issue number
+#   $2 — repo slug (owner/repo)
+#   $3 — worker login to remove as assignee (optional; empty = no assignee change)
+#
+# Returns:
+#   0 on success, including idempotent no-ops and defensive skips
+#   1 on gh failure (logged by gh to stderr; suppressed here)
+#
+# Example:
+#   clear_active_status_on_release 20026 marcusquinn/aidevops "$(whoami)"
+#######################################
+clear_active_status_on_release() {
+	local issue_num="$1"
+	local repo_slug="$2"
+	local worker_login="${3:-}"
+
+	if [[ -z "$issue_num" || -z "$repo_slug" ]]; then
 		return 0
 	fi
-	if [[ "${AIDEVOPS_HEADLESS:-}" == "true" ]]; then
-		echo "worker"
+
+	# Defensive: don't touch interactive-session-owned issues.
+	# A single fetch is cheap — only fires on claim release, not hot path.
+	local labels_json=""
+	labels_json=$(gh issue view "$issue_num" --repo "$repo_slug" \
+		--json labels --jq '[.labels[].name] | join(",")' 2>/dev/null) || labels_json=""
+	case ",${labels_json}," in
+	*,origin:interactive,*)
 		return 0
+		;;
+	esac
+
+	# Defensive: if a linked PR exists for this issue (OPEN or MERGED),
+	# preserve the worker's assignee and status:in-review.
+	#
+	# OPEN linked PR: the PR pipeline owns final cleanup on merge (see
+	# pulse-merge.sh::_release_interactive_claim_on_merge for the
+	# interactive mirror). Stripping here strands the PR in
+	# maintainer-gate Job 1 Check 2 because the assignee check fires
+	# after CLAIM_RELEASED but before PR merge. GH#20195/t2451 closed
+	# that trust-gate loop.
+	#
+	# MERGED linked PR: preserves the closing-time audit trail on the
+	# issues list — the assignee identifies which runner's worker
+	# completed the work once the issue auto-closes. Without this, a
+	# fast merge (CI green before the worker exit trap fires — observed
+	# as little as 16s) races the unassign and erases the audit trail.
+	# t2746/GH#20520.
+	#
+	# We still remove queued, claimed, and in-progress — those never
+	# outlive the worker process regardless of PR state. When no linked PR
+	# exists, add status:available in the same edit so failed workers do not
+	# leave issues pinned as assigned-but-queued until the next stale sweep.
+	#
+	# CLOSED-not-merged PRs do NOT trigger preserve: the work didn't
+	# complete, and leaving the assignee on the issue would block
+	# future dispatch via the combined-signal dedup rule (t1996).
+	#
+	# Closing-keyword regex matches pulse-merge.sh::_extract_linked_issue
+	# character-for-character (case-insensitive) so behaviour is consistent
+	# across the merge path and the release path. Do NOT widen this to
+	# `Ref` or `For` — those are planning references that MUST NOT block
+	# assignee cleanup (see t2046).
+	local has_linked_pr=false
+	local linked_prs_json=""
+	linked_prs_json=$(gh pr list --repo "$repo_slug" --state all \
+		--search "#${issue_num} in:body" \
+		--json number,state,body --limit 20 2>/dev/null || true)
+	if [[ -z "$linked_prs_json" ]]; then
+		linked_prs_json="[]"
 	fi
-	if [[ "${OPENCODE_HEADLESS:-}" == "true" ]]; then
-		echo "worker"
-		return 0
-	fi
-	# CI environments are always workers
-	if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-		echo "worker"
-		return 0
-	fi
-	# No TTY = non-interactive (headless dispatch, cron, pipe)
-	if [[ ! -t 0 ]] && [[ ! -t 1 ]]; then
-		echo "worker"
-		return 0
-	fi
-	echo "interactive"
-	return 0
-}
-
-# Returns the GitHub label string for the current session origin.
-# Usage: local label; label=$(session_origin_label)
-session_origin_label() {
-	local origin
-	origin=$(detect_session_origin)
-	echo "origin:${origin}"
-	return 0
-}
-
-# =============================================================================
-# TODO.md Serialized Commit+Push
-# =============================================================================
-# Provides atomic locking and pull-rebase-retry for TODO.md operations.
-# Prevents race conditions when multiple actors (supervisor, interactive sessions)
-# push to TODO.md on main simultaneously.
-#
-# Workers (headless dispatch runners) must NOT call this function or edit TODO.md
-# directly. They report status via exit code/log/mailbox; the supervisor handles
-# all TODO.md updates.
-#
-# Usage:
-#   todo_commit_push "repo_path" "commit message"
-#   todo_commit_push "repo_path" "commit message" "TODO.md todo/"  # custom paths
-#
-# Returns 0 on success, 1 on failure after retries.
-
-readonly TODO_LOCK_DIR="${HOME}/.aidevops/locks"
-readonly TODO_LOCK_PATH="${TODO_LOCK_DIR}/todo-md.lock"
-readonly TODO_MAX_RETRIES=3
-readonly TODO_LOCK_TIMEOUT=30
-readonly TODO_STALE_LOCK_AGE=120
-
-# Portable atomic lock using mkdir (works on macOS + Linux).
-# mkdir is atomic on all POSIX systems -- only one process succeeds.
-_todo_acquire_lock() {
-	local log_target="${1:-/dev/null}"
-	local waited=0
-
-	while [[ $waited -lt $TODO_LOCK_TIMEOUT ]]; do
-		if mkdir "$TODO_LOCK_PATH" 2>/dev/null; then
-			echo $$ >"$TODO_LOCK_PATH/pid"
-			return 0
-		fi
-
-		# Check for stale lock (owner process died)
-		if [[ -f "$TODO_LOCK_PATH/pid" ]]; then
-			local lock_pid
-			lock_pid=$(cat "$TODO_LOCK_PATH/pid" 2>/dev/null || echo "")
-			if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
-				echo "[todo_lock] Removing stale lock (PID $lock_pid dead)" >>"$log_target"
-				rm -rf "$TODO_LOCK_PATH"
-				continue
-			fi
-		fi
-
-		# Check lock age (safety net for orphaned locks)
-		if [[ -d "$TODO_LOCK_PATH" ]]; then
-			local lock_age
-			if [[ "$(uname)" == "Darwin" ]]; then
-				lock_age=$(($(date +%s) - $(stat -f %m "$TODO_LOCK_PATH" 2>/dev/null || echo "0")))
-			else
-				lock_age=$(($(date +%s) - $(stat -c %Y "$TODO_LOCK_PATH" 2>/dev/null || echo "0")))
-			fi
-			if [[ $lock_age -gt $TODO_STALE_LOCK_AGE ]]; then
-				echo "[todo_lock] Removing stale lock (age ${lock_age}s > ${TODO_STALE_LOCK_AGE}s)" >>"$log_target"
-				rm -rf "$TODO_LOCK_PATH"
-				continue
-			fi
-		fi
-
-		sleep 1
-		waited=$((waited + 1))
-	done
-
-	echo "[todo_lock] Failed to acquire lock after ${TODO_LOCK_TIMEOUT}s" >>"$log_target"
-	return 1
-}
-
-_todo_release_lock() {
-	rm -rf "$TODO_LOCK_PATH"
-	return 0
-}
-
-todo_commit_push() {
-	local repo_path="$1"
-	local commit_msg="$2"
-	local files="${3:-TODO.md todo/}"
-	local log_target="${AIDEVOPS_LOG_FILE:-/dev/null}"
-
-	mkdir -p "$TODO_LOCK_DIR" 2>/dev/null || true
-
-	if ! _todo_acquire_lock "$log_target"; then
-		return 1
+	if printf '%s' "$linked_prs_json" | jq -e --arg num "$issue_num" \
+		'[.[] | select((.state == "OPEN" or .state == "MERGED") and ((.body // "") | test("(close[ds]?|fix(es|ed)?|resolve[ds]?)[[:space:]]*#" + $num + "\\b"; "i")))] | length > 0' \
+		>/dev/null 2>&1; then
+		has_linked_pr=true
 	fi
 
-	# Ensure lock is released on exit (including signals)
-	trap '_todo_release_lock' EXIT
+	local -a _flags=()
+	_flags+=(--remove-label "status:queued")
+	_flags+=(--remove-label "status:claimed")
+	_flags+=(--remove-label "status:in-progress")
 
-	local rc=0
-	_todo_commit_push_inner "$repo_path" "$commit_msg" "$files" "$log_target" || rc=$?
-
-	_todo_release_lock
-	trap - EXIT
-
-	return $rc
-}
-
-_todo_commit_push_inner() {
-	local repo_path="$1"
-	local commit_msg="$2"
-	local files="$3"
-	local log_target="$4"
-	local attempt=0
-
-	while [[ $attempt -lt $TODO_MAX_RETRIES ]]; do
-		attempt=$((attempt + 1))
-
-		# Pull latest before staging (rebase to keep linear history)
-		local current_branch
-		current_branch=$(git -C "$repo_path" branch --show-current 2>/dev/null || echo "main")
-		if git -C "$repo_path" remote get-url origin &>/dev/null; then
-			git -C "$repo_path" pull --rebase origin "$current_branch" 2>>"$log_target" || {
-				echo "[todo_commit_push] Pull --rebase failed (attempt $attempt/$TODO_MAX_RETRIES)" >>"$log_target"
-				# If rebase conflicts, abort and retry
-				git -C "$repo_path" rebase --abort 2>/dev/null || true
-				sleep 1
-				continue
-			}
+	if [[ "$has_linked_pr" != "true" ]]; then
+		_flags+=(--remove-label "status:in-review")
+		_flags+=(--add-label "status:available")
+		if [[ -n "$worker_login" ]]; then
+			_flags+=(--remove-assignee "$worker_login")
 		fi
-
-		# Stage planning files
-		local file
-		for file in $files; do
-			git -C "$repo_path" add "$file" 2>/dev/null || true
-		done
-
-		# Check if anything was staged
-		if git -C "$repo_path" diff --cached --quiet 2>/dev/null; then
-			echo "[todo_commit_push] No changes staged" >>"$log_target"
-			return 0
-		fi
-
-		# Commit
-		if ! git -C "$repo_path" commit -m "$commit_msg" --no-verify 2>>"$log_target"; then
-			echo "[todo_commit_push] Commit failed (attempt $attempt/$TODO_MAX_RETRIES)" >>"$log_target"
-			continue
-		fi
-
-		# Push
-		if git -C "$repo_path" push origin "$current_branch" 2>>"$log_target"; then
-			echo "[todo_commit_push] Success on attempt $attempt" >>"$log_target"
-			return 0
-		fi
-
-		echo "[todo_commit_push] Push failed (attempt $attempt/$TODO_MAX_RETRIES), retrying..." >>"$log_target"
-
-		# Push failed: pull --rebase to incorporate remote changes, then retry push
-		git -C "$repo_path" pull --rebase origin "$current_branch" 2>>"$log_target" || {
-			git -C "$repo_path" rebase --abort 2>/dev/null || true
-			sleep 1
-			continue
-		}
-
-		# Retry push after rebase
-		if git -C "$repo_path" push origin "$current_branch" 2>>"$log_target"; then
-			echo "[todo_commit_push] Success after rebase on attempt $attempt" >>"$log_target"
-			return 0
-		fi
-
-		sleep $((attempt))
-	done
-
-	echo "[todo_commit_push] Failed after $TODO_MAX_RETRIES attempts" >>"$log_target"
-	return 1
-}
-
-# =============================================================================
-# Worktree Ownership Registry (t189)
-# =============================================================================
-# SQLite-backed registry that tracks which session/batch owns each worktree.
-# Prevents cross-session worktree removal — the root cause of t189.
-#
-# Available to all scripts that source shared-constants.sh.
-
-WORKTREE_REGISTRY_DIR="${HOME}/.aidevops/.agent-workspace"
-WORKTREE_REGISTRY_DB="${WORKTREE_REGISTRY_DIR}/worktree-registry.db"
-
-# SQL-escape a value for SQLite (double single quotes)
-_wt_sql_escape() {
-	local val="$1"
-	echo "${val//\'/\'\'}"
-}
-
-# Initialize the registry database
-_init_registry_db() {
-	mkdir -p "$WORKTREE_REGISTRY_DIR" 2>/dev/null || true
-	sqlite3 "$WORKTREE_REGISTRY_DB" "
-        CREATE TABLE IF NOT EXISTS worktree_owners (
-            worktree_path TEXT PRIMARY KEY,
-            branch        TEXT,
-            owner_pid     INTEGER,
-            owner_session TEXT DEFAULT '',
-            owner_batch   TEXT DEFAULT '',
-            task_id       TEXT DEFAULT '',
-            created_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-        );
-    " 2>/dev/null || true
-	return 0
-}
-
-# Register ownership of a worktree
-# Arguments:
-#   $1 - worktree path (required)
-#   $2 - branch name (required)
-#   Flags: --task <id>, --batch <id>, --session <id>
-register_worktree() {
-	local wt_path="$1"
-	local branch="$2"
-	shift 2
-
-	local task_id="" batch_id="" session_id=""
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--task)
-			task_id="${2:-}"
-			shift 2
-			;;
-		--batch)
-			batch_id="${2:-}"
-			shift 2
-			;;
-		--session)
-			session_id="${2:-}"
-			shift 2
-			;;
-		*) shift ;;
-		esac
-	done
-
-	_init_registry_db
-
-	sqlite3 "$WORKTREE_REGISTRY_DB" "
-        INSERT OR REPLACE INTO worktree_owners
-            (worktree_path, branch, owner_pid, owner_session, owner_batch, task_id)
-        VALUES
-            ('$(_wt_sql_escape "$wt_path")',
-             '$(_wt_sql_escape "$branch")',
-             $$,
-             '$(_wt_sql_escape "$session_id")',
-             '$(_wt_sql_escape "$batch_id")',
-             '$(_wt_sql_escape "$task_id")');
-    " 2>/dev/null || true
-	return 0
-}
-
-# Unregister ownership of a worktree
-# Arguments:
-#   $1 - worktree path (required)
-unregister_worktree() {
-	local wt_path="$1"
-
-	[[ ! -f "$WORKTREE_REGISTRY_DB" ]] && return 0
-
-	sqlite3 "$WORKTREE_REGISTRY_DB" "
-        DELETE FROM worktree_owners
-        WHERE worktree_path = '$(_wt_sql_escape "$wt_path")';
-    " 2>/dev/null || true
-	return 0
-}
-
-# Check who owns a worktree
-# Arguments:
-#   $1 - worktree path
-# Output: owner info (pid|session|batch|task|created_at) or empty
-# Returns: 0 if owned, 1 if not owned
-check_worktree_owner() {
-	local wt_path="$1"
-
-	[[ ! -f "$WORKTREE_REGISTRY_DB" ]] && return 1
-
-	local owner_info
-	owner_info=$(sqlite3 -separator '|' "$WORKTREE_REGISTRY_DB" "
-        SELECT owner_pid, owner_session, owner_batch, task_id, created_at
-        FROM worktree_owners
-        WHERE worktree_path = '$(_wt_sql_escape "$wt_path")';
-    " 2>/dev/null || echo "")
-
-	if [[ -n "$owner_info" ]]; then
-		echo "$owner_info"
-		return 0
-	fi
-	return 1
-}
-
-# Check if a worktree is owned by a DIFFERENT process (still alive)
-# Arguments:
-#   $1 - worktree path
-# Returns: 0 if owned by another live process, 1 if safe to remove
-is_worktree_owned_by_others() {
-	local wt_path="$1"
-
-	[[ ! -f "$WORKTREE_REGISTRY_DB" ]] && return 1
-
-	local owner_pid
-	owner_pid=$(sqlite3 "$WORKTREE_REGISTRY_DB" "
-        SELECT owner_pid FROM worktree_owners
-        WHERE worktree_path = '$(_wt_sql_escape "$wt_path")';
-    " 2>/dev/null || echo "")
-
-	# No owner registered
-	[[ -z "$owner_pid" ]] && return 1
-
-	# We own it
-	[[ "$owner_pid" == "$$" ]] && return 1
-
-	# Owner process is dead — stale entry, safe to remove
-	if ! kill -0 "$owner_pid" 2>/dev/null; then
-		# Clean up stale entry
-		unregister_worktree "$wt_path"
-		return 1
 	fi
 
-	# Owner process is alive and it's not us — NOT safe to remove
-	return 0
-}
-
-# Prune stale registry entries (dead PIDs, missing directories, corrupted paths)
-# (t197) Enhanced to handle:
-#   - Dead PIDs with missing directories
-#   - Paths with ANSI escape codes (corrupted entries)
-#   - Test artifacts in /tmp or /var/folders
-prune_worktree_registry() {
-	[[ ! -f "$WORKTREE_REGISTRY_DB" ]] && return 0
-
-	local pruned_count=0
-
-	# First, delete entries with ANSI escape codes (corrupted entries)
-	# These often have newlines and break normal parsing
-	local ansi_count
-	ansi_count=$(sqlite3 "$WORKTREE_REGISTRY_DB" "
-        DELETE FROM worktree_owners 
-        WHERE worktree_path LIKE '%'||char(27)||'%' 
-           OR worktree_path LIKE '%[0;%'
-           OR worktree_path LIKE '%[1m%';
-        SELECT changes();
-    " 2>/dev/null || echo "0")
-	pruned_count=$((pruned_count + ansi_count))
-	[[ -n "${VERBOSE:-}" && "$ansi_count" -gt 0 ]] && echo "  Pruned $ansi_count entries with ANSI escape codes"
-
-	# Next, delete test artifacts in temp directories
-	local temp_count
-	temp_count=$(sqlite3 "$WORKTREE_REGISTRY_DB" "
-        DELETE FROM worktree_owners 
-        WHERE worktree_path LIKE '/tmp/%' 
-           OR worktree_path LIKE '/var/folders/%';
-        SELECT changes();
-    " 2>/dev/null || echo "0")
-	pruned_count=$((pruned_count + temp_count))
-	[[ -n "${VERBOSE:-}" && "$temp_count" -gt 0 ]] && echo "  Pruned $temp_count test artifacts in temp directories"
-
-	# Now process remaining entries for dead PIDs and missing directories
-	local entries
-	entries=$(sqlite3 -separator '|' "$WORKTREE_REGISTRY_DB" "
-        SELECT worktree_path, owner_pid FROM worktree_owners;
-    " 2>/dev/null || echo "")
-
-	if [[ -n "$entries" ]]; then
-		while IFS='|' read -r wt_path owner_pid; do
-			local should_prune=false
-			local prune_reason=""
-
-			# Directory no longer exists
-			if [[ ! -d "$wt_path" ]]; then
-				should_prune=true
-				prune_reason="directory missing"
-			# Owner process is dead (only prune if directory also missing)
-			elif [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" 2>/dev/null && [[ ! -d "$wt_path" ]]; then
-				should_prune=true
-				prune_reason="dead PID and directory missing"
-			fi
-
-			if [[ "$should_prune" == "true" ]]; then
-				unregister_worktree "$wt_path"
-				((++pruned_count))
-				[[ -n "${VERBOSE:-}" ]] && echo "  Pruned: $wt_path ($prune_reason)"
-			fi
-		done <<<"$entries"
-	fi
-
-	[[ -n "${VERBOSE:-}" ]] && echo "Pruned $pruned_count entries total"
+	gh issue edit "$issue_num" --repo "$repo_slug" "${_flags[@]}" 2>/dev/null || return 1
 	return 0
 }
 
 # =============================================================================
-# SQLite Backup-Before-Modify Pattern (t188)
+# TODO.md Serialized Commit+Push -- extracted module
 # =============================================================================
-# Provides safety net for non-git state (SQLite DBs, config files).
-# Git workflow protects code files, but SQLite DBs, memory stores, and config
-# files aren't version-controlled. This pattern: before any destructive
-# operation (schema migration, bulk prune, consolidate), create a timestamped
-# backup, verify the operation succeeded, and clean up old backups.
+# Functions: todo_commit_push (public), _todo_acquire_lock,
+#            _todo_release_lock, _todo_commit_push_inner.
+# Constants: TODO_LOCK_DIR, TODO_LOCK_PATH, TODO_MAX_RETRIES,
+#            TODO_LOCK_TIMEOUT, TODO_STALE_LOCK_AGE (all readonly).
+# Provides atomic mkdir-based locking + pull-rebase-retry for TODO.md and
+# adjacent planning files (todo/). Prevents race conditions when multiple
+# actors (supervisor, interactive sessions) push to TODO.md on main
+# simultaneously. Workers must NOT call todo_commit_push directly — they
+# report status via exit code/log/mailbox; the supervisor handles all
+# TODO.md updates.
+# Extracted to shared-todo-commit.sh (t2441, GH#20094) to keep this file
+# below the file-size-debt ratchet (1500 lines). Mirrors the Phase 1
+# (shared-feature-toggles.sh, t2427/PR #20063) and Phase 2
+# (shared-model-tier.sh, t2440/PR #20092) split precedents. See
+# shared-todo-commit.sh for full documentation.
+
+_SC_SELF="${BASH_SOURCE[0]:-${0:-}}"
+# shellcheck source=./shared-todo-commit.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via _SC_SELF
+source "${_SC_SELF%/*}/shared-todo-commit.sh"
+
+# =============================================================================
+# Worktree Ownership Registry (t189) — extracted module
+# =============================================================================
+# Functions: register_worktree, claim_worktree_ownership, unregister_worktree,
+#            check_worktree_owner, is_worktree_owned_by_others, prune_worktree_registry
+# Extracted to shared-worktree-registry.sh to keep this file < 2000 lines.
+# See shared-worktree-registry.sh for full documentation.
 #
-# Usage:
-#   backup_sqlite_db "$db_path" "pre-migrate-v2"     # Create backup
-#   verify_sqlite_backup "$db_path" "$backup" "tasks" # Verify row counts
-#   rollback_sqlite_db "$db_path" "$backup"           # Restore from backup
-#   cleanup_sqlite_backups "$db_path" 5               # Keep last N backups
-#
-# The backup file path is echoed to stdout on success.
+# SQLite Backup-Before-Modify Pattern (t188) — extracted module
+# Functions: backup_sqlite_db, verify_sqlite_backup, rollback_sqlite_db,
+#            cleanup_sqlite_backups, verify_migration_rowcounts
+# Extracted to shared-sqlite-backup.sh to keep this file < 2000 lines.
+# See shared-sqlite-backup.sh for full documentation.
 
-# Default number of backups to retain per database
-SQLITE_BACKUP_RETAIN_COUNT="${SQLITE_BACKUP_RETAIN_COUNT:-5}"
-
-# Create a timestamped backup of a SQLite database.
-# Uses SQLite .backup command for WAL-safe consistency, with cp fallback.
-# Arguments:
-#   $1 - database file path (required)
-#   $2 - reason/label for the backup (default: "manual")
-# Output: backup file path on stdout
-# Returns: 0 on success, 1 on failure
-backup_sqlite_db() {
-	local db_path="$1"
-	local reason="${2:-manual}"
-
-	if [[ ! -f "$db_path" ]]; then
-		echo "[backup] No database to backup at: $db_path" >&2
-		return 1
-	fi
-
-	local db_dir
-	db_dir="$(dirname "$db_path")"
-	local db_name
-	db_name="$(basename "$db_path" .db)"
-	local timestamp
-	timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-	local backup_file="${db_dir}/${db_name}-backup-${timestamp}-${reason}.db"
-
-	# Use SQLite .backup for WAL-safe consistency
-	if sqlite3 "$db_path" ".backup '$backup_file'" 2>/dev/null; then
-		echo "$backup_file"
-		return 0
-	fi
-
-	# Fallback to file copy if .backup fails
-	if cp "$db_path" "$backup_file" 2>/dev/null; then
-		# Also copy WAL/SHM if present for consistency
-		[[ -f "${db_path}-wal" ]] && cp "${db_path}-wal" "${backup_file}-wal" 2>/dev/null || true
-		[[ -f "${db_path}-shm" ]] && cp "${db_path}-shm" "${backup_file}-shm" 2>/dev/null || true
-		echo "$backup_file"
-		return 0
-	fi
-
-	echo "[backup] Failed to backup database: $db_path" >&2
-	return 1
-}
-
-# Verify a SQLite backup by comparing row counts for specified tables.
-# Arguments:
-#   $1 - original database path (required)
-#   $2 - backup database path (required)
-#   $3 - space-separated list of table names to verify (required)
-# Returns: 0 if all row counts match, 1 if mismatch or error
-verify_sqlite_backup() {
-	local db_path="$1"
-	local backup_path="$2"
-	local tables="$3"
-
-	if [[ ! -f "$db_path" || ! -f "$backup_path" ]]; then
-		echo "[backup] Cannot verify: missing database or backup file" >&2
-		return 1
-	fi
-
-	local table
-	for table in $tables; do
-		local orig_count backup_count
-		orig_count=$(sqlite3 -cmd ".timeout 5000" "$db_path" "SELECT count(*) FROM $table;" 2>/dev/null || echo "-1")
-		backup_count=$(sqlite3 -cmd ".timeout 5000" "$backup_path" "SELECT count(*) FROM $table;" 2>/dev/null || echo "-1")
-
-		if [[ "$orig_count" == "-1" || "$backup_count" == "-1" ]]; then
-			echo "[backup] Cannot read table '$table' from database or backup" >&2
-			return 1
-		fi
-
-		if [[ "$orig_count" -lt "$backup_count" ]]; then
-			echo "[backup] Row count DECREASED for '$table': was $backup_count, now $orig_count" >&2
-			return 1
-		fi
-	done
-
-	return 0
-}
-
-# Verify a migration preserved row counts (compare current DB against backup).
-# Unlike verify_sqlite_backup which checks backup integrity, this checks that
-# the migration didn't lose data.
-# Arguments:
-#   $1 - database path (post-migration)
-#   $2 - backup path (pre-migration)
-#   $3 - space-separated list of table names to verify
-# Returns: 0 if row counts match or increased, 1 if any decreased
-verify_migration_rowcounts() {
-	local db_path="$1"
-	local backup_path="$2"
-	local tables="$3"
-
-	if [[ ! -f "$db_path" || ! -f "$backup_path" ]]; then
-		echo "[backup] Cannot verify migration: missing database or backup file" >&2
-		return 1
-	fi
-
-	local table
-	for table in $tables; do
-		local post_count pre_count
-		post_count=$(sqlite3 -cmd ".timeout 5000" "$db_path" "SELECT count(*) FROM $table;" 2>/dev/null || echo "-1")
-		pre_count=$(sqlite3 -cmd ".timeout 5000" "$backup_path" "SELECT count(*) FROM $table;" 2>/dev/null || echo "-1")
-
-		if [[ "$post_count" == "-1" ]]; then
-			echo "[backup] MIGRATION FAILURE: Cannot read table '$table' after migration" >&2
-			return 1
-		fi
-
-		if [[ "$pre_count" == "-1" ]]; then
-			# Backup table might not exist (new table added by migration)
-			continue
-		fi
-
-		if [[ "$post_count" -lt "$pre_count" ]]; then
-			echo "[backup] MIGRATION FAILURE: Row count DECREASED for '$table': was $pre_count, now $post_count" >&2
-			return 1
-		fi
-	done
-
-	return 0
-}
-
-# Restore a SQLite database from a backup file.
-# Creates a safety backup of the current state before overwriting.
-# Arguments:
-#   $1 - database path to restore (required)
-#   $2 - backup file to restore from (required)
-# Returns: 0 on success, 1 on failure
-rollback_sqlite_db() {
-	local db_path="$1"
-	local backup_path="$2"
-
-	if [[ ! -f "$backup_path" ]]; then
-		echo "[backup] Backup file not found: $backup_path" >&2
-		return 1
-	fi
-
-	# Verify backup is valid SQLite
-	if ! sqlite3 "$backup_path" "SELECT 1;" >/dev/null 2>&1; then
-		echo "[backup] Backup file is not a valid SQLite database: $backup_path" >&2
-		return 1
-	fi
-
-	# Safety: backup current state before overwriting (in case rollback itself is wrong)
-	if [[ -f "$db_path" ]]; then
-		backup_sqlite_db "$db_path" "pre-rollback" >/dev/null 2>&1 || true
-	fi
-
-	cp "$backup_path" "$db_path"
-	[[ -f "${backup_path}-wal" ]] && cp "${backup_path}-wal" "${db_path}-wal" 2>/dev/null || true
-	[[ -f "${backup_path}-shm" ]] && cp "${backup_path}-shm" "${db_path}-shm" 2>/dev/null || true
-
-	# Remove stale WAL/SHM if backup didn't have them
-	[[ ! -f "${backup_path}-wal" && -f "${db_path}-wal" ]] && rm -f "${db_path}-wal" 2>/dev/null || true
-	[[ ! -f "${backup_path}-shm" && -f "${db_path}-shm" ]] && rm -f "${db_path}-shm" 2>/dev/null || true
-
-	echo "[backup] Database restored from: $backup_path" >&2
-	return 0
-}
-
-# Clean up old backups, keeping the most recent N.
-# Arguments:
-#   $1 - database path (used to derive backup file pattern)
-#   $2 - number of backups to keep (default: SQLITE_BACKUP_RETAIN_COUNT)
-# Returns: 0 always
-cleanup_sqlite_backups() {
-	local db_path="$1"
-	local keep_count="${2:-$SQLITE_BACKUP_RETAIN_COUNT}"
-
-	local db_dir
-	db_dir="$(dirname "$db_path")"
-	local db_name
-	db_name="$(basename "$db_path" .db)"
-	local pattern="${db_dir}/${db_name}-backup-*.db"
-
-	# Count existing backups (glob in $pattern is intentional)
-	local backup_count
-	# shellcheck disable=SC2012,SC2086
-	backup_count=$(ls -1 $pattern 2>/dev/null | wc -l | tr -d ' ')
-
-	if [[ "$backup_count" -gt "$keep_count" ]]; then
-		local to_remove
-		to_remove=$((backup_count - keep_count))
-		# shellcheck disable=SC2012,SC2086
-		ls -1t $pattern 2>/dev/null | tail -n "$to_remove" | while IFS= read -r old_backup; do
-			rm -f "$old_backup" "${old_backup}-wal" "${old_backup}-shm" 2>/dev/null || true
-		done
-	fi
-
-	return 0
-}
+_SC_SELF="${BASH_SOURCE[0]:-${0:-}}"
+# shellcheck source=/dev/null
+[[ -r "${_SC_SELF%/*}/shared-worktree-registry.sh" ]] && source "${_SC_SELF%/*}/shared-worktree-registry.sh"
+# shellcheck source=/dev/null
+[[ -r "${_SC_SELF%/*}/shared-sqlite-backup.sh" ]] && source "${_SC_SELF%/*}/shared-sqlite-backup.sh"
 
 # =============================================================================
 # Export all constants for use in other scripts
 # =============================================================================
 
 # =============================================================================
-# Model tier resolution (t132.7)
-# Shared function for resolving tier names to full provider/model strings.
-# Used by runner-helper.sh, cron-helper.sh, cron-dispatch.sh.
-# Tries: 1) fallback-chain-helper.sh (availability-aware)
-#         2) Static mapping (always works)
+# PID Liveness — command-aware process checks (t2421, GH#20027)
+# =============================================================================
+# Bare `kill -0 <PID>` lies when macOS recycles PIDs (wraps at 99999).
+# These helpers verify the PID is alive AND its command matches what we expect.
+#
+# Constants: WORKER_PROCESS_PATTERN, PULSE_PROCESS_PATTERN, FRAMEWORK_PROCESS_PATTERN
+# Functions: _compute_argv_hash, _is_process_alive_and_matches
 # =============================================================================
 
-#######################################
-# Resolve a model tier name to a full provider/model string (t132.7)
-# Accepts both tier names (haiku, sonnet, opus, flash, pro, grok, coding, eval, health)
-# and full provider/model strings (passed through unchanged).
-# Returns the resolved model string on stdout.
-#######################################
-resolve_model_tier() {
-	local tier="${1:-coding}"
-
-	# If already a full provider/model string (contains /), return as-is
-	if [[ "$tier" == *"/"* ]]; then
-		echo "$tier"
-		return 0
-	fi
-
-	# Try fallback-chain-helper.sh for availability-aware resolution
-	# Use ${BASH_SOURCE[0]:-$0} for shell portability — BASH_SOURCE is undefined
-	# in zsh (the MCP shell environment). The :-$0 fallback ensures SCRIPT_DIR
-	# resolves correctly whether sourced from bash or zsh. See GH#4904.
-	local _sc_self="${BASH_SOURCE[0]:-${0:-}}"
-	local chain_helper="${_sc_self%/*}/fallback-chain-helper.sh"
-	if [[ -x "$chain_helper" ]]; then
-		local resolved
-		resolved=$("$chain_helper" resolve "$tier" --quiet 2>/dev/null) || true
-		if [[ -n "$resolved" ]]; then
-			echo "$resolved"
-			return 0
-		fi
-	fi
-
-	# Static fallback: map tier names to concrete models
-	case "$tier" in
-	opus | coding)
-		echo "anthropic/claude-opus-4-6"
-		;;
-	sonnet | eval)
-		echo "anthropic/claude-sonnet-4-6"
-		;;
-	haiku | health)
-		echo "anthropic/claude-haiku-4-5"
-		;;
-	flash)
-		echo "google/gemini-2.5-flash"
-		;;
-	pro)
-		echo "google/gemini-2.5-pro"
-		;;
-	grok)
-		echo "xai/grok-3"
-		;;
-	*)
-		# Unknown tier — return as-is (may be a model name without provider)
-		echo "$tier"
-		;;
-	esac
-
-	return 0
-}
+# Expected command patterns for PID-owner verification.
+# Used by _is_process_alive_and_matches to distinguish real workers from
+# PID-reuse impostors (e.g., "Brave Browser Helper (Renderer)").
+[[ -z "${WORKER_PROCESS_PATTERN+x}" ]] && WORKER_PROCESS_PATTERN='opencode|claude|Claude'
+[[ -z "${PULSE_PROCESS_PATTERN+x}" ]] && PULSE_PROCESS_PATTERN='pulse-wrapper'
+[[ -z "${FRAMEWORK_PROCESS_PATTERN+x}" ]] && FRAMEWORK_PROCESS_PATTERN='opencode|claude|Claude|pulse|aidevops|headless-runtime'
 
 #######################################
-# Detect available AI CLI backends (t132.7, t1665.5)
-# Returns a newline-separated list of available backend runtime IDs.
-# Delegates to runtime-registry.sh rt_detect_installed().
+# Compute a short hash of a process's command line.
+# Portable across macOS (shasum) and Linux (sha256sum).
+# Args: $1 = PID (defaults to $$)
+# Outputs: 12-char hex hash on stdout, or empty string on failure.
+# Returns: 0 on success, 1 on failure.
 #######################################
-detect_ai_backends() {
-	# Use runtime registry if loaded (t1665.5)
-	if type rt_detect_installed &>/dev/null; then
-		local installed
-		installed=$(rt_detect_installed) || true
-		if [[ -z "$installed" ]]; then
-			echo "none"
-			return 1
-		fi
-		echo "$installed"
-		return 0
-	fi
-
-	# Fallback: hardcoded check (registry not loaded)
-	local -a backends=()
-	if command -v opencode &>/dev/null; then
-		backends+=("opencode")
-	fi
-	if command -v claude &>/dev/null; then
-		backends+=("claude")
-	fi
-	if [[ ${#backends[@]} -eq 0 ]]; then
-		echo "none"
+_compute_argv_hash() {
+	local pid="${1:-$$}"
+	local cmd
+	cmd=$(ps -p "$pid" -o command= 2>/dev/null) || return 1
+	[[ -z "$cmd" ]] && return 1
+	local hash
+	if command -v shasum >/dev/null 2>&1; then
+		hash=$(printf '%s' "$cmd" | shasum -a 256 2>/dev/null | cut -c1-12)
+	elif command -v sha256sum >/dev/null 2>&1; then
+		hash=$(printf '%s' "$cmd" | sha256sum 2>/dev/null | cut -c1-12)
+	else
+		# Fallback: no hash tool available, return empty (callers skip hash check)
 		return 1
 	fi
-	printf '%s\n' "${backends[@]}"
-	return 0
-}
-
-# =============================================================================
-# Model Pricing & Provider Detection (consolidated from t1337.2)
-# =============================================================================
-# Single source of truth: .agents/configs/model-pricing.json
-# Also consumed by observability.mjs (OpenCode plugin).
-# Pricing: per 1M tokens — input|output|cache_read|cache_write.
-# Budget-tracker uses only input|output; observability uses all four.
-#
-# Falls back to hardcoded case statement if jq or the JSON file is unavailable.
-
-# Cache for JSON-loaded pricing (avoids re-reading the file on every call)
-_MODEL_PRICING_JSON=""
-_MODEL_PRICING_JSON_LOADED=""
-
-# Load model-pricing.json into the cache variable.
-# Called once on first get_model_pricing() invocation.
-_load_model_pricing_json() {
-	_MODEL_PRICING_JSON_LOADED="attempted"
-	local json_file
-	# Try repo-relative path first (works in dev), then deployed path
-	# Use ${BASH_SOURCE[0]:-$0} for shell portability — BASH_SOURCE is undefined
-	# in zsh (the MCP shell environment). See GH#4904.
-	local script_dir="${BASH_SOURCE[0]:-${0:-}}"
-	script_dir="${script_dir%/*}"
-	for json_file in \
-		"${script_dir}/../configs/model-pricing.json" \
-		"${HOME}/.aidevops/agents/configs/model-pricing.json"; do
-		if [[ -r "$json_file" ]] && command -v jq &>/dev/null; then
-			_MODEL_PRICING_JSON=$(cat "$json_file" 2>/dev/null) || _MODEL_PRICING_JSON=""
-			if [[ -n "$_MODEL_PRICING_JSON" ]]; then
-				return 0
-			fi
-		fi
-	done
+	[[ -n "$hash" ]] && printf '%s' "$hash" && return 0
 	return 1
 }
 
-get_model_pricing() {
-	local model="$1"
+#######################################
+# Check that a PID is alive AND its command matches expected pattern.
+# Replaces bare `kill -0` checks that are vulnerable to PID reuse on macOS.
+#
+# Args:
+#   $1 = PID to check
+#   $2 = regex pattern (e.g., "opencode|claude"). If empty, falls back to
+#        bare kill -0 (backward-compatible for callers that don't know
+#        the expected command).
+#   $3 = (optional) stored argv hash. If provided and non-empty, the
+#        current process command hash must match. This catches PID reuse
+#        even when the new process name happens to match the pattern
+#        (e.g., two different claude sessions).
+#
+# Returns: 0 if alive and matches, 1 otherwise.
+#######################################
+_is_process_alive_and_matches() {
+	local pid="$1"
+	local pattern="${2:-}"
+	local stored_hash="${3:-}"
 
-	# Try JSON source first (single source of truth)
-	if [[ -z "$_MODEL_PRICING_JSON_LOADED" ]]; then
-		_load_model_pricing_json
+	# Basic validation
+	[[ -z "$pid" ]] && return 1
+	[[ "$pid" == "0" ]] && return 1
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
+
+	# Step 1: is the PID alive at all?
+	kill -0 "$pid" 2>/dev/null || return 1
+
+	# Step 2: does the command match the expected pattern?
+	if [[ -n "$pattern" ]]; then
+		local cmd
+		cmd=$(ps -p "$pid" -o command= 2>/dev/null) || return 1
+		[[ -z "$cmd" ]] && return 1
+		printf '%s' "$cmd" | grep -qE "$pattern" || return 1
 	fi
 
-	if [[ -n "$_MODEL_PRICING_JSON" ]]; then
-		local ms="${model#*/}"
-		ms="${ms%%-202*}"
-		ms=$(echo "$ms" | tr '[:upper:]' '[:lower:]')
-		# Search for a matching key in the JSON models object
-		local result
-		result=$(echo "$_MODEL_PRICING_JSON" | jq -r --arg ms "$ms" '
-			.models | to_entries[] |
-			select(.key as $k | $ms | contains($k)) |
-			"\(.value.input)|\(.value.output)|\(.value.cache_read)|\(.value.cache_write)"
-		' 2>/dev/null | head -1)
-		if [[ -n "$result" ]]; then
-			echo "$result"
-			return 0
-		fi
-		# No match — return default from JSON
-		result=$(echo "$_MODEL_PRICING_JSON" | jq -r '
-			"\(.default.input)|\(.default.output)|\(.default.cache_read)|\(.default.cache_write)"
-		' 2>/dev/null)
-		if [[ -n "$result" && "$result" != "null|null|null|null" ]]; then
-			echo "$result"
-			return 0
-		fi
+	# Step 3: if a stored hash was provided, verify it matches
+	if [[ -n "$stored_hash" ]]; then
+		local current_hash
+		current_hash=$(_compute_argv_hash "$pid") || return 0  # no hash tool = skip check
+		[[ -z "$current_hash" ]] && return 0  # can't compute = optimistic pass
+		[[ "$stored_hash" == "$current_hash" ]] || return 1
 	fi
 
-	# Hardcoded fallback (no jq or JSON file unavailable)
-	local ms="${model#*/}"
-	ms="${ms%%-202*}"
-	case "$ms" in
-	*opus-4* | *claude-opus*) echo "15.0|75.0|1.50|18.75" ;;
-	*sonnet-4* | *claude-sonnet*) echo "3.0|15.0|0.30|3.75" ;;
-	*haiku-4* | *haiku-3* | *claude-haiku*) echo "0.80|4.0|0.08|1.0" ;;
-	*gpt-4.1-mini*) echo "0.40|1.60|0.10|0.40" ;;
-	*gpt-4.1*) echo "2.0|8.0|0.50|2.0" ;;
-	*o3*) echo "10.0|40.0|2.50|10.0" ;;
-	*o4-mini*) echo "1.10|4.40|0.275|1.10" ;;
-	*gemini-2.5-pro*) echo "1.25|10.0|0.3125|2.50" ;;
-	*gemini-2.5-flash*) echo "0.15|0.60|0.0375|0.15" ;;
-	*gemini-3-pro*) echo "1.25|10.0|0.3125|2.50" ;;
-	*gemini-3-flash*) echo "0.10|0.40|0.025|0.10" ;;
-	*deepseek-r1*) echo "0.55|2.19|0.14|0.55" ;;
-	*deepseek-v3*) echo "0.27|1.10|0.07|0.27" ;;
-	*) echo "3.0|15.0|0.30|3.75" ;;
-	esac
-	return 0
-}
-
-get_provider_from_model() {
-	local model="$1"
-	case "$model" in
-	claude-* | anthropic/*) echo "anthropic" ;;
-	gpt-* | openai/*) echo "openai" ;;
-	gemini-* | google/*) echo "google" ;;
-	deepseek-* | deepseek/*) echo "deepseek" ;;
-	grok-* | xai/*) echo "xai" ;;
-	*) echo "unknown" ;;
-	esac
 	return 0
 }
 
 # =============================================================================
-# Configuration Loader (issue #2730 — JSONC config system)
+# Model Tier Resolution & Pricing -- extracted module
 # =============================================================================
-# Loads user-configurable settings from JSONC config files:
-#   1. Defaults file (shipped with aidevops, overwritten on update)
-#      ~/.aidevops/agents/configs/aidevops.defaults.jsonc
-#   2. User overrides (~/.config/aidevops/config.jsonc)
-#   3. Environment variables (highest priority)
-#
-# Requires jq for JSONC parsing. Falls back to legacy .conf if jq unavailable.
-#
-# Scripts check config via:
-#   config_get <dotpath> [default]       — get any config value
-#   config_enabled <dotpath>             — check boolean config
-#   get_feature_toggle <key> [default]   — backward-compatible (flat key)
-#   is_feature_enabled <key>             — backward-compatible (flat key)
+# Functions: resolve_model_tier, detect_ai_backends, get_model_pricing,
+#            get_provider_from_model, _load_model_pricing_json.
+# Variables: _MODEL_PRICING_JSON, _MODEL_PRICING_JSON_LOADED (cached on first
+#            get_model_pricing call).
+# Reads .agents/configs/model-pricing.json via jq when available (single source
+# of truth shared with observability.mjs); falls back to a hardcoded case
+# statement for the no-jq path.
+# Extracted to shared-model-tier.sh (t2440, GH#20089) to keep this file below
+# the file-size-debt ratchet (1500 lines). Mirrors the Phase 1 split precedent
+# (shared-feature-toggles.sh, t2427, PR #20063). See shared-model-tier.sh for
+# full documentation.
 
-# Source config-helper.sh (provides _jsonc_get, config_get, config_enabled, etc.)
-# IMPORTANT: source=/dev/null tells ShellCheck NOT to follow this source directive.
-# Without it, ShellCheck follows the cycle shared-constants.sh → config-helper.sh →
-# shared-constants.sh infinitely, consuming exponential memory (7-14 GB observed).
-# The include guard (_SHARED_CONSTANTS_LOADED at line 14) prevents infinite recursion
-# at execution time, but ShellCheck is a static analyzer and ignores runtime guards.
-# GH#3981: https://github.com/marcusquinn/aidevops/issues/3981
-# Use ${BASH_SOURCE[0]:-$0} for shell portability — BASH_SOURCE is undefined
-# in zsh (the MCP shell environment). Without this guard, sourcing from zsh
-# with set -u (nounset) fails with "BASH_SOURCE[0]: parameter not set". See GH#4904.
 _SC_SELF="${BASH_SOURCE[0]:-${0:-}}"
-_CONFIG_HELPER="${_SC_SELF%/*}/config-helper.sh"
-if [[ -r "$_CONFIG_HELPER" ]]; then
-	# shellcheck source=/dev/null
-	source "$_CONFIG_HELPER"
-fi
+# shellcheck source=./shared-model-tier.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via _SC_SELF
+source "${_SC_SELF%/*}/shared-model-tier.sh"
 
-# Source runtime registry (t1665.1) — central data source for all AI CLI runtimes
-_RUNTIME_REGISTRY="${_SC_SELF%/*}/runtime-registry.sh"
-if [[ -r "$_RUNTIME_REGISTRY" ]]; then
-	# shellcheck source=/dev/null
-	source "$_RUNTIME_REGISTRY"
-fi
+# =============================================================================
+# Configuration Loader & Feature Toggles -- extracted module
+# =============================================================================
+# Functions: get_feature_toggle, is_feature_enabled, _load_config, _ft_env_map,
+#            _load_feature_toggles_legacy.
+# Variables: FEATURE_TOGGLES_DEFAULTS, FEATURE_TOGGLES_USER,
+#            _AIDEVOPS_CONFIG_MODE (populated on load).
+# Sources config-helper.sh and runtime-registry.sh transitively.
+# Extracted to shared-feature-toggles.sh (t2427, GH#20063) to keep this file
+# < 2000 lines. See shared-feature-toggles.sh for full documentation.
+# Sourcing this sub-library auto-invokes _load_config at its tail — no explicit
+# call needed here.
 
-# Legacy paths (kept for backward compatibility and migration)
-FEATURE_TOGGLES_DEFAULTS="${HOME}/.aidevops/agents/configs/feature-toggles.conf.defaults"
-FEATURE_TOGGLES_USER="${HOME}/.config/aidevops/feature-toggles.conf"
-
-# Map from legacy toggle key to environment variable name.
-# Used by both the new JSONC system and the legacy fallback.
-_ft_env_map() {
-	local key="$1"
-	case "$key" in
-	auto_update) echo "AIDEVOPS_AUTO_UPDATE" ;;
-	update_interval) echo "AIDEVOPS_UPDATE_INTERVAL" ;;
-	skill_auto_update) echo "AIDEVOPS_SKILL_AUTO_UPDATE" ;;
-	skill_freshness_hours) echo "AIDEVOPS_SKILL_FRESHNESS_HOURS" ;;
-	tool_auto_update) echo "AIDEVOPS_TOOL_AUTO_UPDATE" ;;
-	tool_freshness_hours) echo "AIDEVOPS_TOOL_FRESHNESS_HOURS" ;;
-	tool_idle_hours) echo "AIDEVOPS_TOOL_IDLE_HOURS" ;;
-	supervisor_pulse) echo "AIDEVOPS_SUPERVISOR_PULSE" ;;
-	repo_sync) echo "AIDEVOPS_REPO_SYNC" ;;
-	openclaw_auto_update) echo "AIDEVOPS_OPENCLAW_AUTO_UPDATE" ;;
-	openclaw_freshness_hours) echo "AIDEVOPS_OPENCLAW_FRESHNESS_HOURS" ;;
-	upstream_watch) echo "AIDEVOPS_UPSTREAM_WATCH" ;;
-	upstream_watch_hours) echo "AIDEVOPS_UPSTREAM_WATCH_HOURS" ;;
-	max_interactive_sessions) echo "AIDEVOPS_MAX_SESSIONS" ;;
-	*) echo "" ;;
-	esac
-	return 0
-}
-
-# ---------------------------------------------------------------------------
-# Legacy fallback: load from .conf files when jq is not available
-# ---------------------------------------------------------------------------
-_load_feature_toggles_legacy() {
-	if [[ -r "$FEATURE_TOGGLES_DEFAULTS" ]]; then
-		local line key value
-		while IFS= read -r line || [[ -n "$line" ]]; do
-			[[ -z "$line" || "$line" == \#* ]] && continue
-			key="${line%%=*}"
-			value="${line#*=}"
-			[[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || continue
-			printf -v "_FT_${key}" '%s' "$value"
-		done <"$FEATURE_TOGGLES_DEFAULTS"
-	fi
-
-	if [[ -r "$FEATURE_TOGGLES_USER" ]]; then
-		local line key value
-		while IFS= read -r line || [[ -n "$line" ]]; do
-			[[ -z "$line" || "$line" == \#* ]] && continue
-			key="${line%%=*}"
-			value="${line#*=}"
-			[[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || continue
-			printf -v "_FT_${key}" '%s' "$value"
-		done <"$FEATURE_TOGGLES_USER"
-	fi
-
-	local toggle_keys="auto_update update_interval skill_auto_update skill_freshness_hours tool_auto_update tool_freshness_hours tool_idle_hours supervisor_pulse repo_sync openclaw_auto_update openclaw_freshness_hours upstream_watch upstream_watch_hours max_interactive_sessions manage_opencode_config manage_claude_config session_greeting safety_hooks shell_aliases onboarding_prompt"
-	local tk env_var env_val
-	for tk in $toggle_keys; do
-		env_var=$(_ft_env_map "$tk")
-		if [[ -n "$env_var" ]]; then
-			env_val="${!env_var:-}"
-			if [[ -n "$env_val" ]]; then
-				printf -v "_FT_${tk}" '%s' "$env_val"
-			fi
-		fi
-	done
-
-	return 0
-}
-
-# ---------------------------------------------------------------------------
-# Detect which config system to use and load accordingly
-# ---------------------------------------------------------------------------
-_AIDEVOPS_CONFIG_MODE=""
-
-_load_config() {
-	# Prefer JSONC if jq is available, defaults file exists, AND config-helper.sh
-	# functions (config_get/config_enabled) are loaded. Without the functions,
-	# having jq + defaults is not enough — callers would fail at runtime.
-	local jsonc_defaults="${JSONC_DEFAULTS:-${HOME}/.aidevops/agents/configs/aidevops.defaults.jsonc}"
-	if command -v jq &>/dev/null && [[ -r "$jsonc_defaults" ]] &&
-		type config_get &>/dev/null && type config_enabled &>/dev/null; then
-		_AIDEVOPS_CONFIG_MODE="jsonc"
-		# config-helper.sh functions are already available via source above
-		# Auto-migrate legacy .conf if it exists and no JSONC user config yet
-		local jsonc_user="${JSONC_USER:-${HOME}/.config/aidevops/config.jsonc}"
-		if [[ -f "$FEATURE_TOGGLES_USER" && ! -f "$jsonc_user" ]]; then
-			if type _migrate_conf_to_jsonc &>/dev/null; then
-				if ! _migrate_conf_to_jsonc; then
-					echo "[WARN] Auto-migration from legacy config failed. Run 'aidevops config migrate' manually." >&2
-				fi
-			fi
-		fi
-	else
-		_AIDEVOPS_CONFIG_MODE="legacy"
-		_load_feature_toggles_legacy
-	fi
-
-	return 0
-}
-
-# ---------------------------------------------------------------------------
-# Backward-compatible API: get_feature_toggle / is_feature_enabled
-# These accept flat legacy keys (e.g. "auto_update") and route to the
-# appropriate backend (JSONC or legacy .conf).
-# ---------------------------------------------------------------------------
-
-# Get a feature toggle / config value.
-# Usage: get_feature_toggle <key> [default]
-# Accepts both legacy flat keys and new dotpath keys.
-get_feature_toggle() {
-	local key="$1"
-	local default="${2:-}"
-
-	if [[ "$_AIDEVOPS_CONFIG_MODE" == "jsonc" ]]; then
-		# Map legacy key to dotpath if needed
-		local dotpath
-		if type _legacy_key_to_dotpath &>/dev/null; then
-			dotpath=$(_legacy_key_to_dotpath "$key")
-		else
-			dotpath="$key"
-		fi
-		config_get "$dotpath" "$default"
-	else
-		# Legacy mode: read from _FT_* variables
-		local var_name="_FT_${key}"
-		local value="${!var_name:-}"
-		if [[ -n "$value" ]]; then
-			echo "$value"
-		else
-			echo "$default"
-		fi
-	fi
-	return 0
-}
-
-# Check if a feature toggle / config boolean is enabled (true).
-# Usage: if is_feature_enabled auto_update; then ...
-is_feature_enabled() {
-	local key="$1"
-
-	if [[ "$_AIDEVOPS_CONFIG_MODE" == "jsonc" ]]; then
-		local dotpath
-		if type _legacy_key_to_dotpath &>/dev/null; then
-			dotpath=$(_legacy_key_to_dotpath "$key")
-		else
-			dotpath="$key"
-		fi
-		config_enabled "$dotpath"
-		return $?
-	else
-		local value
-		value="$(get_feature_toggle "$key" "true")"
-		local lower
-		lower=$(echo "$value" | tr '[:upper:]' '[:lower:]')
-		[[ "$lower" == "true" ]]
-		return $?
-	fi
-}
-
-# Load config immediately when shared-constants.sh is sourced
-_load_config
+_SC_SELF="${BASH_SOURCE[0]:-${0:-}}"
+# shellcheck source=./shared-feature-toggles.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via _SC_SELF
+source "${_SC_SELF%/*}/shared-feature-toggles.sh"
 
 # This ensures all constants are available when this file is sourced
 export CONTENT_TYPE_JSON CONTENT_TYPE_FORM USER_AGENT

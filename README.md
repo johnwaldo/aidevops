@@ -1,8 +1,11 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # AI DevOps Framework
 
 **[aidevops.sh](https://aidevops.sh)** — An [OpenCode](https://opencode.ai/) plugin and AI operations platform for launching and managing development, business, marketing, and creative projects. 13 specialist AI agents handle the automatable work across every domain so your time is preserved for real-world discovery and decisions that AI cannot yet reach.
 
-> **Recommended setup:** [OpenCode](https://opencode.ai/) + [Claude](https://claude.ai/) models (Anthropic). All features, agents, and workflows are designed and tested for OpenCode first. Claude models (haiku, sonnet, opus) deliver the best results across all agent tiers.
+> **Recommended setup:** [OpenCode](https://opencode.ai/) + OpenAI models. GPT-5.5 is the preferred high-capability model for complex agent work; GPT-5.4 mini is the preferred fast, lower-cost model for triage and routine implementation. Claude models (Anthropic) remain fully supported, and other model providers are evaluated from time to time as their quality, latency, and cost profiles change.
 
 *"Scope a mission to redesign the landing pages — break it into milestones, dispatch workers in parallel, validate each milestone, and track budget across the whole project"*
 
@@ -17,7 +20,7 @@ Founded by [Marcus Quinn](https://github.com/marcusquinn) on 9th November 2025 t
 - **Autonomous orchestration** - An AI supervisor runs every 2 minutes, dispatching parallel workers, merging PRs, detecting stuck processes, and advancing multi-day missions — no human babysitting required
 - **Multi-domain agents** - 13 specialist agents (code, automation, SEO, marketing, content, legal, sales, research, video, business, accounts, social media, health) with 900+ subagents loaded on demand
 - **Multi-model safety** - High-stakes operations (force push, production deploy, data migration) are verified by a second cross-provider model before execution — different providers have different failure modes, so correlated hallucinations are rare
-- **Resource efficiency** - Cost-aware model routing (local → haiku → flash → sonnet → pro → opus), project-type bundles that auto-configure quality gates and model tiers, budget tracking with burn-rate analysis
+- **Resource efficiency** - Cost-aware model routing across OpenAI, Anthropic, Gemini, Cursor, and local models; project-type bundles auto-configure quality gates and model tiers, with budget tracking and burn-rate analysis
 - **Self-healing** - When something breaks, diagnose the root cause, create tasks, and fix it. Every error is a live test case for a permanent solution
 - **Self-improving** - When patterns of failure or inefficiency emerge, improve the framework itself. Session mining extracts learnings from past sessions automatically
 - **Gap awareness** - Every session is an opportunity to identify what's missing — gaps in automation, documentation, coverage, or processes — and create tasks to fill them
@@ -92,6 +95,7 @@ The result: an AI operations platform that manages projects across every busines
 
 - **Purpose**: AI-assisted DevOps automation framework
 - **Install**: `npm install -g aidevops && aidevops update`
+- **Recommended runtime/models**: OpenCode + OpenAI GPT-5.5 / GPT-5.4 mini
 - **Entry**: `aidevops` CLI, `~/.aidevops/agents/AGENTS.md`
 - **Stack**: Bash scripts, TypeScript (Bun), MCP servers
 
@@ -103,13 +107,15 @@ The result: an AI operations platform that manages projects across every busines
 - `aidevops secret` - Manage secrets (gopass encrypted, AI-safe)
 - `aidevops security` - Full security assessment (posture, secrets, supply chain)
 - `/onboarding` - Interactive setup wizard (in AI assistant)
+- `/design-artifact` - Route artifact-first UI, deck, email, poster, and mobile mockup work
+- `/open-design` - Manage the optional Open Design companion studio
 
 ### Agent Structure
 
 - 13 primary agents (Build+, Automate, SEO, Marketing, etc.) with specialist @subagents on demand
 - 900+ subagent markdown files organized by domain
-- 390+ helper scripts in `.agents/scripts/`
-- 69 slash commands for common workflows
+- 1,200+ helper scripts in `.agents/scripts/`
+- 90+ slash commands and workflow guides for common operations
 
 <!-- AI-CONTEXT-END -->
 
@@ -188,9 +194,10 @@ git clone https://github.com/marcusquinn/aidevops.git ~/Git/aidevops
 - Configure your AI assistants automatically
 - Offer to install Oh My Zsh (optional, opt-in) for enhanced shell experience
 - Guide you through recommended tools (Tabby, Zed, Git CLIs)
-- Ensure all PATH and alias changes work in both bash and zsh
+- Ensure all PATH and alias changes work in both bash, zsh, and fish
+- When Claude Code is installed, add a `claude` alias that runs `claude --dangerously-skip-permissions` (skips per-tool permission prompts). Re-running setup updates the alias automatically. To grant permissions per-session instead, press **Shift-Tab** inside Claude Code to cycle through permission modes (default → skip permissions → auto-approve).
 
-**New users: Start [OpenCode](https://opencode.ai/) and type `/onboarding`** to configure your services interactively. OpenCode is the recommended tool for aidevops - all features, agents, and workflows are designed and tested for it first. The onboarding wizard will:
+**New users: Start [OpenCode](https://opencode.ai/) and type `/onboarding`** to configure your services interactively. OpenCode is the recommended tool for aidevops; pair it with OpenAI GPT-5.5 and GPT-5.4 mini for the best current results across agent tiers. The onboarding wizard will:
 - Explain what **[aidevops](https://aidevops.sh)** can do
 - Ask about your work to give personalized recommendations
 - Show which services are configured vs need setup
@@ -211,6 +218,34 @@ aidevops upgrade-planning # Upgrade TODO.md/PLANS.md to latest templates
 aidevops update-tools     # Check and update installed tools
 aidevops uninstall        # Remove aidevops
 ```
+
+### Optional Design Artifact Studio
+
+aidevops now treats design as a self-contained stack with optional peripherals:
+
+- **Google `DESIGN.md` standard**: AI-readable design systems with YAML tokens, linting, previews, and brand/style libraries (`.agents/tools/design/design-md.md`).
+- **Design agents and skills**: brand identity, palettes, UI inspiration, product UI rules, shadcn/Tailwind/UI skills, Nothing-style design, email rendering, Remotion/video, and browser-based UI verification.
+- **Artifact routing commands**: `/design-artifact` decides whether to use aidevops-native implementation or a companion artifact studio; `/open-design` manages optional Open Design workflows.
+- **Verification gates**: Playwright screenshots, accessibility/contrast checks, email rendering, deck export/fidelity checks, and media smoke tests before generated artifacts are accepted.
+
+Optional companion: [Open Design](https://github.com/nexu-io/open-design) by nexu-io (Apache-2.0) is supported as a **peripheral** for live sandboxed previews, design-skill pickers, `.od/` artifact workspaces, and HTML/PDF/PPTX/ZIP-style exports. aidevops remains canonical for agents, skill ingestion, Google `DESIGN.md`, local hosting, and verification.
+
+```bash
+# Inspect optional companion status
+open-design-helper.sh status
+
+# Print safe install plan only
+open-design-helper.sh install
+
+# Install alongside aidevops only after opting in
+open-design-helper.sh install --execute
+
+# Start through aidevops local HTTPS if Open Design only prints localhost
+open-design-helper.sh start --https-local open-design
+# → https://open-design.local when localdev is configured
+```
+
+Imported Open Design skills are not copied verbatim. They are evaluated through aidevops build-agent methodology, deduplicated against existing agents, flattened into aidevops `*-skill.md` structure, attributed to upstream, and given verification commands. See `.agents/tools/design/open-design-ingestion.md` for the full skill-value matrix.
 
 **Project tracking:** When you run `aidevops init`, the project is automatically registered in `~/.config/aidevops/repos.json`. Running `aidevops update` checks all registered projects for version updates.
 
@@ -233,6 +268,23 @@ This creates:
 - `.beads/` - Task graph database (if beads enabled)
 
 **Available features:** `planning`, `git-workflow`, `code-quality`, `time-tracking`, `beads`
+
+### Per-repo platform setup
+
+After `aidevops init` registers a new repo, run `/setup-git` in your AI assistant
+to apply per-repo platform secrets. Most notably, this sets `SYNC_PAT` — a
+GitHub Actions secret that lets `issue-sync.yml` push TODO.md auto-completion
+past branch protection.
+
+This is distinct from `/onboarding` (per-account credentials like `gh auth login`):
+GitHub Actions secrets are scoped per-repo, so each repo needs its own. You need
+`gh auth login` to succeed before any per-repo helper can run, so `/onboarding`
+comes first, `/setup-git` second.
+
+Run `/setup-git` again whenever you register a new repo with `aidevops repos add`
+or when a `SYNC_PAT` advisory appears in the session greeting toast. If you skip
+this step, `issue-sync.yml` will post a remediation comment when it hits branch
+protection — `/setup-git` walks through the fix.
 
 ### Upgrade Planning Files
 
@@ -293,7 +345,25 @@ See `.agents/tools/task-management/beads.md` for complete documentation and inst
 
 **Your AI assistant now has agentic access to 30+ service integrations.**
 
-### OpenCode Anthropic OAuth (Built-in)
+### OpenAI Models in OpenCode (Recommended)
+
+OpenCode with OpenAI is the current recommended aidevops setup. Use GPT-5.5 for complex reasoning, architecture, security-sensitive review, and hard agent tiers; use GPT-5.4 mini for fast triage, routine implementation, retries, and lower-cost worker throughput.
+
+**Authenticate via the pool:**
+
+```bash
+aidevops model-accounts-pool add openai
+# Restart OpenCode after adding
+```
+
+**Why this is the default:**
+
+- **Best current cross-tier results** — strongest observed balance across interactive Build+, workers, review, and dispatch tiers
+- **Good cost/latency split** — GPT-5.5 for depth, GPT-5.4 mini for high-volume routine work
+- **Provider isolation** — OpenAI accounts rotate independently from Anthropic, Google, Cursor, and local providers
+- **Fallback-friendly** — Claude, Gemini, Cursor, and local models remain available when a task or rate-limit profile calls for them
+
+### OpenCode Anthropic OAuth (Supported)
 
 OpenCode includes Anthropic OAuth authentication natively — no API key needed. OAuth is covered by your Claude Pro/Max subscription at zero additional cost.
 
@@ -313,7 +383,8 @@ Open OpenCode → `Ctrl+A` → Select **Anthropic** → **Login with Claude.ai**
 
 **Benefits:**
 
-- **Zero cost** for Claude Pro/Max subscribers (covered by subscription)
+- **Still fully supported** for users who prefer Claude models or already have Claude Pro/Max
+- **Zero marginal cost** for Claude Pro/Max subscribers (covered by subscription)
 - **Automatic token refresh** — no manual re-authentication needed
 - **Multiple accounts** — add more accounts to the pool for automatic rotation when one hits rate limits
 - **Beta features enabled** — extended thinking modes and latest features
@@ -385,8 +456,8 @@ Enable AI-powered issue resolution directly from GitHub. Comment `/oc fix this` 
 # 1. Install the OpenCode GitHub App
 # Visit: https://github.com/apps/opencode-agent
 
-# 2. Add API key secret
-# Repository → Settings → Secrets → ANTHROPIC_API_KEY
+# 2. Add API key secret for your chosen provider
+# Repository → Settings → Secrets → OPENAI_API_KEY or ANTHROPIC_API_KEY
 
 # 3. Create required labels
 gh label create "ai-approved" --color "0E8A16" --description "Issue approved for AI agent"
@@ -406,13 +477,14 @@ The secure workflow is included at `.github/workflows/opencode-agent.yml`.
 
 See `.agents/tools/git/opencode-github-security.md` for the full security documentation.
 
-**Supported AI tool:** [OpenCode](https://opencode.ai/) is the recommended and tested AI coding tool for aidevops. All features, agents, and workflows are designed and tested for OpenCode first. We recommend [Claude](https://claude.ai/) models (Anthropic) for the best results across all agent tiers -- haiku for triage, sonnet for implementation, opus for complex reasoning.
+**Supported AI tool:** [OpenCode](https://opencode.ai/) is the recommended and tested AI coding tool for aidevops. All features, agents, and workflows are designed and tested for OpenCode first. We recommend OpenAI models for the best current results across all agent tiers: GPT-5.4 mini for fast triage/routine work and GPT-5.5 for complex implementation, review, and reasoning. [Claude](https://claude.ai/) models (Anthropic) remain fully supported, and other providers are tested as their capabilities change.
 
 **Recommended stack:**
 
 - **[OpenCode](https://opencode.ai/)** - The recommended AI coding agent. Powerful agentic TUI/CLI with native MCP support, Tab-based agent switching, LSP integration, plugin ecosystem, and excellent DX. All aidevops features are designed and tested for OpenCode first.
 - **[OpenCode Zen](https://opencode.ai/)** - Free tier of OpenCode with included models. Start working with AI straight away at no cost -- no API keys or subscriptions required.
-- **[Claude](https://claude.ai/)** (Anthropic) - Our most-used and tested model provider. Claude haiku, sonnet, and opus deliver the best results across all aidevops agent tiers and workflows. Recommended for users who want the highest quality output.
+- **OpenAI GPT-5.5 / GPT-5.4 mini** - Recommended model pair for aidevops today. Use GPT-5.5 for complex reasoning and high-impact agent tiers; use GPT-5.4 mini for triage, routine implementation, and cost-efficient parallel workers.
+- **[Claude](https://claude.ai/)** (Anthropic) - Fully supported alternative provider. Claude models remain useful for fallback, cross-provider verification, and users with Claude Pro/Max OAuth access.
 - **[Tabby](https://tabby.sh/)** - Recommended terminal. Colour-coded Profiles per project/repo, **auto-syncs tab title with git repo/branch.**
 - **[Zed](https://zed.dev/)** - Recommended editor. High-performance with AI integration (use with the OpenCode Agent Extension).
 
@@ -431,19 +503,21 @@ aidevops model-accounts-pool check        # live token validity test per account
 
 | Symptom | Command |
 |---------|---------|
-| Account shows `rate-limited` | `aidevops model-accounts-pool rotate anthropic` |
+| OpenAI account shows `rate-limited` | `aidevops model-accounts-pool rotate openai` |
+| Anthropic account shows `rate-limited` | `aidevops model-accounts-pool rotate anthropic` |
 | All accounts in cooldown | `aidevops model-accounts-pool reset-cooldowns` |
-| Account shows `auth-error` | `aidevops model-accounts-pool add anthropic` (re-auth) |
-| Pool is empty (no accounts) | `aidevops model-accounts-pool add anthropic` |
-| Recently re-authed, still broken | `aidevops model-accounts-pool assign-pending anthropic` |
+| OpenAI account shows `auth-error` | `aidevops model-accounts-pool add openai` (re-auth) |
+| Anthropic account shows `auth-error` | `aidevops model-accounts-pool add anthropic` (re-auth) |
+| Pool is empty (no accounts) | `aidevops model-accounts-pool add openai` |
+| Recently re-authenticated, still broken | `aidevops model-accounts-pool assign-pending openai` |
 | Google Gemini CLI rate-limited | `aidevops model-accounts-pool rotate google` |
 | Google token expired | `aidevops model-accounts-pool add google` (re-auth) |
 
 **Step 3 — If still broken, re-add the account**
 
 ```bash
-aidevops model-accounts-pool add anthropic     # Claude Pro/Max — opens browser OAuth
 aidevops model-accounts-pool add openai        # ChatGPT Plus/Pro
+aidevops model-accounts-pool add anthropic     # Claude Pro/Max — opens browser OAuth
 aidevops model-accounts-pool add cursor        # Cursor Pro (reads from local IDE)
 aidevops model-accounts-pool add google        # Google AI Pro/Ultra/Workspace — browser OAuth
 aidevops model-accounts-pool import claude-cli # Import from existing Claude CLI auth
@@ -467,7 +541,7 @@ aidevops model-accounts-pool remove <p> <email># Remove an account
 
 **If you prefer guided help:** Open OpenCode with a free model (OpenCode Zen includes free models that don't require any API key or subscription) and run the auth troubleshooting agent by typing:
 
-```
+```text
 @auth-troubleshooting
 ```
 
@@ -552,6 +626,7 @@ See `.agents/tools/terminal/terminal-title.md` for customization options.
 **Quality Control & Monitoring:**
 
 - **Multi-Platform Analysis**: SonarCloud, CodeFactor, Codacy, CodeRabbit, Qlty, Gemini Code Assist, Snyk
+- **Review gate preferences**: choose whether true review-bot rate limits block merges (`aidevops review-gate owner/repo wait`) or allow merge with follow-up quality coverage (`aidevops review-gate owner/repo pass`, the default). Per-tool overrides are supported, for example `aidevops review-gate owner/repo --tool coderabbitai wait`. Failed, skipped, or placeholder bot states are not treated as rate limits and continue to block until a real review/status appears or a human resolves them.
 - **Performance Auditing**: PageSpeed Insights, Lighthouse, WebPageTest, Core Web Vitals (`/performance` command)
 - **SEO Toolchain**: 40+ SEO subagents including Semrush, Ahrefs, ContentKing, Screaming Frog, Bing Webmaster Tools, Rich Results Test, programmatic SEO, analytics tracking, schema validation, content analysis, keyword mapping, and AI readiness
 - **SEO Debugging**: Open Graph validation, favicon checker, social preview testing
@@ -636,7 +711,7 @@ aidevops implements proven agent design patterns identified by [Lance Martin (La
 
 | Pattern | Description | aidevops Implementation |
 |---------|-------------|------------------------|
-| **Give Agents a Computer** | Filesystem + shell for persistent context | `~/.aidevops/.agent-workspace/`, 390+ helper scripts |
+| **Give Agents a Computer** | Filesystem + shell for persistent context | `~/.aidevops/.agent-workspace/`, 1,200+ helper scripts |
 | **Multi-Layer Action Space** | Few tools, push actions to computer | Per-agent MCP filtering (~12-20 tools each) |
 | **Knowledge Graph Routing** | Indexed, cross-referenced agents instead of isolated skills | `subagent-index.toon` maps 900+ agents by domain, purpose, and dependency — agents discover related context through the graph, not just their own file |
 | **Progressive Disclosure** | Load context on-demand | Subagent routing with content summaries, YAML frontmatter, read-on-demand |
@@ -649,7 +724,7 @@ aidevops implements proven agent design patterns identified by [Lance Martin (La
 | **Evolve Context** | Learn from sessions | `/remember`, `/recall` with SQLite FTS5 + opt-in semantic search |
 | **Pattern Tracking** | Learn what works/fails | `/patterns` command, `memory-helper.sh` |
 | **Token-Efficient Serialisation** | Minimise context overhead for structured data | [TOON format](https://github.com/marcusquinn/aidevops/blob/main/.agents/toon-format.md) — 20-60% token reduction vs JSON/YAML for agent indexes, registries, and data exchange |
-| **Cost-Aware Routing** | Match model to task complexity | `model-routing.md` with 7-tier guidance, `/route` command |
+| **Cost-Aware Routing** | Match model to task complexity | `model-routing.md` with provider-aware tier guidance, `/route` command |
 | **Model Comparison** | Compare models side-by-side | `/compare-models` (live data), `/compare-models-free` (offline) |
 | **Response Scoring** | Evaluate actual model outputs | `/score-responses` with structured criteria |
 
@@ -670,7 +745,7 @@ Supervisor (pulse loop)
 │   ├── task_assignment → worker inbox
 │   ├── status_report → coordinator outbox
 │   └── broadcast → all agents
-└── Model Routing (tier-based: haiku/sonnet/opus/flash/pro)
+└── Model Routing (tier-based: GPT-5.4 mini / GPT-5.5 / provider fallbacks)
 ```
 
 **Key components:**
@@ -680,7 +755,7 @@ Supervisor (pulse loop)
 | Mailbox | `mail-helper.sh` | SQLite-backed inter-agent messaging (send, check, broadcast, archive) |
 | Supervisor | `supervisor-helper.sh` | Autonomous multi-task orchestration with SQLite state machine, batches, retry cycles, cron scheduling, auto-pickup from TODO.md |
 | Registry | `mail-helper.sh register` | Agent registration with role, branch, worktree, heartbeat |
-| Model routing | `model-routing.md`, `/route` | Cost-aware 7-tier routing guidance (local/haiku/flash/sonnet/pro/opus/grok) |
+| Model routing | `model-routing.md`, `/route` | Cost-aware routing across OpenAI, Anthropic, Gemini, Cursor, Grok, and local providers |
 | Budget tracking | `budget-tracker-helper.sh` | Append-only cost log for model routing decisions |
 | Observability | `observability.mjs` plugin | LLM request capture for cost tracking and performance analysis |
 
@@ -789,7 +864,7 @@ High-stakes operations are verified by a second AI model from a different provid
 4. On disagreement, the operation is blocked (critical) or warned (high)
 5. All verification decisions are logged for audit
 
-**Why cross-provider?** Same-provider models share training data and failure modes. A Claude hallucination is unlikely to be reproduced by Gemini or GPT, and vice versa. The verification uses the cheapest model tier (haiku-equivalent) — cost is minimal per check.
+**Why cross-provider?** Same-provider models share training data and failure modes. A GPT hallucination is unlikely to be reproduced by Claude or Gemini, and vice versa. The verifier uses the cheapest suitable model tier, so cost is minimal per check.
 
 **Configuration:** Per-repo via `.agents/reference/high-stakes-operations.md`. Opt-out with `VERIFY_ENABLED=false` (not recommended).
 
@@ -803,12 +878,12 @@ Bundles are project-type presets that auto-configure model tiers, quality gates,
 
 | Bundle | Auto-detected by | Model default | Quality gates | Agent routing |
 |--------|-----------------|---------------|---------------|---------------|
-| `web-app` | `package.json` + framework markers | sonnet | Full (lint, test, build, a11y) | Build+ default |
-| `library` | `package.json` with `main`/`exports` | sonnet | Full + API docs check | Build+ default |
-| `cli-tool` | `bin` field in package.json | sonnet | ShellCheck, test | Build+ default |
-| `content-site` | CMS markers, `wp-config.php` | haiku | Lighthouse, SEO | Marketing for content tasks |
-| `infrastructure` | `Dockerfile`, `terraform/`, `ansible/` | sonnet | ShellCheck, security scan | Build+ default |
-| `agent` | `AGENTS.md`, `.agents/` | opus | Agent review, prompt quality | Build+ default |
+| `web-app` | `package.json` + framework markers | standard | Full (lint, test, build, a11y) | Build+ default |
+| `library` | `package.json` with `main`/`exports` | standard | Full + API docs check | Build+ default |
+| `cli-tool` | `bin` field in package.json | standard | ShellCheck, test | Build+ default |
+| `content-site` | CMS markers, `wp-config.php` | fast | Lighthouse, SEO | Marketing for content tasks |
+| `infrastructure` | `Dockerfile`, `terraform/`, `ansible/` | standard | ShellCheck, security scan | Build+ default |
+| `agent` | `AGENTS.md`, `.agents/` | thinking | Agent review, prompt quality | Build+ default |
 
 **Resolution priority:** Explicit `bundle` field in `repos.json` > `.aidevops.json` project config > auto-detection from marker files.
 
@@ -1097,6 +1172,15 @@ The setup script offers to install these tools automatically.
 - **[Langflow](https://langflow.org/)**: Visual drag-and-drop builder for AI workflows (MIT, localhost:7860)
 - **[CrewAI](https://crewai.com/)**: Multi-agent teams with role-based orchestration (MIT, localhost:8501)
 - **[AutoGen](https://microsoft.github.io/autogen/)**: Microsoft's agentic AI framework with MCP support (MIT, localhost:8081)
+
+### **Design, UI & Artifact Creation**
+
+- **Google `DESIGN.md` standard**: Canonical AI-readable design systems with YAML tokens, Markdown rationale, linting, Tailwind/DTCG export, and preview generation. aidevops keeps `DESIGN.md` as the source of truth for UI agents.
+- **Design library**: 54 brand examples and 12 original style archetypes for agent-ready visual direction, plus palette, brand identity, and UI inspiration workflows.
+- **Artifact commands**: `/design-artifact` routes prototype, deck, email, poster, social carousel, and mobile mockup requests; `/open-design` manages optional Open Design companion workflows.
+- **[Open Design](https://github.com/nexu-io/open-design)** *Optional peripheral*: Local-first design artifact studio by nexu-io (Apache-2.0) for sandboxed previews, design-skill pickers, `.od/` workspaces, and exports. It installs alongside aidevops only when requested; selected skills are ingested via aidevops build-agent optimisation, not imported verbatim.
+- **Local HTTPS previews**: `localdev-helper.sh` can wrap Open Design or other dev servers with mkcert-backed `.local` routes when tools only expose localhost.
+- **Verification**: `workflows/ui-verification.md`, `email-design-test-helper.sh`, design preview screenshots, and deck/media smoke tests provide evidence before generated artifacts ship.
 
 ### **Video Creation**
 
@@ -1726,7 +1810,7 @@ aidevops is registered as a **Claude Code plugin marketplace**. Install with two
 /plugin install aidevops@aidevops
 ```
 
-This installs the complete framework: 13 primary agents, 900+ subagents, and 390+ helper scripts.
+This installs the complete framework: 13 primary agents, 900+ subagents, and 1,200+ helper scripts.
 
 ### Importing External Skills
 
@@ -1792,25 +1876,67 @@ Call them in your AI assistant conversation with a simple @mention
 
 ### **Main Agents**
 
-Primary agents as registered in `subagent-index.toon` (13 total). MCPs are loaded on-demand per subagent, not per primary agent:
+Primary agents live at `.agents/<name>.md`. Each is a domain expert with its own system prompt, tool permissions, and subagent roster. MCPs are loaded on-demand per subagent, not per primary agent.
 
 | Name | File | Purpose | Model Tier |
 |------|------|---------|------------|
-| Build+ | `build-plus.md` | Enhanced Build with context tools (default agent) | opus |
+| Build+ | `build-plus.md` | Code: features, bug fixes, refactors, CI, full-loop delivery (default) | opus |
 | Automate | `automate.md` | Scheduling, dispatch, monitoring, background orchestration | sonnet |
-| Accounts | `accounts.md` | Financial operations | opus |
-| Business | `business.md` | Company orchestration via AI runners | sonnet |
-| Content | `content.md` | Content creation workflows | opus |
-| Health | `health.md` | Health and wellness | opus |
-| Legal | `legal.md` | Legal compliance | opus |
-| Marketing | `marketing.md` | Marketing strategy, email campaigns, paid ads, CRO | opus |
-| Research | `research.md` | Research and analysis tasks | gemini/grok |
-| Sales | `sales.md` | Sales operations and CRM pipeline | opus |
-| SEO | `seo.md` | SEO optimization and analysis | opus |
-| Social-Media | `social-media.md` | Social media management | opus |
-| Video | `video.md` | AI video generation and prompt engineering | opus |
+| Aidevops | `aidevops.md` | Framework development — meta-agent for improving aidevops itself | opus |
+| Business | `business.md` | Company orchestration, financial ops, invoicing, strategy | sonnet |
+| Content | `content.md` | Content creation across blog, video, audio, image, social | opus |
+| Health | `health.md` | Health and wellness content, fitness, nutrition | opus |
+| Legal | `legal.md` | Legal compliance, terms, privacy, GDPR | opus |
+| Marketing-Sales | `marketing-sales.md` | Email campaigns, CRM, outreach, paid ads, direct response, CRO | opus |
+| Product | `product.md` | Product management, PRDs, roadmaps, requirements capture | opus |
+| Research | `research.md` | Technical and market research, competitive analysis | gemini/grok |
+| SEO | `seo.md` | SEO audits, keyword research, GSC, schema, technical SEO | opus |
 
-**Specialist subagents** (@plan-plus, @aidevops, @wordpress, Build-Agent, Build-MCP, etc.) live under `tools/` or as `mode: subagent` files and are invoked via @mention when domain expertise is needed. See `subagent-index.toon` for the full listing.
+**Specialist subagents** (e.g. `@wordpress`, `@seo`, Build-Agent, Build-MCP, etc.) live under `.agents/tools/` or as `mode: subagent` files and are invoked via `@mention` when domain expertise is needed. See `subagent-index.toon` for the full roster.
+
+#### How to invoke a main agent
+
+| Client | Invocation |
+|---|---|
+| **OpenCode** | Tab through the agent picker in the UI — Build+ is the default. Main agents are registered as top-level agents in OpenCode's config. |
+| **Claude Code / Codex / Cursor / Droid / Kiro / Continue / Kimi / Qwen / Amp / Windsurf / Gemini CLI** | Slash command, namespaced with the `aidevops-` prefix: `/aidevops-build-plus`, `/aidevops-automate`, `/aidevops-seo`, etc. |
+| **Aider** | No native slash command support — use a shell alias: `alias aider-build='aider --message-file ~/.aidevops/agents/build-plus.md'`. |
+
+The `aidevops-` prefix differentiates framework commands from each client's native slash commands and groups them alphabetically in the command picker. It applies to **every** aidevops slash command — not just main agents — so `/aidevops-preflight`, `/aidevops-release`, `/aidevops-commit` etc. all sort together in your `/` menu.
+
+#### Supported AI clients (14)
+
+The framework installs itself across these clients. Slash commands, agent definitions, and (optionally) session-memory mining are wired up per-client by `setup.sh`, gated on per-client feature flags in `.agents/scripts/runtime-registry.sh`.
+
+| Client | Slash commands | Agent dir | Memory mining | Notes |
+|---|---|---|---|---|
+| OpenCode | ✅ `~/.config/opencode/command/` | config-based | ✅ default | Native tab-through primary agents |
+| Claude Code | ✅ `~/.claude/commands/` | ✅ `~/.claude/agents/` | ✅ default | Full feature parity |
+| Codex CLI | ✅ `~/.codex/prompts/` | — | ✅ default | Invoked as `/prompts:aidevops-<name>` |
+| Cursor | ✅ `~/.cursor/commands/` (≥1.6) | ✅ `~/.cursor/agents/` | ✅ default | Frontmatter stripped (not supported) |
+| Droid (Factory) | ✅ `~/.factory/commands/` | — | opt-in | — |
+| Gemini CLI | ✅ `~/.gemini/commands/` | — | opt-in | Converted to TOML (`prompt = """..."""`) |
+| Kimi CLI | ✅ `~/.kimi/skills/<name>/SKILL.md` | ✅ `~/.kimi/agents/` | opt-in | Directory-per-skill + auto `name:` matching |
+| Qwen Code | ✅ `~/.qwen/commands/` | ✅ `~/.qwen/agents/` | opt-in | Sub-agents + skills |
+| Continue | ✅ `~/.continue/prompts/` | — | opt-in | `.prompt` ext + `invokable: true` |
+| Kiro | ✅ `~/.kiro/steering/` | — | opt-in | `inclusion: manual` for slash access |
+| Kilo Code | custom modes | — | opt-in | Uses modes instead of commands |
+| Windsurf | repo-local `.windsurf/workflows/` | — | ❌ (protobuf) | Symlinked by `aidevops init` |
+| Amp (Sourcegraph) | repo-local `.agents/commands/` | ✅ `~/.amp/agents/` | ❌ (cloud) | Path match is native |
+| Aider | shell alias workaround | — | ❌ (per-repo md) | Native custom commands open upstream |
+
+**Feature flags** per client (`agents` / `commands` / `memory`) live in `runtime-registry.sh` and can be overridden at install time via environment variables:
+
+```bash
+AIDEVOPS_FEATURE_MEMORY_CLAUDE_CODE=no setup.sh
+AIDEVOPS_FEATURE_COMMANDS_CURSOR=no setup.sh
+```
+
+Memory mining defaults are deliberately conservative: only OpenCode, Claude Code, Codex, and Cursor are opted in by default. All other clients default to off — enable them case-by-case after reviewing what the mining job will read.
+
+#### Endgame: progressive disclosure
+
+The long-term direction is to make slash commands and `@mentions` unnecessary altogether. A progressive disclosure layer should load the right domain agents and tools into context based on the nature of the conversation — you should never have to remember agent names or prefix commands. The `aidevops-` slash commands documented above are a stepping stone: they standardise routing across every client we support, and will eventually be auto-invoked by the router rather than typed by hand.
 
 ### **Example Subagents with MCP Integration**
 
@@ -2284,6 +2410,40 @@ memory-helper.sh recall "refactor auth middleware" --semantic
 
 **Storage:** `~/.aidevops/.agent-workspace/memory/memory.db` (+ optional `embeddings.db` for semantic search, `namespaces/` for per-runner isolation)
 
+#### Session mining (cross-client)
+
+Beyond explicit `/remember` calls, aidevops can harvest structured session data from each supported AI client's on-disk conversation history. This turns every prior session — regardless of which tool you were using — into searchable context for future sessions.
+
+Per-client storage paths and formats (see `runtime-registry.sh`):
+
+| Client | Storage path | Format | Default |
+|---|---|---|---|
+| OpenCode | `~/.local/share/opencode/opencode.db` | SQLite | ✅ on |
+| Claude Code | `~/.claude/projects/` | JSONL per project | ✅ on |
+| Codex CLI | `~/.codex/sessions/` | JSONL, date-partitioned | ✅ on |
+| Cursor | `~/Library/Application Support/Cursor/User/workspaceStorage/` | SQLite (`state.vscdb`) | ✅ on |
+| Droid | `~/.factory/sessions/` | JSONL per session | opt-in |
+| Gemini CLI | `~/.gemini/tmp/` | JSON per session | opt-in |
+| Continue | `~/.continue/sessions/` | JSON per session | opt-in |
+| Kilo Code | `~/Library/.../kilocode.kilo-code/tasks/` | JSON (Anthropic schema) | opt-in |
+| Kiro | `~/Library/Application Support/Kiro/User/workspaceStorage/` | SQLite | opt-in |
+| Kimi CLI | `~/.kimi/sessions/<id>/context.jsonl` | JSONL | opt-in |
+| Qwen Code | `~/.qwen/tmp/` | JSON per session | opt-in |
+| Windsurf | `~/.codeium/windsurf/cascade/` | protobuf (opaque) | ❌ unsupported |
+| Amp | server-side (cloud) | needs API auth | ❌ unsupported |
+| Aider | `<repo>/.aider.chat.history.md` | markdown transcript | ❌ unsupported |
+
+**Defaults are deliberately conservative.** Only the four tier-1 clients — OpenCode, Claude Code, Codex, and Cursor — have memory mining enabled by default. They have the most mature, stable, documented formats and are the ones most likely to contain the full interactive history you'd want to search.
+
+For every other client, memory mining is **opt-in per runtime**. Enable it with:
+
+```bash
+AIDEVOPS_FEATURE_MEMORY_GEMINI_CLI=yes setup.sh
+AIDEVOPS_FEATURE_MEMORY_CONTINUE=yes setup.sh
+```
+
+**Privacy note.** Session files contain everything you typed — including secrets, credentials, and file contents pasted into prompts. The mining pipeline runs secretlint-style scrubbing at ingestion and defaults to local-only storage. Never sync the memory DB to a shared or cloud location without reviewing what's in it.
+
 See `.agents/memory/README.md` for complete documentation.
 
 ### **Installation**
@@ -2475,7 +2635,7 @@ aidevops/
 ├── .agents/                        # Agents and documentation
 │   ├── AGENTS.md                  # User guide (deployed to ~/.aidevops/agents/)
 │   ├── *.md                       # 13 primary agents
-│   ├── scripts/                   # 390+ helper scripts
+│   ├── scripts/                   # 1,200+ helper scripts
 │   ├── tools/                     # Cross-domain utilities (video, browser, git, etc.)
 │   ├── services/                  # External service integrations
 │   └── workflows/                 # Development process guides
@@ -2598,7 +2758,7 @@ See `.agents/tools/credentials/multi-tenant.md` for complete documentation.
 
 - Autonomous supervisor — pulse runs every 2 minutes, merging PRs, dispatching workers, killing stuck processes, advancing missions
 - Operational intelligence — struggle-ratio detection, orphaned PR recovery, circuit breaker, dynamic concurrency
-- Cost-aware routing — 7-tier model selection (local → haiku → flash → sonnet → pro → opus → grok) with budget tracking
+- Cost-aware routing — provider-aware model selection across OpenAI, Anthropic, Gemini, Cursor, Grok, and local models with budget tracking
 - Progressive context — 900+ subagents loaded on demand, project bundles auto-configuring quality gates and model tiers
 - Self-improving — session mining extracts learnings, quality findings auto-create tasks, patterns feed back into agent prompts
 
@@ -2619,3 +2779,7 @@ bash <(curl -fsSL https://aidevops.sh/install)
 ```
 
 **An AI operations platform for launching and managing projects across every business domain — from code to content, infrastructure to invoicing.**
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=marcusquinn/aidevops&type=Date)](https://star-history.com/#marcusquinn/aidevops&Date)

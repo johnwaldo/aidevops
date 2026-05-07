@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034
 
 # Secret Helper - AI-native secret management with gopass backend
@@ -638,7 +640,7 @@ cmd_status() {
 	# GPG status
 	if command -v gpg &>/dev/null; then
 		local gpg_keys
-		gpg_keys=$(gpg --list-secret-keys 2>/dev/null | grep -c "^sec" || echo "0")
+		gpg_keys=$(gpg --list-secret-keys 2>/dev/null | safe_grep_count "^sec")
 		echo -e "  GPG:          ${GREEN}installed${NC} ($gpg_keys secret key(s))"
 	else
 		echo -e "  GPG:          ${YELLOW}not installed${NC}"
@@ -647,7 +649,7 @@ cmd_status() {
 	# credentials.sh status
 	if [[ -f "$CREDENTIALS_FILE" ]]; then
 		local key_count
-		key_count=$(grep -c "^export " "$CREDENTIALS_FILE" 2>/dev/null || echo "0")
+		key_count=$(safe_grep_count "^export " "$CREDENTIALS_FILE" 2>/dev/null)
 		echo -e "  credentials:  ${GREEN}$key_count key(s)${NC} in $CREDENTIALS_FILE"
 	else
 		echo -e "  credentials:  ${DIM}no file${NC}"

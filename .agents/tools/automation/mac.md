@@ -12,82 +12,43 @@ tools:
   macos-automator_*: true
 ---
 
-# @mac - macOS Automation Subagent
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
-Use this subagent to enable macOS automation capabilities via AppleScript and JXA.
+# @mac - macOS Automation
 
-## Quick Start
+Use `@mac` for local macOS automation via AppleScript, JXA, and Accessibility APIs.
 
-Invoke with `@mac` to enable the macos-automator MCP tools:
+## Quick Reference
 
-```text
-@mac Get the current Safari URL
-@mac Toggle dark mode
-@mac List files on the desktop
-@mac Send a notification saying "Task complete"
-```
+- **Scope**: macOS-only app, UI, and system automation
+- **Tools**: `execute_script`, `get_scripting_tips`, `accessibility_query`
+- **Permissions**: System Settings > Privacy & Security > Automation and Accessibility
+- **Details**: `tools/automation/macos-automator.md`
 
-## Available Tools
-
-When `@mac` is invoked, you gain access to:
+## Tool Use
 
 | Tool | Purpose |
 |------|---------|
-| `execute_script` | Run AppleScript or JXA code |
-| `get_scripting_tips` | Search 200+ pre-built automation scripts |
-| `accessibility_query` | Query and interact with UI elements |
+| `execute_script` | Run AppleScript or JXA code directly |
+| `get_scripting_tips` | Search 200+ built-in scripts before writing custom automation |
+| `accessibility_query` | Inspect or click UI elements when an app lacks a scripting API |
 
-## Common Tasks
-
-### Get Information
+## Example Prompts
 
 ```text
-@mac What's the current Safari URL?
+@mac Get the current Safari URL
 @mac What apps are currently running?
-@mac What's on my clipboard?
-```
-
-### Control Applications
-
-```text
-@mac Open Safari and navigate to github.com
-@mac Play the next track in Music
-@mac Create a new folder called "Projects" on my desktop
-```
-
-### System Control
-
-```text
 @mac Toggle dark mode
 @mac Set volume to 50%
-@mac Show a notification with title "Done" and message "Task complete"
-```
-
-### UI Automation
-
-```text
+@mac Open Safari and navigate to github.com
 @mac Click the "General" button in System Settings
 @mac Find all text fields in the current app
-@mac What buttons are visible in Finder?
-```
-
-## Knowledge Base
-
-The MCP includes 200+ pre-built scripts. Search them:
-
-```text
+@mac Send a notification saying "Task complete"
 @mac Search for clipboard scripts
-@mac List all Safari automation tips
-@mac Show me file system automation options
 ```
 
-## Requirements
+## Related
 
-- **macOS only** - AppleScript is macOS-specific
-- **Permissions required**:
-  - System Settings > Privacy & Security > Automation
-  - System Settings > Privacy & Security > Accessibility
+- `tools/automation/macos-automator.md` — Installation and parameter details
 
-## Full Documentation
-
-See `tools/automation/macos-automator.md` for complete setup and configuration.

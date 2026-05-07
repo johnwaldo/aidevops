@@ -1,5 +1,5 @@
 /**
- * Anthropic Provider Auth (t1543)
+ * Anthropic Provider Auth (t1543, t1714)
  *
  * Handles OAuth authentication for the built-in "anthropic" provider.
  * Re-implements the essential functionality of the removed opencode-anthropic-auth
@@ -9,535 +9,264 @@
  *   - User-Agent matching current Claude CLI version
  *   - Deprecated beta header filtering
  *   - Pool token injection on session start
- *   - Mid-session 401/403 recovery: on invalid/revoked token, force-refreshes
- *     the current account's token first; if that fails, rotates to next pool
- *     account with force-refresh, and retries once
- *   - Mid-session 429 rotation: on rate limit, marks current account as
- *     rate-limited, rotates to next pool account, and retries once
+ *   - Mid-session 401/403 recovery
+ *   - Mid-session 429 rotation
+ *   - Session-level account affinity (t1714)
  *
- * The pool (oauth-pool.mjs) manages multiple account tokens.
- * This module makes the built-in provider use them correctly.
+ * Implementation is split across sibling files for complexity management:
+ *   - provider-auth-cch.mjs: CCH billing header computation (xxHash64, etc.)
+ *   - provider-auth-pool.mjs: pool account selection and rotation
+ *   - provider-auth-pool-recovery.mjs: exhaustion recovery, rate-limit handling
+ *   - provider-auth-request.mjs: request/response transformation
  */
 
-import { ensureValidToken, getAccounts, patchAccount, getAnthropicUserAgent } from "./oauth-pool.mjs";
+import { ensureValidToken, getAccounts, patchAccount, normalizeExpiredCooldowns } from "./oauth-pool.mjs";
+import {
+  injectAccountToken, activateAccount, tokenResult,
+  getSessionAccountToken, resolveSessionEmailFromToken,
+  rotatePoolAccounts, getAvailableAlternates, rotateToAlternateAccount,
+  resolveCurrentAccount,
+} from "./provider-auth-pool.mjs";
+import {
+  parseRetryAfterMs, AUTH_FAILURE_COOLDOWN_MS,
+  recoverFromExhaustion, refreshSessionOwnAccount,
+} from "./provider-auth-pool-recovery.mjs";
+import { buildRequestHeaders, transformRequestBody, addBetaQueryParam, transformResponseStream } from "./provider-auth-request.mjs";
 
-/** Default cooldown when rate limited mid-session (ms) — 1 minute */
-const RATE_LIMIT_COOLDOWN_MS = 60_000;
+/**
+ * Apply a recovered token to headers/env and retry the request.
+ * @param {string} token @param {string} email @param {object} ctx
+ */
+async function applyTokenAndRetry(token, email, ctx) {
+  ctx.requestHeaders.set("authorization", `Bearer ${token}`);
+  process.env.ANTHROPIC_API_KEY = token;
+  const sessionAccountEmail = activateAccount(email);
+  const response = await fetch(ctx.requestInput, { ...ctx.requestInit, body: ctx.body, headers: ctx.requestHeaders });
+  return { response, sessionAccountEmail };
+}
 
-/** Default cooldown on auth failure (ms) — 5 minutes */
-const AUTH_FAILURE_COOLDOWN_MS = 300_000;
+/**
+ * Try force-refreshing the current account's token.
+ * @param {any} client @param {object|null} currentAccount @param {string} currentEmail
+ */
+async function forceRefreshCurrentAccount(client, currentAccount, currentEmail) {
+  if (!currentAccount?.refresh) return null;
+  const freshToken = await ensureValidToken("anthropic", { ...currentAccount, expires: 0 });
+  if (!freshToken) return null;
+  try { await injectAccountToken(client, currentAccount); } catch { /* best-effort */ }
+  console.error(`[aidevops] provider-auth: token refreshed for ${currentEmail} — retrying request`);
+  return freshToken;
+}
 
-const TOOL_PREFIX = "mcp_";
+/**
+ * Mark an account as auth-error and rotate to an alternate.
+ * @param {any} client @param {object[]} accounts @param {object|null} currentAccount @param {string} currentEmail
+ */
+async function markAndRotateAccount(client, accounts, currentAccount, currentEmail) {
+  console.error(`[aidevops] provider-auth: refresh failed for ${currentEmail} — rotating to next account`);
+  if (currentAccount) {
+    patchAccount("anthropic", currentEmail, {
+      status: "auth-error",
+      cooldownUntil: Date.now() + AUTH_FAILURE_COOLDOWN_MS,
+    });
+  }
+  const alternates = getAvailableAlternates(accounts, currentEmail);
+  return rotateToAlternateAccount(client, alternates, true);
+}
 
-const REQUIRED_BETAS = [
-  "oauth-2025-04-20",
-  "interleaved-thinking-2025-05-14",
-];
+/**
+ * Resolve the current pool accounts and identify the active account.
+ */
+function resolvePoolState(sessionAccountEmail, accessToken) {
+  const accounts = getAccounts("anthropic");
+  normalizeExpiredCooldowns("anthropic", accounts);
+  const currentAccount = resolveCurrentAccount(accounts, sessionAccountEmail, accessToken);
+  return { accounts, currentAccount, currentEmail: currentAccount?.email || "unknown" };
+}
 
-const DEPRECATED_BETAS = new Set([
-  "code-execution-2025-01-24",
-  "extended-cache-ttl-2025-04-11",
-]);
+/**
+ * Resolve the current session's access token.
+ * Handles session affinity, pool rotation, and exhaustion wait.
+ */
+async function resolveAccessToken(client, auth, sessionAccountEmail) {
+  const { accessToken: poolToken, accessExpires } = getSessionAccountToken(sessionAccountEmail, auth);
+  if (poolToken && accessExpires >= Date.now()) {
+    return {
+      accessToken: poolToken,
+      sessionAccountEmail: resolveSessionEmailFromToken(poolToken, sessionAccountEmail),
+    };
+  }
+  const accounts = getAccounts("anthropic");
+  normalizeExpiredCooldowns("anthropic", accounts);
+  if (sessionAccountEmail) {
+    const result = await refreshSessionOwnAccount(client, accounts, sessionAccountEmail);
+    if (result) return tokenResult(result);
+  }
+  const poolResult = await rotatePoolAccounts(client, accounts);
+  if (poolResult) return tokenResult(poolResult);
+  return recoverFromExhaustion(client, auth, sessionAccountEmail);
+}
 
-/** Priority order for account status during pool rotation (lower = tried first). */
-const STATUS_ORDER = { active: 0, idle: 1, "rate-limited": 2, "auth-error": 3 };
+/**
+ * Handle 401/403 response: try force-refreshing current account, then rotate.
+ */
+async function handle401Recovery(client, response, accessToken, sessionAccountEmail, ctx) {
+  const { accounts, currentAccount, currentEmail } = resolvePoolState(sessionAccountEmail, accessToken);
+  console.error(
+    `[aidevops] provider-auth: ${response.status} (invalid/revoked token) for ${currentEmail} — attempting refresh...`,
+  );
+  const freshToken = await forceRefreshCurrentAccount(client, currentAccount, currentEmail);
+  if (freshToken) return applyTokenAndRetry(freshToken, currentEmail, ctx);
+  const rotated = await markAndRotateAccount(client, accounts, currentAccount, currentEmail);
+  if (rotated) {
+    console.error(`[aidevops] provider-auth: rotated to ${rotated.email} — retrying request once`);
+    return applyTokenAndRetry(rotated.token, rotated.email, ctx);
+  }
+  console.error(
+    `[aidevops] provider-auth: ${response.status} for ${currentEmail} — all accounts exhausted. ` +
+    `Pool has ${accounts.length} account(s). Use /model-accounts-pool to check status.`,
+  );
+  return { response, sessionAccountEmail };
+}
+
+/**
+ * Context object for handle429Recovery.
+ * @typedef {{ accessToken: string, sessionAccountEmail: string|null, requestCtx: object, triedEmails: Set<string>|undefined }} Recovery429Ctx
+ */
+
+/**
+ * Handle 429 response: mark current account rate-limited, rotate to alternate.
+ * @param {any} client @param {Response} response @param {Recovery429Ctx} ctx429
+ */
+async function handle429Recovery(client, response, ctx429) {
+  const { accessToken, sessionAccountEmail, requestCtx } = ctx429;
+  const cooldownMs = parseRetryAfterMs(response);
+  const { accounts, currentAccount, currentEmail } = resolvePoolState(sessionAccountEmail, accessToken);
+  console.error(
+    `[aidevops] provider-auth: 429 rate limit hit for ${currentEmail} mid-session (cooldown ${Math.ceil(cooldownMs / 1000)}s) — attempting pool rotation`,
+  );
+  if (currentAccount) patchAccount("anthropic", currentEmail, { status: "rate-limited", cooldownUntil: Date.now() + cooldownMs });
+  const tried = ctx429.triedEmails ?? new Set();
+  tried.add(currentEmail);
+  const alternates = getAvailableAlternates(accounts, currentEmail).filter((a) => !tried.has(a.email));
+  if (alternates.length === 0) {
+    console.error(`[aidevops] provider-auth: all ${tried.size} accounts tried — giving up`);
+    return { response, sessionAccountEmail };
+  }
+  const rotated = await rotateToAlternateAccount(client, alternates, false);
+  if (rotated) {
+    tried.add(rotated.email);
+    console.error(`[aidevops] provider-auth: rotated to ${rotated.email} — retrying`);
+    const retried = await applyTokenAndRetry(rotated.token, rotated.email, requestCtx);
+    if (retried.response.status !== 429) return retried;
+    return handle429Recovery(client, retried.response, { accessToken, sessionAccountEmail: rotated.email, requestCtx, triedEmails: tried });
+  }
+  console.error(`[aidevops] provider-auth: all accounts rate-limited — giving up`);
+  return { response, sessionAccountEmail };
+}
+
+function zeroOutModelCosts(provider) {
+  for (const model of Object.values(provider.models)) {
+    model.cost = { input: 0, output: 0, cache: { read: 0, write: 0 } };
+  }
+}
+
+/**
+ * Check if a response body contains the "third-party apps" billing error.
+ * Clones the response so the original remains consumable for the caller.
+ * @param {Response} response @returns {Promise<boolean>}
+ */
+async function isThirdPartyBillingError(response) {
+  if (response.status !== 400) return false;
+  try {
+    const cloned = response.clone();
+    const body = await cloned.json();
+    return body?.error?.type === "invalid_request_error" &&
+      typeof body?.error?.message === "string" &&
+      body.error.message.toLowerCase().includes("third-party");
+  } catch { return false; }
+}
+
+/**
+ * Handle 400 "third-party apps" billing error: rotate to another account.
+ * This error means Anthropic classified the connection as third-party,
+ * which fails when the account doesn't have "extra usage" enabled.
+ * Rotating accounts sometimes resolves it (different token = different classification).
+ */
+async function handle400ThirdPartyRecovery(client, response, accessToken, sessionAccountEmail, ctx) {
+  const { accounts, currentAccount, currentEmail } = resolvePoolState(sessionAccountEmail, accessToken);
+  console.error(
+    `[aidevops] provider-auth: 400 third-party billing error for ${currentEmail} — rotating account`,
+  );
+  if (currentAccount) {
+    patchAccount("anthropic", currentEmail, {
+      status: "billing-error",
+      cooldownUntil: Date.now() + AUTH_FAILURE_COOLDOWN_MS,
+    });
+  }
+  const alternates = getAvailableAlternates(accounts, currentEmail);
+  const rotated = await rotateToAlternateAccount(client, alternates, true);
+  if (rotated) {
+    console.error(`[aidevops] provider-auth: rotated to ${rotated.email} — retrying request once`);
+    return applyTokenAndRetry(rotated.token, rotated.email, ctx);
+  }
+  console.error(
+    `[aidevops] provider-auth: all accounts hit third-party billing error. ` +
+    `Enable "extra usage" at claude.ai/settings/usage on at least one account, or check header fingerprint.`,
+  );
+  return { response, sessionAccountEmail };
+}
+
+/**
+ * Execute the authenticated fetch with token resolution, body transform, and error recovery.
+ */
+async function executeAuthenticatedFetch(client, getAuth, input, init, sessionAccountEmail) {
+  const auth = await getAuth();
+  if (auth.type !== "oauth") return { response: await fetch(input, init), sessionAccountEmail };
+  const resolved = await resolveAccessToken(client, auth, sessionAccountEmail);
+  const accessToken = resolved.accessToken ?? auth.access;
+  let currentEmail = resolved.sessionAccountEmail;
+  const ctx = {
+    requestHeaders: buildRequestHeaders(input, init, accessToken),
+    body: transformRequestBody(init?.body),
+    requestInput: addBetaQueryParam(input),
+    requestInit: init ?? {},
+  };
+  const triedEmails = new Set([currentEmail].filter(Boolean));
+  let response = await fetch(ctx.requestInput, { ...ctx.requestInit, body: ctx.body, headers: ctx.requestHeaders });
+  if (response.status === 401 || response.status === 403) {
+    ({ response, sessionAccountEmail: currentEmail } = await handle401Recovery(client, response, accessToken, currentEmail, ctx));
+  }
+  if (response.status === 400 && await isThirdPartyBillingError(response)) {
+    ({ response, sessionAccountEmail: currentEmail } = await handle400ThirdPartyRecovery(client, response, accessToken, currentEmail, ctx));
+  }
+  if (response.status === 429) {
+    ({ response, sessionAccountEmail: currentEmail } = await handle429Recovery(client, response, {
+      accessToken, sessionAccountEmail: currentEmail, requestCtx: ctx, triedEmails,
+    }));
+  }
+  return { response: transformResponseStream(response), sessionAccountEmail: currentEmail };
+}
 
 /**
  * Create the auth hook for the built-in "anthropic" provider.
- * Provides OAuth loader with custom fetch that handles:
- *   - Bearer auth with pool tokens
- *   - Beta headers (required + filtered)
- *   - System prompt sanitization (OpenCode → Claude Code)
- *   - Tool name prefixing (mcp_)
- *   - ?beta=true query param
- *   - Response stream tool name de-prefixing
- *
  * @param {any} client - OpenCode SDK client
  * @returns {import('@opencode-ai/plugin').AuthHook}
  */
 export function createProviderAuthHook(client) {
   return {
     provider: "anthropic",
-
     async loader(getAuth, provider) {
       const auth = await getAuth();
       if (auth.type !== "oauth") return {};
-
-      // Zero out costs for Max plan
-      for (const model of Object.values(provider.models)) {
-        model.cost = {
-          input: 0,
-          output: 0,
-          cache: { read: 0, write: 0 },
-        };
-      }
-
+      zeroOutModelCosts(provider);
+      let sessionAccountEmail = null;
       return {
         apiKey: "",
         async fetch(input, init) {
-          const auth = await getAuth();
-          if (auth.type !== "oauth") return fetch(input, init);
-
-          // Refresh token if expired
-          let accessToken = auth.access;
-          if (!accessToken || auth.expires < Date.now()) {
-            // Try refreshing via the pool's ensureValidToken (handles
-            // rotation across multiple accounts and cooldown logic).
-            // Sort by least-recently-used so we try the freshest account
-            // first, maximising the chance of finding one not rate-limited.
-            const accounts = getAccounts("anthropic");
-            let refreshed = false;
-
-            // Sort accounts: active first (by LRU), then others
-            const sorted = [...accounts].sort((a, b) => {
-              // Prefer active/idle accounts over rate-limited/auth-error
-              const aOrder = STATUS_ORDER[a.status] ?? 99;
-              const bOrder = STATUS_ORDER[b.status] ?? 99;
-              if (aOrder !== bOrder) return aOrder - bOrder;
-              // Within same status, prefer least recently used
-              return new Date(a.lastUsed || 0) - new Date(b.lastUsed || 0);
-            });
-
-            for (const account of sorted) {
-              // Skip accounts in cooldown
-              if (account.cooldownUntil && account.cooldownUntil > Date.now()) {
-                console.error(`[aidevops] provider-auth: skipping ${account.email} — cooldown active`);
-                continue;
-              }
-              const token = await ensureValidToken("anthropic", account);
-              if (token) {
-                await client.auth.set({
-                  path: { id: "anthropic" },
-                  body: {
-                    type: "oauth",
-                    refresh: account.refresh,
-                    access: account.access,
-                    expires: account.expires,
-                  },
-                });
-                patchAccount("anthropic", account.email, {
-                  lastUsed: new Date().toISOString(),
-                  status: "active",
-                });
-                accessToken = token;
-                refreshed = true;
-                console.error(`[aidevops] provider-auth: refreshed via pool account ${account.email}`);
-                break;
-              }
-            }
-
-            if (!refreshed) {
-              // All pool accounts exhausted (rate-limited or auth-error).
-              // Log which accounts were tried and their status for debugging.
-              const accountSummary = accounts.map((a) => {
-                const cooldown = a.cooldownUntil && a.cooldownUntil > Date.now()
-                  ? ` (cooldown: ${Math.ceil((a.cooldownUntil - Date.now()) / 60000)}m)`
-                  : "";
-                return `${a.email}[${a.status}${cooldown}]`;
-              }).join(", ");
-              console.error(
-                `[aidevops] provider-auth: all pool accounts exhausted. ` +
-                `Accounts: ${accountSummary || "none"}. ` +
-                `Use /model-accounts-pool reset-cooldowns to clear cooldowns, ` +
-                `or wait for cooldowns to expire.`,
-              );
-              throw new Error(
-                `Token refresh failed: all ${accounts.length} pool account(s) exhausted ` +
-                `(rate-limited or auth-error). Use /model-accounts-pool reset-cooldowns to retry.`,
-              );
-            }
-          }
-
-          // Build headers
-          const requestInit = init ?? {};
-          const requestHeaders = new Headers();
-
-          if (input instanceof Request) {
-            input.headers.forEach((value, key) => {
-              requestHeaders.set(key, value);
-            });
-          }
-
-          if (requestInit.headers) {
-            if (requestInit.headers instanceof Headers) {
-              requestInit.headers.forEach((value, key) => {
-                requestHeaders.set(key, value);
-              });
-            } else if (Array.isArray(requestInit.headers)) {
-              for (const [key, value] of requestInit.headers) {
-                if (typeof value !== "undefined") {
-                  requestHeaders.set(key, String(value));
-                }
-              }
-            } else {
-              for (const [key, value] of Object.entries(requestInit.headers)) {
-                if (typeof value !== "undefined") {
-                  requestHeaders.set(key, String(value));
-                }
-              }
-            }
-          }
-
-          // Merge betas, filtering deprecated ones
-          const incomingBeta = requestHeaders.get("anthropic-beta") || "";
-          const incomingBetasList = incomingBeta
-            .split(",")
-            .map((b) => b.trim())
-            .filter((b) => b && !DEPRECATED_BETAS.has(b));
-          const mergedBetas = [
-            ...new Set([...REQUIRED_BETAS, ...incomingBetasList]),
-          ].join(",");
-
-          requestHeaders.set("authorization", `Bearer ${accessToken}`);
-          requestHeaders.set("anthropic-beta", mergedBetas);
-          requestHeaders.set("user-agent", getAnthropicUserAgent());
-          requestHeaders.delete("x-api-key");
-
-          // Transform request body
-          let body = requestInit.body;
-          if (body && typeof body === "string") {
-            try {
-              const parsed = JSON.parse(body);
-
-              // Sanitize system prompt
-              if (parsed.system && Array.isArray(parsed.system)) {
-                parsed.system = parsed.system.map((item) => {
-                  if (item.type === "text" && item.text) {
-                    return {
-                      ...item,
-                      text: item.text
-                        .replace(/OpenCode/g, "Claude Code")
-                        .replace(/opencode/gi, "Claude"),
-                    };
-                  }
-                  return item;
-                });
-              }
-
-              // Prefix tool definitions
-              if (parsed.tools && Array.isArray(parsed.tools)) {
-                parsed.tools = parsed.tools.map((tool) => ({
-                  ...tool,
-                  name: tool.name ? `${TOOL_PREFIX}${tool.name}` : tool.name,
-                }));
-              }
-
-              // Prefix tool_use blocks in messages
-              if (parsed.messages && Array.isArray(parsed.messages)) {
-                parsed.messages = parsed.messages.map((msg) => {
-                  if (msg.content && Array.isArray(msg.content)) {
-                    msg.content = msg.content.map((block) => {
-                      if (block.type === "tool_use" && block.name) {
-                        return { ...block, name: `${TOOL_PREFIX}${block.name}` };
-                      }
-                      return block;
-                    });
-                  }
-                  return msg;
-                });
-              }
-
-              body = JSON.stringify(parsed);
-            } catch {
-              // ignore parse errors
-            }
-          }
-
-          // Add ?beta=true
-          let requestInput = input;
-          let requestUrl = null;
-          try {
-            if (typeof input === "string" || input instanceof URL) {
-              requestUrl = new URL(input.toString());
-            } else if (input instanceof Request) {
-              requestUrl = new URL(input.url);
-            }
-          } catch {
-            requestUrl = null;
-          }
-
-          if (
-            requestUrl &&
-            requestUrl.pathname === "/v1/messages" &&
-            !requestUrl.searchParams.has("beta")
-          ) {
-            requestUrl.searchParams.set("beta", "true");
-            requestInput =
-              input instanceof Request
-                ? new Request(requestUrl.toString(), input)
-                : requestUrl;
-          }
-
-          let response = await fetch(requestInput, {
-            ...requestInit,
-            body,
-            headers: requestHeaders,
-          });
-
-          // --- Error recovery: 401/403 (invalid/revoked token) and 429 (rate limit) ---
-          //
-          // 401/403: Anthropic revokes access tokens server-side before our local
-          // expiry timestamp (observed: tokens claimed 8h validity but rejected
-          // after ~1-2h idle). The local `expires` field is unreliable — we must
-          // handle server-side rejection. Strategy: force-refresh the current
-          // account's token first (cheap, same account). If that fails, rotate
-          // to the next pool account.
-          //
-          // 429: Rate limited — rotate to next pool account immediately.
-          //
-          // Both paths retry the request exactly once after recovery.
-          if (response.status === 401 || response.status === 403) {
-            const accounts = getAccounts("anthropic");
-            const currentAccount = accounts.find((a) => a.access === accessToken);
-            const currentEmail = currentAccount?.email || "unknown";
-
-            console.error(
-              `[aidevops] provider-auth: ${response.status} (invalid/revoked token) for ${currentEmail} — attempting refresh...`,
-            );
-
-            // Step 1: Try force-refreshing the current account's token.
-            // The token may have been revoked server-side while our local
-            // expiry says it's still valid. Force a refresh via the refresh token.
-            let recovered = false;
-            if (currentAccount && currentAccount.refresh) {
-              const freshToken = await ensureValidToken("anthropic", {
-                ...currentAccount,
-                expires: 0, // Force refresh by pretending it's expired
-              });
-              if (freshToken) {
-                // Refresh succeeded — update header and retry
-                requestHeaders.set("authorization", `Bearer ${freshToken}`);
-                accessToken = freshToken;
-
-                try {
-                  await client.auth.set({
-                    path: { id: "anthropic" },
-                    body: {
-                      type: "oauth",
-                      refresh: currentAccount.refresh,
-                      access: currentAccount.access,
-                      expires: currentAccount.expires,
-                    },
-                  });
-                } catch {
-                  // Best-effort — env var is the primary path
-                }
-                process.env.ANTHROPIC_API_KEY = freshToken;
-
-                patchAccount("anthropic", currentEmail, {
-                  lastUsed: new Date().toISOString(),
-                  status: "active",
-                });
-
-                console.error(
-                  `[aidevops] provider-auth: token refreshed for ${currentEmail} — retrying request`,
-                );
-
-                response = await fetch(requestInput, {
-                  ...requestInit,
-                  body,
-                  headers: requestHeaders,
-                });
-                recovered = true;
-              }
-            }
-
-            // Step 2: If refresh failed, mark as auth-error and rotate to next account
-            if (!recovered) {
-              console.error(
-                `[aidevops] provider-auth: refresh failed for ${currentEmail} — rotating to next account`,
-              );
-
-              if (currentAccount) {
-                patchAccount("anthropic", currentEmail, {
-                  status: "auth-error",
-                  cooldownUntil: Date.now() + AUTH_FAILURE_COOLDOWN_MS,
-                });
-              }
-
-              const now = Date.now();
-              const alternates = [...accounts]
-                .filter(
-                  (a) =>
-                    a.email !== currentEmail &&
-                    (a.status === "active" || a.status === "idle") &&
-                    (!a.cooldownUntil || a.cooldownUntil <= now),
-                )
-                .sort((a, b) => new Date(a.lastUsed || 0) - new Date(b.lastUsed || 0));
-
-              for (const alt of alternates) {
-                // Force-refresh alternate accounts too — their tokens may
-                // also be revoked if Anthropic invalidated a batch
-                let altToken;
-                try {
-                  altToken = await ensureValidToken("anthropic", {
-                    ...alt,
-                    expires: 0, // Force refresh
-                  });
-                } catch (err) {
-                  console.error(`[aidevops] provider-auth: ensureValidToken failed for ${alt.email}: ${err.message}`);
-                  continue;
-                }
-                if (!altToken) continue;
-
-                try {
-                  await client.auth.set({
-                    path: { id: "anthropic" },
-                    body: {
-                      type: "oauth",
-                      refresh: alt.refresh,
-                      access: alt.access,
-                      expires: alt.expires,
-                    },
-                  });
-                } catch (err) {
-                  console.error(`[aidevops] provider-auth: failed to inject token for ${alt.email}: ${err.message}`);
-                  continue;
-                }
-
-                requestHeaders.set("authorization", `Bearer ${altToken}`);
-                process.env.ANTHROPIC_API_KEY = altToken;
-
-                patchAccount("anthropic", alt.email, {
-                  lastUsed: new Date().toISOString(),
-                  status: "active",
-                });
-
-                console.error(
-                  `[aidevops] provider-auth: rotated to ${alt.email} — retrying request once`,
-                );
-
-                response = await fetch(requestInput, {
-                  ...requestInit,
-                  body,
-                  headers: requestHeaders,
-                });
-                recovered = true;
-                break;
-              }
-
-              if (!recovered) {
-                console.error(
-                  `[aidevops] provider-auth: ${response.status} for ${currentEmail} — all accounts exhausted. ` +
-                  `Pool has ${accounts.length} account(s). Use /model-accounts-pool to check status.`,
-                );
-              }
-            }
-          }
-
-          // --- 429 mid-session rotation ---
-          // Rate limited — rotate to next pool account immediately (no refresh attempt).
-          if (response.status === 429) {
-            const accounts = getAccounts("anthropic");
-            const currentAccount = accounts.find((a) => a.access === accessToken);
-            const currentEmail = currentAccount?.email || "unknown";
-
-            console.error(
-              `[aidevops] provider-auth: 429 rate limit hit for ${currentEmail} mid-session — attempting pool rotation`,
-            );
-
-            if (currentAccount) {
-              patchAccount("anthropic", currentEmail, {
-                status: "rate-limited",
-                cooldownUntil: Date.now() + RATE_LIMIT_COOLDOWN_MS,
-              });
-            }
-
-            const now = Date.now();
-            const alternates = [...accounts]
-              .filter(
-                (a) =>
-                  a.email !== currentEmail &&
-                  (a.status === "active" || a.status === "idle") &&
-                  (!a.cooldownUntil || a.cooldownUntil <= now),
-              )
-              .sort((a, b) => new Date(a.lastUsed || 0) - new Date(b.lastUsed || 0));
-
-            let rotated = false;
-            for (const alt of alternates) {
-              let altToken;
-              try {
-                altToken = await ensureValidToken("anthropic", alt);
-              } catch (err) {
-                console.error(`[aidevops] provider-auth: ensureValidToken failed for ${alt.email}: ${err.message}`);
-                continue;
-              }
-              if (!altToken) continue;
-
-              try {
-                await client.auth.set({
-                  path: { id: "anthropic" },
-                  body: {
-                    type: "oauth",
-                    refresh: alt.refresh,
-                    access: alt.access,
-                    expires: alt.expires,
-                  },
-                });
-              } catch (err) {
-                console.error(`[aidevops] provider-auth: failed to inject token for ${alt.email}: ${err.message}`);
-                continue;
-              }
-
-              requestHeaders.set("authorization", `Bearer ${altToken}`);
-              process.env.ANTHROPIC_API_KEY = altToken;
-
-              patchAccount("anthropic", alt.email, {
-                lastUsed: new Date().toISOString(),
-                status: "active",
-              });
-
-              console.error(
-                `[aidevops] provider-auth: rotated to ${alt.email} — retrying request once`,
-              );
-
-              response = await fetch(requestInput, {
-                ...requestInit,
-                body,
-                headers: requestHeaders,
-              });
-              rotated = true;
-              break;
-            }
-
-            if (!rotated) {
-              console.error(
-                `[aidevops] provider-auth: 429 for ${currentEmail} — no alternate account available. ` +
-                `Pool has ${accounts.length} account(s). Use /model-accounts-pool to check status.`,
-              );
-            }
-          }
-
-          // Transform streaming response — strip mcp_ prefix from tool names
-          if (response.body) {
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            const encoder = new TextEncoder();
-
-            const stream = new ReadableStream({
-              async pull(controller) {
-                const { done, value } = await reader.read();
-                if (done) {
-                  controller.close();
-                  return;
-                }
-                let text = decoder.decode(value, { stream: true });
-                text = text.replace(
-                  /"name"\s*:\s*"mcp_([^"]+)"/g,
-                  '"name": "$1"',
-                );
-                controller.enqueue(encoder.encode(text));
-              },
-            });
-
-            return new Response(stream, {
-              status: response.status,
-              statusText: response.statusText,
-              headers: response.headers,
-            });
-          }
-
-          return response;
+          const result = await executeAuthenticatedFetch(client, getAuth, input, init, sessionAccountEmail);
+          sessionAccountEmail = result.sessionAccountEmail;
+          return result.response;
         },
       };
     },

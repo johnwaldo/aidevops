@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # auto-update-helper.sh - Automatic update polling daemon for aidevops
 #
 # Lightweight cron job that checks for new aidevops releases every 10 minutes
@@ -84,6 +86,8 @@ readonly DEFAULT_VENV_HEALTH_HOURS=24
 readonly LAUNCHD_LABEL="com.aidevops.aidevops-auto-update"
 readonly LAUNCHD_DIR="$HOME/Library/LaunchAgents"
 readonly LAUNCHD_PLIST="${LAUNCHD_DIR}/${LAUNCHD_LABEL}.plist"
+readonly SYSTEMD_SERVICE_DIR="$HOME/.config/systemd/user"
+readonly SYSTEMD_UNIT_NAME="aidevops-auto-update"
 
 #######################################
 # Logging
@@ -120,10 +124,23 @@ ensure_dirs() {
 
 #######################################
 # Detect scheduler backend for current platform
-# Returns: "launchd" on macOS, "cron" on Linux/other
+# Sources platform-detect.sh for accurate detection (GH#17695 Finding C).
+# Returns: "launchd" on macOS, "systemd" or "cron" on Linux
 #######################################
 _get_scheduler_backend() {
-	if [[ "$(uname)" == "Darwin" ]]; then
+	# Source platform-detect.sh if AIDEVOPS_SCHEDULER is not already set
+	if [[ -z "${AIDEVOPS_SCHEDULER:-}" ]]; then
+		local _pd_path
+		_pd_path="$(dirname "${BASH_SOURCE[0]}")/platform-detect.sh"
+		if [[ -f "$_pd_path" ]]; then
+			# shellcheck source=platform-detect.sh
+			source "$_pd_path"
+		fi
+	fi
+	# Fall back to simple uname check if platform-detect.sh unavailable
+	if [[ -n "${AIDEVOPS_SCHEDULER:-}" ]]; then
+		echo "$AIDEVOPS_SCHEDULER"
+	elif [[ "$(uname)" == "Darwin" ]]; then
 		echo "launchd"
 	else
 		echo "cron"
@@ -155,6 +172,7 @@ _generate_auto_update_plist() {
 	local script_path="$1"
 	local interval_seconds="$2"
 	local env_path="$3"
+	env_path=$(aidevops_launchd_sanitized_path "$env_path")
 
 	cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -242,6 +260,43 @@ _migrate_cron_to_launchd() {
 # Lock management (prevents concurrent updates)
 # Uses mkdir for atomic locking (POSIX-safe)
 #######################################
+
+#######################################
+# _lock_holder_is_wedged
+# Returns 0 if the lock holder is wedged (process alive but no log progress
+# for more than WEDGE_THRESHOLD_SECONDS), 1 otherwise.
+# Conservative: treats absence of log file as "not wedged" (can't tell).
+# Uses log file mtime as a proxy for "last sign of life" — more accurate than
+# lock directory mtime which only reflects lock acquisition time.
+# t2912
+#######################################
+_lock_holder_is_wedged() {
+	local _pid="$1"
+	local _threshold="${WEDGE_THRESHOLD_SECONDS:-1800}"  # 30 min default
+	local _log="${LOG_FILE:-$HOME/.aidevops/logs/auto-update.log}"
+
+	# Belt-and-braces: process must be alive for a wedge to be possible.
+	kill -0 "$_pid" 2>/dev/null || return 1
+
+	# No log file = nothing to measure progress against.
+	# Conservative: assume not wedged rather than force-killing blindly.
+	[[ -f "$_log" ]] || return 1
+
+	# Modification time of the log file proxies "last sign of life".
+	# Use Darwin without quotes in [[ ]] — RHS is not word-split, no SC warning.
+	local _log_mtime
+	local _now
+	local _idle
+	_log_mtime=$(_file_mtime_epoch "$_log")
+	_now=$(date +%s)
+	_idle=$(( _now - _log_mtime ))
+
+	if [[ "$_idle" -gt "$_threshold" ]]; then
+		return 0
+	fi
+	return 1
+}
+
 acquire_lock() {
 	local max_wait=30
 	local waited=0
@@ -256,9 +311,21 @@ acquire_lock() {
 		if [[ -f "$LOCK_FILE/pid" ]]; then
 			local lock_pid
 			lock_pid=$(cat "$LOCK_FILE/pid" 2>/dev/null || echo "")
-			if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
-				log_warn "Removing stale lock (PID $lock_pid dead)"
+			# t2421: command-aware liveness — bare kill -0 lies on macOS PID reuse
+			if [[ -n "$lock_pid" ]] && ! _is_process_alive_and_matches "$lock_pid" "${FRAMEWORK_PROCESS_PATTERN:-}"; then
+				log_warn "Removing stale lock (PID $lock_pid dead or reused, t2421)"
 				rm -rf "$LOCK_FILE"
+				continue
+			# t2912: wedge detection — process alive but log has had no activity
+			# beyond WEDGE_THRESHOLD_SECONDS (default 1800s / 30 min).
+			elif [[ -n "$lock_pid" ]] && _lock_holder_is_wedged "$lock_pid"; then
+				local _wedge_thr="${WEDGE_THRESHOLD_SECONDS:-1800}"
+				log_warn "Wedged lock holder detected (PID $lock_pid alive but no log progress in ${_wedge_thr}s) — force-releasing (t2912)"
+				kill -TERM "$lock_pid" 2>/dev/null || true
+				sleep 2
+				kill -KILL "$lock_pid" 2>/dev/null || true
+				rm -rf "$LOCK_FILE"
+				"${SCRIPT_DIR}/audit-log-helper.sh" log "lock.wedge-recovery" "auto-update wedged lock (PID $lock_pid) force-released after ${_wedge_thr}s with no log progress" 2>/dev/null || true
 				continue
 			fi
 		fi
@@ -266,11 +333,7 @@ acquire_lock() {
 		# Check lock age (safety net for orphaned locks)
 		if [[ -d "$LOCK_FILE" ]]; then
 			local lock_age
-			if [[ "$(uname)" == "Darwin" ]]; then
-				lock_age=$(($(date +%s) - $(stat -f %m "$LOCK_FILE" 2>/dev/null || echo "0")))
-			else
-				lock_age=$(($(date +%s) - $(stat -c %Y "$LOCK_FILE" 2>/dev/null || echo "0")))
-			fi
+			lock_age=$(($(date +%s) - $(_file_mtime_epoch "$LOCK_FILE")))
 			if [[ $lock_age -gt 300 ]]; then
 				log_warn "Removing stale lock (age ${lock_age}s > 300s)"
 				rm -rf "$LOCK_FILE"
@@ -412,774 +475,13 @@ update_state() {
 }
 
 #######################################
-# Run all periodic freshness checks (skills, OpenClaw, tools, upstream watch).
-# Extracted to avoid duplicating the same 4-call block at every exit point
-# in cmd_check(). Each check has its own internal time gate.
+# Source freshness sub-library — all periodic freshness checks (skills,
+# OpenClaw, tools, upstream watch, venv health, launchd plist drift).
+# Extracted to keep this file under the file-size-debt threshold.
 #######################################
-run_freshness_checks() {
-	check_skill_freshness
-	check_openclaw_freshness
-	check_tool_freshness
-	check_upstream_watch
-	check_venv_health
-}
-
-#######################################
-# Check skill freshness and auto-update if stale (24h gate)
-# Called from cmd_check after the main aidevops update logic.
-# Respects config: aidevops config set updates.skill_auto_update false
-#######################################
-#######################################
-# Execute skill update and return count of updates applied.
-# Args: $1 = path to skill-update-helper.sh
-# Outputs: update count on stdout
-#######################################
-_run_skill_update() {
-	local skill_update_script="$1"
-	local skill_updates=0
-
-	if "$skill_update_script" check --auto-update --quiet >>"$LOG_FILE" 2>&1; then
-		log_info "Skill freshness check complete (all up to date)"
-	else
-		# Exit code 1 means updates were available (and applied) — not an error
-		# Count updated skills via JSON check (best-effort)
-		skill_updates=$("$skill_update_script" check --json 2>/dev/null |
-			jq -r '.updates_available // 0' 2>/dev/null || echo "1")
-		log_info "Skill freshness check complete ($skill_updates updates applied)"
-	fi
-	echo "$skill_updates"
-	return 0
-}
-
-check_skill_freshness() {
-	# Opt-out via config (env var or config file)
-	if ! is_feature_enabled skill_auto_update 2>/dev/null; then
-		log_info "Skill auto-update disabled via config"
-		return 0
-	fi
-
-	local freshness_hours
-	freshness_hours=$(_get_validated_freshness_hours "skill_freshness_hours" "$DEFAULT_SKILL_FRESHNESS_HOURS" "updates.skill_freshness_hours")
-	local freshness_seconds=$((freshness_hours * 3600))
-
-	# Time gate: skip if checked recently
-	local gate_result
-	gate_result=$(_check_freshness_time_gate "last_skill_check" "$freshness_seconds" "Skills")
-	if [[ "$gate_result" == "skip" ]]; then
-		return 0
-	fi
-
-	# Locate skill-update-helper.sh
-	local skill_update_script
-	skill_update_script=$(_locate_helper_script "skill-update-helper.sh")
-	if [[ -z "$skill_update_script" ]]; then
-		log_warn "skill-update-helper.sh not found — skipping skill freshness check"
-		return 0
-	fi
-
-	# Check if skill-sources.json exists (no skills imported = nothing to do)
-	local skill_sources="$HOME/.aidevops/agents/configs/skill-sources.json"
-	if [[ ! -f "$skill_sources" ]]; then
-		log_info "No imported skills found — skipping skill freshness check"
-		update_skill_check_timestamp
-		return 0
-	fi
-
-	log_info "Running daily skill freshness check..."
-	local skill_updates
-	skill_updates=$(_run_skill_update "$skill_update_script")
-	update_skill_check_timestamp "$skill_updates"
-	return 0
-}
-
-#######################################
-# Record last_skill_check timestamp and updates count in state file
-# Args: $1 = number of skill updates applied (default: 0)
-#######################################
-update_skill_check_timestamp() {
-	local updates_count="${1:-0}"
-	local timestamp
-	timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-	if command -v jq &>/dev/null; then
-		local tmp_state
-		tmp_state=$(mktemp)
-		trap 'rm -f "${tmp_state:-}"' RETURN
-
-		if [[ -f "$STATE_FILE" ]]; then
-			jq --arg ts "$timestamp" \
-				--argjson count "$updates_count" \
-				'. + {last_skill_check: $ts} |
-				.skill_updates_applied = ((.skill_updates_applied // 0) + $count)' \
-				"$STATE_FILE" >"$tmp_state" 2>/dev/null && mv "$tmp_state" "$STATE_FILE"
-		else
-			jq -n --arg ts "$timestamp" \
-				--argjson count "$updates_count" \
-				'{last_skill_check: $ts, skill_updates_applied: $count}' >"$STATE_FILE"
-		fi
-	fi
-	return 0
-}
-
-#######################################
-# Check openclaw freshness and auto-update if stale (24h gate)
-# Called from cmd_check after skill freshness check.
-# Respects config: aidevops config set updates.openclaw_auto_update false
-# Only runs if openclaw CLI is installed.
-#######################################
-#######################################
-# Execute the openclaw update command and log results.
-# Handles channel detection and version comparison.
-#######################################
-_run_openclaw_update() {
-	local before_version after_version
-	before_version=$(openclaw --version 2>/dev/null | head -1 || echo "unknown")
-
-	# Determine update channel from openclaw config (default: current channel)
-	local -a update_cmd=(openclaw update --yes --no-restart)
-	local openclaw_channel=""
-	openclaw_channel=$(openclaw update status 2>/dev/null | grep "Channel" | sed 's/[^a-zA-Z]*Channel[^a-zA-Z]*//' | awk '{print $1}' || true)
-	if [[ "$openclaw_channel" =~ ^(beta|dev)$ ]]; then
-		update_cmd=(openclaw update --channel "$openclaw_channel" --yes --no-restart)
-	fi
-
-	if "${update_cmd[@]}" >>"$LOG_FILE" 2>&1; then
-		after_version=$(openclaw --version 2>/dev/null | head -1 || echo "unknown")
-		if [[ "$before_version" != "$after_version" ]]; then
-			log_info "OpenClaw updated: $before_version -> $after_version"
-		else
-			log_info "OpenClaw already up to date ($before_version)"
-		fi
-	else
-		log_warn "OpenClaw update failed (exit code: $?)"
-	fi
-	return 0
-}
-
-check_openclaw_freshness() {
-	# Opt-out via config (env var or config file)
-	if ! is_feature_enabled openclaw_auto_update 2>/dev/null; then
-		log_info "OpenClaw auto-update disabled via config"
-		return 0
-	fi
-
-	# Skip if openclaw is not installed
-	if ! command -v openclaw &>/dev/null; then
-		return 0
-	fi
-
-	local freshness_hours
-	freshness_hours=$(_get_validated_freshness_hours "openclaw_freshness_hours" "$DEFAULT_OPENCLAW_FRESHNESS_HOURS" "updates.openclaw_freshness_hours")
-	local freshness_seconds=$((freshness_hours * 3600))
-
-	# Time gate: skip if checked recently
-	local gate_result
-	gate_result=$(_check_freshness_time_gate "last_openclaw_check" "$freshness_seconds" "OpenClaw")
-	if [[ "$gate_result" == "skip" ]]; then
-		return 0
-	fi
-
-	log_info "Running daily OpenClaw update check..."
-	_run_openclaw_update
-	update_openclaw_check_timestamp
-	return 0
-}
-
-#######################################
-# Record last_openclaw_check timestamp in state file
-#######################################
-update_openclaw_check_timestamp() {
-	local timestamp
-	timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-	if command -v jq &>/dev/null; then
-		local tmp_state
-		tmp_state=$(mktemp)
-		trap 'rm -f "${tmp_state:-}"' RETURN
-
-		if [[ -f "$STATE_FILE" ]]; then
-			jq --arg ts "$timestamp" \
-				'. + {last_openclaw_check: $ts}' \
-				"$STATE_FILE" >"$tmp_state" 2>/dev/null && mv "$tmp_state" "$STATE_FILE"
-		else
-			jq -n --arg ts "$timestamp" \
-				'{last_openclaw_check: $ts}' >"$STATE_FILE"
-		fi
-	fi
-	return 0
-}
-
-#######################################
-# Get macOS idle time via IOKit HIDIdleTime (nanoseconds).
-# Outputs idle seconds on stdout, or empty string if unavailable.
-#######################################
-_get_idle_seconds_macos() {
-	local idle_ns
-	idle_ns=$(ioreg -c IOHIDSystem 2>/dev/null | awk '/HIDIdleTime/ {gsub(/[^0-9]/, "", $NF); print $NF; exit}')
-	if [[ -n "$idle_ns" && "$idle_ns" =~ ^[0-9]+$ ]]; then
-		echo "$((idle_ns / 1000000000))"
-		return 0
-	fi
-	echo "0"
-	return 0
-}
-
-#######################################
-# Get Linux idle time via xprintidle (X11) or dbus (Wayland).
-# Outputs idle seconds on stdout, or empty string if unavailable.
-#######################################
-_get_idle_seconds_linux_desktop() {
-	local idle_ms idle_secs
-
-	# xprintidle: X11, most accurate for desktop
-	if command -v xprintidle &>/dev/null && [[ -n "${DISPLAY:-}" ]]; then
-		idle_ms=$(xprintidle 2>/dev/null || echo "")
-		if [[ -n "$idle_ms" && "$idle_ms" =~ ^[0-9]+$ ]]; then
-			echo "$((idle_ms / 1000))"
-			return 0
-		fi
-	fi
-
-	# dbus-send: GNOME/KDE screensaver (Wayland-compatible)
-	if command -v dbus-send &>/dev/null && [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
-		idle_secs=$(dbus-send --session --dest=org.gnome.ScreenSaver \
-			--type=method_call --print-reply /org/gnome/ScreenSaver \
-			org.gnome.ScreenSaver.GetSessionIdleTime 2>/dev/null |
-			awk '/uint32/ {print $2}')
-		if [[ -n "$idle_secs" && "$idle_secs" =~ ^[0-9]+$ && "$idle_secs" -gt 0 ]]; then
-			echo "$idle_secs"
-			return 0
-		fi
-	fi
-
-	echo ""
-	return 0
-}
-
-#######################################
-# Parse a single w(1) idle field into seconds.
-# w IDLE formats: "3:42" (min:sec), "2days", "23:15m", "0.50s", "5s"
-# Args: $1 = idle field string
-# Outputs: seconds on stdout
-#######################################
-_parse_w_idle_field() {
-	local idle_field="$1"
-	local parsed=0
-
-	if [[ "$idle_field" =~ ^([0-9]+)days$ ]]; then
-		# Use 10# prefix to force base-10 (avoids octal interpretation of "08", "09")
-		parsed=$((10#${BASH_REMATCH[1]} * 86400))
-	elif [[ "$idle_field" =~ ^([0-9]+):([0-9]+)m$ ]]; then
-		parsed=$((10#${BASH_REMATCH[1]} * 3600 + 10#${BASH_REMATCH[2]} * 60))
-	elif [[ "$idle_field" =~ ^([0-9]+):([0-9]+)$ ]]; then
-		parsed=$((10#${BASH_REMATCH[1]} * 60 + 10#${BASH_REMATCH[2]}))
-	elif [[ "$idle_field" =~ ^([0-9]+)\.([0-9]+)s$ ]]; then
-		parsed=$((10#${BASH_REMATCH[1]}))
-	elif [[ "$idle_field" =~ ^([0-9]+)s$ ]]; then
-		parsed=$((10#${BASH_REMATCH[1]}))
-	fi
-
-	echo "$parsed"
-	return 0
-}
-
-#######################################
-# Get Linux idle time from w(1) — shortest session idle (TTY/SSH).
-# Outputs idle seconds on stdout, or empty string if no users found.
-#######################################
-_get_idle_seconds_linux_w() {
-	if ! command -v w &>/dev/null; then
-		echo ""
-		return 0
-	fi
-
-	local min_idle=999999
-	local found_user=false
-	local idle_field
-	local _user _tty _from _login _jcpu _pcpu _what
-	while read -r _user _tty _from _login idle_field _jcpu _pcpu _what; do
-		[[ "$_user" == "USER" ]] && continue
-		[[ -z "$idle_field" ]] && continue
-		found_user=true
-
-		local parsed
-		parsed=$(_parse_w_idle_field "$idle_field")
-		if [[ $parsed -lt $min_idle ]]; then
-			min_idle=$parsed
-		fi
-	done < <(w -h 2>/dev/null || w 2>/dev/null)
-
-	if [[ "$found_user" == "true" ]]; then
-		echo "$min_idle"
-		return 0
-	fi
-
-	echo ""
-	return 0
-}
-
-#######################################
-# Get user idle time in seconds (cross-platform dispatcher).
-# Delegates to platform-specific sub-functions.
-# Returns: idle seconds on stdout, 0 on error (safe default = "user active")
-#######################################
-get_user_idle_seconds() {
-	# macOS: IOKit HIDIdleTime (always available, even over SSH)
-	if [[ "$(uname)" == "Darwin" ]]; then
-		_get_idle_seconds_macos
-		return 0
-	fi
-
-	# Linux desktop: xprintidle (X11) or dbus (Wayland)
-	local desktop_idle
-	desktop_idle=$(_get_idle_seconds_linux_desktop)
-	if [[ -n "$desktop_idle" ]]; then
-		echo "$desktop_idle"
-		return 0
-	fi
-
-	# Linux TTY/SSH: parse w(1) for shortest session idle
-	local w_idle
-	w_idle=$(_get_idle_seconds_linux_w)
-	if [[ -n "$w_idle" ]]; then
-		echo "$w_idle"
-		return 0
-	fi
-
-	# Headless server: no display, no logged-in users — treat as idle
-	if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-		echo "999999"
-		return 0
-	fi
-
-	# Fallback: cannot determine — assume active (safe default)
-	echo "0"
-	return 0
-}
-
-#######################################
-# Validate a freshness-hours config value is a positive integer.
-# Returns the validated value on stdout; falls back to default if invalid.
-# Args: $1 = config_key (e.g. "skill_freshness_hours")
-#       $2 = default_value
-#       $3 = config_prefix for log message (e.g. "updates.skill_freshness_hours")
-#######################################
-_get_validated_freshness_hours() {
-	local config_key="$1"
-	local default_value="$2"
-	local config_prefix="$3"
-
-	local hours
-	hours=$(get_feature_toggle "$config_key" "$default_value")
-	if ! [[ "$hours" =~ ^[0-9]+$ ]] || [[ "$hours" -eq 0 ]]; then
-		log_warn "${config_prefix}='${hours}' is not a positive integer — using default (${default_value}h)"
-		hours="$default_value"
-	fi
-	echo "$hours"
-	return 0
-}
-
-#######################################
-# Locate a helper script with fallback paths.
-# Tries: deployed path, SCRIPT_DIR, INSTALL_DIR.
-# Outputs the found path on stdout, or empty string if not found.
-# Args: $1 = script filename (e.g. "skill-update-helper.sh")
-#######################################
-_locate_helper_script() {
-	local filename="$1"
-
-	local candidate="$HOME/.aidevops/agents/scripts/${filename}"
-	if [[ -x "$candidate" ]]; then
-		echo "$candidate"
-		return 0
-	fi
-
-	candidate="${SCRIPT_DIR}/${filename}"
-	if [[ -x "$candidate" ]]; then
-		echo "$candidate"
-		return 0
-	fi
-
-	candidate="$INSTALL_DIR/.agents/scripts/${filename}"
-	if [[ -x "$candidate" ]]; then
-		echo "$candidate"
-		return 0
-	fi
-
-	echo ""
-	return 0
-}
-
-#######################################
-# Generic freshness time gate — checks if enough time has elapsed since
-# the last check of a given type. Reads the timestamp from STATE_FILE
-# using the provided jq field name.
-# Outputs "skip" to stdout if gate not elapsed, "run" if check needed.
-# Args: $1 = jq_field (e.g. "last_tool_check", "last_skill_check")
-#       $2 = freshness_seconds
-#       $3 = label for log message (e.g. "Tools", "Skills")
-#######################################
-_check_freshness_time_gate() {
-	local jq_field="$1"
-	local freshness_seconds="$2"
-	local label="$3"
-
-	local last_check=""
-	if [[ -f "$STATE_FILE" ]] && command -v jq &>/dev/null; then
-		last_check=$(jq -r ".${jq_field} // empty" "$STATE_FILE" 2>/dev/null || true)
-	fi
-
-	if [[ -n "$last_check" ]]; then
-		local last_epoch now_epoch elapsed
-		if [[ "$(uname)" == "Darwin" ]]; then
-			# TZ=UTC: stored timestamps are UTC — macOS date -j ignores the Z suffix
-			last_epoch=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_check" "+%s" 2>/dev/null || echo "0")
-		else
-			last_epoch=$(date -d "$last_check" "+%s" 2>/dev/null || echo "0")
-		fi
-		now_epoch=$(date +%s)
-		elapsed=$((now_epoch - last_epoch))
-
-		if [[ $elapsed -lt $freshness_seconds ]]; then
-			log_info "${label} checked ${elapsed}s ago (gate: ${freshness_seconds}s) — skipping"
-			echo "skip"
-			return 0
-		fi
-	fi
-
-	echo "run"
-	return 0
-}
-
-#######################################
-# Check tool idle gate — only update when user is away
-# Returns 0 if idle enough to proceed, 1 if user is active (defer).
-# Args: none (reads config internally)
-#######################################
-_check_tool_idle_gate() {
-	local idle_hours
-	idle_hours=$(get_feature_toggle tool_idle_hours "$DEFAULT_TOOL_IDLE_HOURS")
-	if ! [[ "$idle_hours" =~ ^[0-9]+$ ]] || [[ "$idle_hours" -eq 0 ]]; then
-		log_warn "updates.tool_idle_hours='${idle_hours}' is not a positive integer — using default (${DEFAULT_TOOL_IDLE_HOURS}h)"
-		idle_hours="$DEFAULT_TOOL_IDLE_HOURS"
-	fi
-	local idle_threshold_seconds
-	idle_threshold_seconds=$((idle_hours * 3600))
-
-	local user_idle_seconds
-	user_idle_seconds=$(get_user_idle_seconds)
-	if [[ $user_idle_seconds -lt $idle_threshold_seconds ]]; then
-		local idle_h idle_m
-		idle_h=$((user_idle_seconds / 3600))
-		idle_m=$(((user_idle_seconds % 3600) / 60))
-		log_info "User idle ${idle_h}h${idle_m}m (need ${idle_hours}h) — deferring tool updates"
-		return 1
-	fi
-
-	# Export idle seconds for caller to use in log message
-	echo "$user_idle_seconds"
-	return 0
-}
-
-#######################################
-# Check tool freshness and auto-update if stale (6h gate)
-# Only runs when user has been idle for AIDEVOPS_TOOL_IDLE_HOURS.
-# Delegates to tool-version-check.sh --update --quiet.
-# Called from cmd_check after other freshness checks.
-# Respects config: aidevops config set updates.tool_auto_update false
-#######################################
-#######################################
-# Execute tool-version-check.sh and count updates applied.
-# Args: $1 = path to tool-version-check.sh
-# Outputs: update count on stdout
-#######################################
-_run_tool_update() {
-	local tool_check_script="$1"
-
-	local update_output
-	update_output=$("$tool_check_script" --update --quiet 2>&1) || true
-
-	if [[ -n "$update_output" ]]; then
-		echo "$update_output" >>"$LOG_FILE"
-	fi
-
-	# Count updates from output (best-effort: count lines with "Updated" or arrow)
-	# Use a subshell to avoid pipefail issues: grep -c exits 1 on no match,
-	# which under set -o pipefail would trigger || echo "0" and produce "0\n0"
-	local tool_updates=0
-	if [[ -n "$update_output" ]]; then
-		tool_updates=$(echo "$update_output" | { grep -cE '(Updated|→|->)' || true; })
-	fi
-
-	echo "$tool_updates"
-	return 0
-}
-
-check_tool_freshness() {
-	# Opt-out via config (env var or config file)
-	if ! is_feature_enabled tool_auto_update 2>/dev/null; then
-		log_info "Tool auto-update disabled via config"
-		return 0
-	fi
-
-	local freshness_hours
-	freshness_hours=$(_get_validated_freshness_hours "tool_freshness_hours" "$DEFAULT_TOOL_FRESHNESS_HOURS" "updates.tool_freshness_hours")
-	local freshness_seconds=$((freshness_hours * 3600))
-
-	# Time gate: skip if checked recently
-	local gate_result
-	gate_result=$(_check_freshness_time_gate "last_tool_check" "$freshness_seconds" "Tools")
-	if [[ "$gate_result" == "skip" ]]; then
-		return 0
-	fi
-
-	# Idle gate: only update when user is away
-	local user_idle_seconds
-	user_idle_seconds=$(_check_tool_idle_gate) || return 0
-
-	# Locate tool-version-check.sh
-	local tool_check_script
-	tool_check_script=$(_locate_helper_script "tool-version-check.sh")
-	if [[ -z "$tool_check_script" ]]; then
-		log_warn "tool-version-check.sh not found — skipping tool freshness check"
-		return 0
-	fi
-
-	log_info "Running tool freshness check (user idle ${user_idle_seconds}s)..."
-	local tool_updates
-	tool_updates=$(_run_tool_update "$tool_check_script")
-
-	if [[ $tool_updates -gt 0 ]]; then
-		log_info "Tool freshness check complete ($tool_updates tools updated)"
-	else
-		log_info "Tool freshness check complete (all up to date)"
-	fi
-
-	update_tool_check_timestamp "$tool_updates"
-	return 0
-}
-
-#######################################
-# Record last_tool_check timestamp and updates count in state file
-# Args: $1 = number of tool updates applied (default: 0)
-#######################################
-update_tool_check_timestamp() {
-	local updates_count
-	updates_count="${1:-0}"
-	local timestamp
-	timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-	if command -v jq &>/dev/null; then
-		local tmp_state
-		tmp_state=$(mktemp)
-		trap 'rm -f "${tmp_state:-}"' RETURN
-
-		if [[ -f "$STATE_FILE" ]]; then
-			jq --arg ts "$timestamp" \
-				--argjson count "$updates_count" \
-				'. + {last_tool_check: $ts} |
-				.tool_updates_applied = ((.tool_updates_applied // 0) + $count)' \
-				"$STATE_FILE" >"$tmp_state" 2>/dev/null && mv "$tmp_state" "$STATE_FILE"
-		else
-			jq -n --arg ts "$timestamp" \
-				--argjson count "$updates_count" \
-				'{last_tool_check: $ts, tool_updates_applied: $count}' >"$STATE_FILE"
-		fi
-	fi
-	return 0
-}
-
-#######################################
-# Check upstream-watched repos for new releases (24h gate)
-# Called from cmd_check after tool freshness check.
-# Respects config: aidevops config set updates.upstream_watch false
-#######################################
-#######################################
-# Locate upstream-watch-helper.sh and verify watchlist has repos.
-# Outputs script path on stdout if ready, empty string if not.
-# Also updates timestamp and returns early if no repos to watch.
-#######################################
-_locate_upstream_watch() {
-	local agents_dir="${AIDEVOPS_AGENTS_DIR:-$HOME/.aidevops/agents}"
-	local upstream_watch_script="${agents_dir}/scripts/upstream-watch-helper.sh"
-	if [[ ! -x "$upstream_watch_script" ]]; then
-		upstream_watch_script="$INSTALL_DIR/.agents/scripts/upstream-watch-helper.sh"
-	fi
-
-	if [[ ! -x "$upstream_watch_script" ]]; then
-		log_info "upstream-watch-helper.sh not found — skipping upstream watch check"
-		echo ""
-		return 0
-	fi
-
-	# Check if upstream-watch.json has any repos
-	local watch_config="${agents_dir}/configs/upstream-watch.json"
-	if [[ ! -f "$watch_config" ]]; then
-		log_info "No upstream watch config found — skipping"
-		update_upstream_watch_timestamp
-		echo ""
-		return 0
-	fi
-
-	local repo_count
-	repo_count=$(jq '.repos | length' "$watch_config" 2>/dev/null || echo "0")
-	if [[ "$repo_count" -eq 0 ]]; then
-		log_info "No repos in upstream watchlist — skipping"
-		update_upstream_watch_timestamp
-		echo ""
-		return 0
-	fi
-
-	echo "$upstream_watch_script"
-	return 0
-}
-
-check_upstream_watch() {
-	# Opt-out via config (env var or config file)
-	if ! is_feature_enabled upstream_watch; then
-		log_info "Upstream watch disabled via config"
-		return 0
-	fi
-
-	local freshness_hours
-	freshness_hours=$(_get_validated_freshness_hours "upstream_watch_hours" "$DEFAULT_UPSTREAM_WATCH_HOURS" "updates.upstream_watch_hours")
-	local freshness_seconds=$((freshness_hours * 3600))
-
-	# Time gate: skip if checked recently
-	local gate_result
-	gate_result=$(_check_freshness_time_gate "last_upstream_watch_check" "$freshness_seconds" "Upstream watch")
-	if [[ "$gate_result" == "skip" ]]; then
-		return 0
-	fi
-
-	local upstream_watch_script
-	upstream_watch_script=$(_locate_upstream_watch)
-	if [[ -z "$upstream_watch_script" ]]; then
-		return 0
-	fi
-
-	local agents_dir="${AIDEVOPS_AGENTS_DIR:-$HOME/.aidevops/agents}"
-	local watch_config="${agents_dir}/configs/upstream-watch.json"
-	local repo_count
-	repo_count=$(jq '.repos | length' "$watch_config" 2>/dev/null || echo "0")
-
-	log_info "Running daily upstream watch check (${repo_count} repos)..."
-	if "$upstream_watch_script" check >>"$LOG_FILE" 2>&1; then
-		log_info "Upstream watch check complete"
-		update_upstream_watch_timestamp
-	else
-		log_warn "Upstream watch check had errors (exit code: $?) — will retry next run"
-	fi
-	return 0
-}
-
-#######################################
-# Record last_upstream_watch_check timestamp in state file
-#######################################
-update_upstream_watch_timestamp() {
-	local timestamp
-	timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-	if command -v jq &>/dev/null; then
-		local tmp_state
-		tmp_state=$(mktemp)
-		trap 'rm -f "${tmp_state:-}"' RETURN
-
-		if [[ -f "$STATE_FILE" ]]; then
-			if ! jq --arg ts "$timestamp" \
-				'. + {last_upstream_watch_check: $ts}' \
-				"$STATE_FILE" >"$tmp_state" 2>&1; then
-				log_warn "Failed to update upstream watch timestamp (jq error on state file)"
-				return 1
-			fi
-			mv "$tmp_state" "$STATE_FILE"
-		else
-			jq -n --arg ts "$timestamp" \
-				'{last_upstream_watch_check: $ts}' >"$STATE_FILE"
-		fi
-	fi
-	return 0
-}
-
-#######################################
-# Check Python venv health across managed repos (24h gate).
-# Delegates to venv-health-check-helper.sh scan --quiet.
-# Logs broken/warning venvs; healthy venvs are silent.
-# Called from run_freshness_checks after upstream watch.
-# Respects config: aidevops config set updates.venv_health_check false
-#######################################
-check_venv_health() {
-	# Opt-out via config (env var or config file)
-	if ! is_feature_enabled venv_health_check 2>/dev/null; then
-		log_info "Venv health check disabled via config"
-		return 0
-	fi
-
-	local freshness_hours
-	freshness_hours=$(_get_validated_freshness_hours "venv_health_hours" "$DEFAULT_VENV_HEALTH_HOURS" "updates.venv_health_hours")
-	local freshness_seconds=$((freshness_hours * 3600))
-
-	# Time gate: skip if checked recently
-	local gate_result
-	gate_result=$(_check_freshness_time_gate "last_venv_health_check" "$freshness_seconds" "Venv health")
-	if [[ "$gate_result" == "skip" ]]; then
-		return 0
-	fi
-
-	# Locate venv-health-check-helper.sh
-	local venv_health_script
-	venv_health_script=$(_locate_helper_script "venv-health-check-helper.sh")
-	if [[ -z "$venv_health_script" ]]; then
-		log_info "venv-health-check-helper.sh not found — skipping venv health check"
-		return 0
-	fi
-
-	log_info "Running daily venv health check..."
-	local venv_output
-	local venv_rc=0
-	venv_output=$("$venv_health_script" scan --quiet 2>&1) || venv_rc=$?
-
-	if [[ -n "$venv_output" ]]; then
-		echo "$venv_output" >>"$LOG_FILE"
-	fi
-
-	if [[ $venv_rc -ne 0 ]]; then
-		log_warn "Venv health check found issues (exit code: $venv_rc) — see log for details"
-	else
-		log_info "Venv health check complete (all healthy)"
-	fi
-
-	update_venv_health_timestamp
-	return 0
-}
-
-#######################################
-# Record last_venv_health_check timestamp in state file
-#######################################
-update_venv_health_timestamp() {
-	local timestamp
-	timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-	if command -v jq &>/dev/null; then
-		local tmp_state
-		tmp_state=$(mktemp)
-		trap 'rm -f "${tmp_state:-}"' RETURN
-
-		if [[ -f "$STATE_FILE" ]]; then
-			if ! jq --arg ts "$timestamp" \
-				'. + {last_venv_health_check: $ts}' \
-				"$STATE_FILE" >"$tmp_state" 2>&1; then
-				log_warn "Failed to update venv health timestamp (jq error on state file)"
-				return 1
-			fi
-			mv "$tmp_state" "$STATE_FILE"
-		else
-			jq -n --arg ts "$timestamp" \
-				'{last_venv_health_check: $ts}' >"$STATE_FILE"
-		fi
-	fi
-	return 0
-}
+# shellcheck source=./auto-update-freshness-lib.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via $SCRIPT_DIR
+source "${SCRIPT_DIR}/auto-update-freshness-lib.sh"
 
 #######################################
 # Handle stale deployed agents when repo version matches remote.
@@ -1210,24 +512,41 @@ _cmd_check_stale_agent_redeploy() {
 		return 0
 	fi
 
-	# VERSION matches but scripts may still differ — a script fix merged without
-	# a version bump leaves the deployed copy stale until setup.sh is run manually.
-	# Detect this by comparing SHA-256 of a sentinel script that is frequently
-	# patched (gh-failure-miner-helper.sh). If it drifts, re-deploy all agents.
+	# t2706: VERSION matches but scripts may still differ — a script fix merged
+	# without a version bump leaves the deployed copy stale until setup.sh is
+	# run manually. Previous implementation checked SHA-256 of a single sentinel
+	# file (gh-failure-miner-helper.sh); that missed drift in any OTHER file
+	# (e.g., PR #20323 fixed pulse-batch-prefetch-helper.sh — sentinel was blind
+	# to it, and the pulse kept hitting the bug for ~14h while VERSION matched).
+	# Replacement: compare the canonical HEAD SHA against ~/.aidevops/.deployed-sha
+	# (written by .agents/scripts/setup/modules/agent-deploy.sh on every successful deploy).
+	# Docs-only drift (reference/, *.md) is intentionally skipped — no runtime
+	# impact and redeploying for docs wastes cycles.
 	# GH#4727: Codacy not_collected false-positive recurred because the fix in
 	# PR #4704 was not deployed to ~/.aidevops/ before the next pulse cycle.
-	local sentinel_repo="$INSTALL_DIR/.agents/scripts/gh-failure-miner-helper.sh"
-	local sentinel_deployed="$HOME/.aidevops/agents/scripts/gh-failure-miner-helper.sh"
-	if [[ -f "$sentinel_repo" && -f "$sentinel_deployed" ]]; then
-		local hash_repo hash_deployed
-		hash_repo=$(sha256sum "$sentinel_repo" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$sentinel_repo" 2>/dev/null | awk '{print $1}' || echo "")
-		hash_deployed=$(sha256sum "$sentinel_deployed" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$sentinel_deployed" 2>/dev/null | awk '{print $1}' || echo "")
-		if [[ -n "$hash_repo" && -n "$hash_deployed" && "$hash_repo" != "$hash_deployed" ]]; then
-			log_warn "Script drift detected (sentinel hash mismatch at v$current) — re-deploying agents..."
-			if bash "$INSTALL_DIR/setup.sh" --non-interactive >>"$LOG_FILE" 2>&1; then
-				log_info "Agents re-deployed after script drift (v$current)"
-			else
-				log_error "setup.sh failed during script-drift re-deploy (exit code: $?)"
+	local stamp_file="$HOME/.aidevops/.deployed-sha"
+	if [[ -f "$stamp_file" && -d "$INSTALL_DIR/.git" ]]; then
+		local deployed_sha head_sha
+		deployed_sha=$(tr -d '[:space:]' <"$stamp_file" 2>/dev/null) || deployed_sha=""
+		head_sha=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null) || head_sha=""
+		if [[ -n "$deployed_sha" && -n "$head_sha" && "$deployed_sha" != "$head_sha" ]]; then
+			local has_code_drift=0
+			# Per Gemini code-review on PR #20342: use git's path filter +
+			# `grep -q .` to detect drift across the full set of deploy-affecting
+			# paths (not just .agents/ subdirs — also setup.sh, .agents/scripts/setup/modules/,
+			# and aidevops.sh itself, which are deployed/sourced by setup).
+			if git -C "$INSTALL_DIR" diff --name-only "$deployed_sha" "$head_sha" -- \
+				.agents/scripts/ .agents/agents/ .agents/workflows/ .agents/prompts/ .agents/hooks/ \
+				setup.sh .agents/scripts/setup/modules/ aidevops.sh 2>/dev/null | grep -q .; then
+				has_code_drift=1
+			fi
+			if [[ "$has_code_drift" -eq 1 ]]; then
+				log_warn "Script drift detected (${deployed_sha:0:7}→${head_sha:0:7} at v$current) — re-deploying agents..."
+				if bash "$INSTALL_DIR/setup.sh" --non-interactive >>"$LOG_FILE" 2>&1; then
+					log_info "Agents re-deployed after script drift (${deployed_sha:0:7}→${head_sha:0:7})"
+				else
+					log_error "setup.sh failed during script-drift re-deploy (exit code: $?)"
+				fi
 			fi
 		fi
 	fi
@@ -1321,9 +640,54 @@ _cmd_check_perform_update() {
 
 	# Run setup.sh non-interactively to deploy agents
 	log_info "Running setup.sh --non-interactive..."
-	if ! bash "$INSTALL_DIR/setup.sh" --non-interactive >>"$LOG_FILE" 2>&1; then
-		log_error "setup.sh failed (exit code: $?)"
+	local _setup_exit=0
+	bash "$INSTALL_DIR/setup.sh" --non-interactive >>"$LOG_FILE" 2>&1 || _setup_exit=$?
+
+	# GH#21060 / t2911: Log slowest 5 stages from this run so that
+	# "tail -50 ~/.aidevops/logs/auto-update.log | grep Slowest" is
+	# sufficient to diagnose which stage hung, without bash -x re-runs.
+	local _stl="$HOME/.aidevops/logs/setup-stage-timings.log"
+	if [[ -f "$_stl" ]]; then
+		log_info "Slowest stages this cycle:"
+		sort -k3 -t$'\t' -rn "$_stl" | head -5 | while IFS=$'\t' read -r _ts _name _dur _exit_code; do
+			log_info "  ${_dur}s ${_name} (exit=${_exit_code})"
+		done
+	fi
+
+	# GH#18492 / t2026: verify the completion sentinel regardless of exit
+	# code. "exit non-zero AND no sentinel" is the t2022-class silent
+	# termination (e.g., a sourced helper's set -e propagates a readonly
+	# assignment failure that kills the parent script mid-run). "exit 0 but
+	# no sentinel" would indicate a subshell swallowed a failure — rare but
+	# possible, and we want to catch it as a distinct anomaly.
+	#
+	# Capture the verifier's combined output into a variable first, then
+	# append to the log file, to avoid a read-write-in-pipeline warning
+	# (SC2094). The verifier reads $LOG_FILE; setup.sh has already finished
+	# writing to it by this point so there's no real race, but capturing
+	# keeps shellcheck happy and is clearer.
+	local _sentinel_ok=0
+	local _verifier="$INSTALL_DIR/.agents/scripts/verify-setup-log.sh"
+	if [[ -x "$_verifier" ]]; then
+		local _verify_out=""
+		_verify_out=$(bash "$_verifier" "$LOG_FILE" 2>&1) || _sentinel_ok=$?
+		if [[ -n "$_verify_out" ]]; then
+			printf '%s\n' "$_verify_out" >>"$LOG_FILE"
+		fi
+	fi
+
+	if [[ "$_setup_exit" -ne 0 ]]; then
+		log_error "setup.sh failed (exit code: $_setup_exit)"
+		if [[ "$_sentinel_ok" -ne 0 ]]; then
+			log_error "setup.sh did not reach completion sentinel — forensic tail written to $LOG_FILE by verify-setup-log.sh"
+		fi
 		update_state "update" "$remote" "setup_failed"
+		return 1
+	fi
+
+	if [[ "$_sentinel_ok" -ne 0 ]]; then
+		log_error "setup.sh exited 0 but did not reach completion sentinel — silent termination, forensic tail in $LOG_FILE"
+		update_state "update" "$remote" "setup_sentinel_missing"
 		return 1
 	fi
 
@@ -1486,6 +850,118 @@ _cmd_enable_launchd() {
 }
 
 #######################################
+# Install auto-update as a Linux systemd user timer
+# Args: $1 = script_path, $2 = interval (minutes)
+# Returns: 0 on success, falls back to cron on failure
+# Modelled on worker-watchdog.sh:_install_systemd() (GH#17691)
+#######################################
+_cmd_enable_systemd() {
+	local script_path="$1"
+	local interval="$2"
+	local service_file="${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.service"
+	local timer_file="${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.timer"
+	local interval_sec
+	interval_sec=$((interval * 60))
+
+	mkdir -p "${SYSTEMD_SERVICE_DIR}"
+
+	# shellcheck disable=SC1078,SC1079  # multi-line printf with single quotes inside a double-quoted string; \"${script_path}\" expands to "path" in the service file, preserving space-safe quoting
+	printf '%s' "[Unit]
+Description=aidevops auto-update
+After=network.target
+
+[Service]
+Type=oneshot
+KillMode=process
+ExecStart=/bin/bash -lc '\"${script_path}\" check'
+TimeoutStartSec=120
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+" >"$service_file"
+
+	printf '%s' "[Unit]
+Description=aidevops auto-update Timer
+
+[Timer]
+OnBootSec=${interval_sec}
+OnUnitActiveSec=${interval_sec}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+" >"$timer_file"
+
+	systemctl --user daemon-reload 2>/dev/null || true
+	if ! systemctl --user enable --now "${SYSTEMD_UNIT_NAME}.timer" 2>/dev/null; then
+		print_error "Failed to enable systemd timer — falling back to cron" >&2
+		_cmd_enable_cron "$script_path" "$interval"
+		return $?
+	fi
+
+	update_state "enable" "$(get_local_version)" "enabled"
+
+	print_success "Auto-update enabled (every ${interval} minutes)"
+	echo ""
+	echo "  Scheduler: systemd user timer"
+	echo "  Unit:      ${SYSTEMD_UNIT_NAME}.timer"
+	echo "  Service:   ${service_file}"
+	echo "  Timer:     ${timer_file}"
+	echo "  Logs:      ${LOG_FILE}"
+	echo ""
+	echo "  Disable with: aidevops auto-update disable"
+	echo "  Check now:    aidevops auto-update check"
+	echo ""
+	# Check linger state so the timer survives logout on headless/server Linux hosts.
+	_print_linger_status
+	return 0
+}
+
+#######################################
+# Disable auto-update systemd user timer
+# Returns: 0 on success
+#######################################
+_cmd_disable_systemd() {
+	local had_entry=false
+
+	if systemctl --user is-enabled "${SYSTEMD_UNIT_NAME}.timer" >/dev/null 2>&1; then
+		had_entry=true
+		systemctl --user disable --now "${SYSTEMD_UNIT_NAME}.timer" 2>/dev/null || true
+	fi
+
+	local service_file="${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.service"
+	local timer_file="${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.timer"
+	if [[ -f "$timer_file" ]]; then
+		had_entry=true
+		rm -f "$timer_file"
+	fi
+	if [[ -f "$service_file" ]]; then
+		rm -f "$service_file"
+	fi
+	systemctl --user daemon-reload 2>/dev/null || true
+
+	# Also remove any lingering cron entry
+	if crontab -l 2>/dev/null | grep -qF "$CRON_MARKER"; then
+		local temp_cron
+		temp_cron=$(mktemp)
+		crontab -l 2>/dev/null | grep -vF "$CRON_MARKER" >"$temp_cron" || true
+		crontab "$temp_cron"
+		rm -f "$temp_cron"
+		had_entry=true
+	fi
+
+	update_state "disable" "$(get_local_version)" "disabled"
+
+	if [[ "$had_entry" == "true" ]]; then
+		print_success "Auto-update disabled"
+	else
+		print_info "Auto-update was not enabled"
+	fi
+	return 0
+}
+
+#######################################
 # Install auto-update as a Linux cron entry
 # Args: $1 = script_path, $2 = interval (minutes)
 # Returns: 0 on success
@@ -1531,6 +1007,36 @@ _cmd_enable_cron() {
 cmd_enable() {
 	ensure_dirs
 
+	# Parse flags (t2898): --idempotent skips the install when already loaded.
+	# Existing callers retain the same behaviour because no flag = legacy path.
+	local idempotent=0
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--idempotent)
+			idempotent=1
+			shift
+			;;
+		--)
+			shift
+			break
+			;;
+		*)
+			# Forward unknown args to platform installers (none today).
+			break
+			;;
+		esac
+	done
+
+	# Idempotent fast-path: if the daemon is already loaded (regardless of
+	# state-file freshness), this is a no-op. setup.sh calls this on every
+	# release so the daemon self-heals — but the existing user state must
+	# survive (custom intervals, env vars). "Loaded but stalled" is also a
+	# no-op here; the caller follows up with `health-check` to surface it.
+	if [[ "$idempotent" -eq 1 ]] && _daemon_is_loaded; then
+		log_info "auto-update daemon already loaded (idempotent enable — no-op)"
+		return 0
+	fi
+
 	# Read from JSONC config (handles env var > user config > defaults priority)
 	local interval
 	interval=$(get_feature_toggle update_interval "$DEFAULT_INTERVAL")
@@ -1557,6 +1063,9 @@ cmd_enable() {
 	if [[ "$backend" == "launchd" ]]; then
 		_cmd_enable_launchd "$script_path" "$interval"
 		return $?
+	elif [[ "$backend" == "systemd" ]]; then
+		_cmd_enable_systemd "$script_path" "$interval"
+		return $?
 	fi
 
 	_cmd_enable_cron "$script_path" "$interval"
@@ -1566,7 +1075,7 @@ cmd_enable() {
 #######################################
 # Disable auto-update scheduler (platform-aware)
 # On macOS: unloads and removes LaunchAgent plist
-# On Linux: removes crontab entry
+# On Linux: removes crontab entry or systemd timer
 #######################################
 cmd_disable() {
 	local backend
@@ -1603,6 +1112,9 @@ cmd_disable() {
 			print_info "Auto-update was not enabled"
 		fi
 		return 0
+	elif [[ "$backend" == "systemd" ]]; then
+		_cmd_disable_systemd
+		return $?
 	fi
 
 	# Linux: cron backend
@@ -1630,8 +1142,31 @@ cmd_disable() {
 }
 
 #######################################
-# Print scheduler section of status output (launchd or cron)
-# Args: $1 = backend ("launchd" or "cron")
+# Print linger status row for systemd user timer.
+# Linger allows the user manager to keep running after logout.
+# Skips silently when loginctl is absent (containers) or when user is root.
+# Args: none. Reads $USER from environment.
+# Returns: 0
+#######################################
+_print_linger_status() {
+	[[ "${USER:-}" == "root" ]] && return 0
+	command -v loginctl &>/dev/null || return 0
+	local _linger_state _linger_cmd
+	_linger_state=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)
+	_linger_cmd="sudo loginctl enable-linger $USER"
+	if [[ "$_linger_state" == "yes" ]]; then
+		echo -e "  Linger:    ${GREEN}yes${NC}"
+	elif [[ "$_linger_state" == "no" ]]; then
+		echo -e "  Linger:    ${YELLOW}no${NC} — timer stops on logout; fix: ${_linger_cmd}"
+	else
+		echo -e "  Linger:    ${YELLOW}unknown${NC} — run: ${_linger_cmd}"
+	fi
+	return 0
+}
+
+#######################################
+# Print scheduler section of status output (launchd, systemd, or cron)
+# Args: $1 = backend ("launchd", "systemd", or "cron")
 #######################################
 _cmd_status_scheduler() {
 	local backend="$1"
@@ -1662,6 +1197,48 @@ _cmd_status_scheduler() {
 			if [[ -f "$LAUNCHD_PLIST" ]]; then
 				echo "  Plist:     $LAUNCHD_PLIST (exists but not loaded)"
 			fi
+		fi
+		# Also check for any lingering cron entry
+		if crontab -l 2>/dev/null | grep -q "$CRON_MARKER"; then
+			echo -e "  ${YELLOW}Note: legacy cron entry found — run 'aidevops auto-update disable && enable' to migrate${NC}"
+		fi
+	elif [[ "$backend" != "cron" ]]; then
+		# Linux: show systemd user timer status (backend is "systemd" or future variant)
+		if ! command -v systemctl &>/dev/null; then
+			echo -e "  Scheduler: systemd (not available on this host)"
+		else
+			local enabled_state
+			enabled_state=$(systemctl --user is-enabled "${SYSTEMD_UNIT_NAME}.timer" 2>/dev/null || echo "unknown")
+			local timer_props next_elapse last_trigger
+			# Request all NextElapse variants: NextElapse (pre-255) and
+			# NextElapseUSecRealtime/NextElapseUSecMonotonic (systemd 255+)
+			timer_props=$(systemctl --user show -p NextElapse,NextElapseUSecRealtime,NextElapseUSecMonotonic,LastTriggerUSec "${SYSTEMD_UNIT_NAME}.timer" 2>/dev/null || true)
+			# Guard each grep with || true — under set -euo pipefail a no-match
+			# exit 1 propagates and kills the entire script (GH#21541)
+			next_elapse=$(echo "$timer_props" | grep '^NextElapse=' | cut -d= -f2- || true)
+			if [[ -z "$next_elapse" ]]; then
+				next_elapse=$(echo "$timer_props" | grep '^NextElapseUSecRealtime=' | cut -d= -f2- || true)
+			fi
+			if [[ -z "$next_elapse" ]]; then
+				next_elapse=$(echo "$timer_props" | grep '^NextElapseUSecMonotonic=' | cut -d= -f2- || true)
+			fi
+			last_trigger=$(echo "$timer_props" | grep '^LastTriggerUSec=' | cut -d= -f2- || true)
+			echo -e "  Scheduler: systemd (user timer)"
+			if [[ "$enabled_state" == "enabled" ]] || [[ "$enabled_state" == "enabled-runtime" ]]; then
+				echo -e "  Status:    ${GREEN}${enabled_state}${NC}"
+			else
+				echo -e "  Status:    ${YELLOW}${enabled_state}${NC}"
+			fi
+			echo "  Unit:      ${SYSTEMD_UNIT_NAME}.timer"
+			if [[ -n "$next_elapse" ]] && [[ "$next_elapse" != "0" ]]; then
+				echo "  Next fire: $next_elapse"
+			fi
+			if [[ -n "$last_trigger" ]] && [[ "$last_trigger" != "0" ]]; then
+				echo "  Last fire: $last_trigger"
+			fi
+			echo "  Timer:     ${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.timer"
+			echo "  Service:   ${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.service"
+			_print_linger_status
 		fi
 		# Also check for any lingering cron entry
 		if crontab -l 2>/dev/null | grep -q "$CRON_MARKER"; then
@@ -1790,6 +1367,138 @@ cmd_status() {
 }
 
 #######################################
+# Daemon-loaded check (platform-aware) — t2898.
+# Returns 0 if the auto-update daemon is loaded/installed under the active
+# scheduler backend, 1 otherwise. Mirrors the platform detection in
+# `_cmd_status_scheduler` but without the human-readable output.
+#
+# This is a "is the unit registered" check, not a "did it run recently"
+# check. For freshness, see `cmd_health_check` which combines both.
+#######################################
+_daemon_is_loaded() {
+	local backend
+	backend="$(_get_scheduler_backend)"
+
+	if [[ "$backend" == "launchd" ]]; then
+		_launchd_is_loaded
+		return $?
+	fi
+
+	if [[ "$backend" == "systemd" ]]; then
+		# `is-active --quiet` is true when the timer is running (loaded AND
+		# enabled in this session). Falls back to `is-enabled` for the case
+		# where the timer is registered but the user just hasn't started it
+		# yet (e.g. fresh setup before logout/login). Either is fine for
+		# "the daemon is registered with the scheduler".
+		if command -v systemctl &>/dev/null; then
+			systemctl --user is-active --quiet "${SYSTEMD_UNIT_NAME}.timer" 2>/dev/null && return 0
+			systemctl --user is-enabled --quiet "${SYSTEMD_UNIT_NAME}.timer" 2>/dev/null && return 0
+		fi
+		return 1
+	fi
+
+	# cron fallback (Linux without systemctl)
+	local crontab_output
+	crontab_output=$(crontab -l 2>/dev/null) || true
+	echo "$crontab_output" | grep -qF "$CRON_MARKER"
+	return $?
+}
+
+#######################################
+# Health-check subcommand (t2898).
+# Verifies the auto-update daemon is registered with the active scheduler
+# AND has run within a reasonable freshness window.
+#
+# Exit codes:
+#   0 — healthy (daemon loaded, recent successful run within 2× interval)
+#   1 — degraded (daemon loaded but state-file is stale or unparseable)
+#   2 — not installed (daemon not registered with the active scheduler)
+#
+# Output: human-readable status line + remediation command on stderr.
+# Quiet mode: --quiet suppresses output; only the exit code matters
+# (used by `cmd_enable --idempotent` to detect "already healthy").
+#######################################
+cmd_health_check() {
+	local quiet=0
+	local arg
+	for arg in "$@"; do
+		case "$arg" in
+		--quiet | -q) quiet=1 ;;
+		*) ;;
+		esac
+	done
+
+	# Helper that prints to stderr unless --quiet was passed.
+	_hc_say() {
+		if [[ "$quiet" -eq 0 ]]; then
+			printf '%s\n' "$*" >&2
+		fi
+		return 0
+	}
+
+	if ! _daemon_is_loaded; then
+		_hc_say "auto-update daemon: NOT INSTALLED"
+		_hc_say "fix: ~/.aidevops/agents/scripts/auto-update-helper.sh enable"
+		return 2
+	fi
+
+	# Loaded — check freshness via state file. Field is `last_timestamp`
+	# (set on every cmd_check run, regardless of update outcome). The brief
+	# referenced `last_run`; this is the actual deployed name.
+	if ! [[ -f "$STATE_FILE" ]] || ! command -v jq &>/dev/null; then
+		# State file absent or jq missing — daemon is loaded but we cannot
+		# verify freshness. Treat as soft-healthy: the loaded check is the
+		# primary signal; freshness is the secondary signal.
+		_hc_say "auto-update daemon: LOADED (state file absent — freshness unknown)"
+		return 0
+	fi
+
+	local last_ts
+	last_ts=$(jq -r '.last_timestamp // empty' "$STATE_FILE" 2>/dev/null || echo "")
+
+	if [[ -z "$last_ts" ]]; then
+		# Loaded but never ran — fresh install before first cycle.
+		_hc_say "auto-update daemon: LOADED (never run yet)"
+		return 0
+	fi
+
+	# Convert ISO-8601 to epoch (handles both GNU and BSD date).
+	local now_ts last_run_epoch
+	now_ts=$(date -u '+%s')
+	if last_run_epoch=$(date -u -d "$last_ts" '+%s' 2>/dev/null); then
+		: # GNU date worked
+	elif last_run_epoch=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$last_ts" '+%s' 2>/dev/null); then
+		: # BSD date worked
+	else
+		_hc_say "auto-update daemon: LOADED (state file unparseable: '${last_ts}')"
+		_hc_say "fix: ~/.aidevops/agents/scripts/auto-update-helper.sh check"
+		return 1
+	fi
+
+	local age_sec
+	age_sec=$((now_ts - last_run_epoch))
+
+	# Resolve interval the same way cmd_enable does so the threshold tracks
+	# user config. 2× interval is the staleness window.
+	local interval
+	interval=$(get_feature_toggle update_interval "$DEFAULT_INTERVAL")
+	if ! [[ "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" -eq 0 ]]; then
+		interval="$DEFAULT_INTERVAL"
+	fi
+	local interval_sec=$((interval * 60))
+	local stale_threshold=$((2 * interval_sec))
+
+	if [[ "$age_sec" -gt "$stale_threshold" ]]; then
+		_hc_say "auto-update daemon: STALLED (last run ${age_sec}s ago, expected every ${interval_sec}s)"
+		_hc_say "fix: ~/.aidevops/agents/scripts/auto-update-helper.sh check"
+		return 1
+	fi
+
+	_hc_say "auto-update daemon: HEALTHY (last run ${age_sec}s ago)"
+	return 0
+}
+
+#######################################
 # View logs
 #######################################
 cmd_logs() {
@@ -1833,13 +1542,16 @@ USAGE:
     aidevops auto-update <command> [options]
 
 COMMANDS:
-    enable              Install scheduler (launchd on macOS, cron on Linux)
-    disable             Remove scheduler
-    status              Show current auto-update state
-    check               One-shot: check for updates and install if available
-    logs [--tail N]     View update logs (default: last 50 lines)
-    logs --follow       Follow log output in real-time
-    help                Show this help
+    enable [--idempotent]  Install scheduler (launchd on macOS, cron on Linux)
+                           --idempotent: no-op if already loaded (used by setup.sh)
+    disable                Remove scheduler
+    status                 Show current auto-update state
+    check                  One-shot: check for updates and install if available
+    health-check [--quiet] Verify daemon is loaded and ran recently
+                           Exit: 0 healthy, 1 stalled, 2 not installed
+    logs [--tail N]        View update logs (default: last 50 lines)
+    logs --follow          Follow log output in real-time
+    help                   Show this help
 
 CONFIGURATION:
     Persistent settings: aidevops config set <key> <value>
@@ -1862,7 +1574,12 @@ SCHEDULER BACKENDS:
     macOS:  launchd LaunchAgent (~/Library/LaunchAgents/com.aidevops.aidevops-auto-update.plist)
             - Native macOS scheduler, survives reboots without cron
             - Auto-migrates existing cron entries on first 'enable'
-    Linux:  cron (crontab entry with # aidevops-auto-update marker)
+    Linux:  systemd user timer preferred (~/.config/systemd/user/aidevops-auto-update.timer)
+            - Falls back to cron when systemctl --user is unavailable
+            - Requires loginctl enable-linger $USER to run when logged out
+            - Without linger, the timer stops when your last session ends
+            - See 'aidevops auto-update status' for current linger state
+    Linux:  cron fallback (crontab entry with # aidevops-auto-update marker)
 
 HOW IT WORKS:
     1. Scheduler runs 'auto-update-helper.sh check' every 10 minutes
@@ -1919,6 +1636,7 @@ main() {
 	disable) cmd_disable "$@" ;;
 	status) cmd_status "$@" ;;
 	check) cmd_check "$@" ;;
+	health-check) cmd_health_check "$@" ;;
 	logs) cmd_logs "$@" ;;
 	help | --help | -h) cmd_help ;;
 	*)

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # =============================================================================
 # Memory Audit Pulse - Periodic self-improvement scan
 # =============================================================================
@@ -35,9 +37,12 @@ source "${SCRIPT_DIR}/shared-constants.sh"
 
 readonly MEMORY_DIR="${AIDEVOPS_MEMORY_DIR:-$HOME/.aidevops/.agent-workspace/memory}"
 readonly MEMORY_DB="$MEMORY_DIR/memory.db"
-readonly AUDIT_LOG_DIR="$HOME/.aidevops/.agent-workspace/work/memory-audit"
+readonly AUDIT_LOG_DIR="${AIDEVOPS_MEMORY_AUDIT_LOG_DIR:-$HOME/.aidevops/.agent-workspace/work/memory-audit}"
 readonly AUDIT_MARKER="$MEMORY_DIR/.last_audit_pulse"
 readonly AUDIT_INTERVAL_HOURS=24
+readonly OPPORTUNITY_STATE_FILE="$AUDIT_LOG_DIR/opportunity-state.tsv"
+readonly OPPORTUNITY_DETAILS_FILE="$AUDIT_LOG_DIR/last-opportunity-details.txt"
+readonly OPPORTUNITY_ACTIONS_FILE="$AUDIT_LOG_DIR/last-opportunity-actions.txt"
 
 # Minimum interval between audit pulses (prevents redundant runs)
 readonly AUDIT_INTERVAL_SECONDS=$((AUDIT_INTERVAL_HOURS * 3600))
@@ -64,7 +69,7 @@ should_run() {
 	fi
 
 	local last_run
-	last_run=$(stat -c %Y "$AUDIT_MARKER" 2>/dev/null || stat -f %m "$AUDIT_MARKER" 2>/dev/null || echo "0")
+	last_run=$(_file_mtime_epoch "$AUDIT_MARKER")
 	local now
 	now=$(date +%s)
 	local elapsed=$((now - last_run))
@@ -88,18 +93,31 @@ phase_dedup() {
 	[[ "$quiet" != "true" ]] && log_info "Phase 1: Deduplication..."
 
 	local output
+	local dedup_status=0
 	if [[ "$dry_run" == "true" ]]; then
-		output=$("${SCRIPT_DIR}/memory-helper.sh" dedup --dry-run 2>&1) || true
+		output=$("${SCRIPT_DIR}/memory-helper.sh" dedup --dry-run 2>&1) || dedup_status=$?
 	else
-		output=$("${SCRIPT_DIR}/memory-helper.sh" dedup 2>&1) || true
+		output=$("${SCRIPT_DIR}/memory-helper.sh" dedup 2>&1) || dedup_status=$?
+	fi
+
+	if [[ "$dedup_status" -ne 0 ]]; then
+		log_error "Dedup phase failed (exit $dedup_status)"
+		printf '%s\n' "$output" >&2
+		return 1
 	fi
 
 	# Extract count from output
 	local removed=0
-	if echo "$output" | grep -q "Removed"; then
-		removed=$(echo "$output" | grep -oE 'Removed [0-9]+' | grep -oE '[0-9]+' || echo "0")
-	elif echo "$output" | grep -q "Would remove"; then
-		removed=$(echo "$output" | grep -oE 'Would remove [0-9]+' | grep -oE '[0-9]+' || echo "0")
+	if [[ "$output" =~ Removed[[:space:]]+([0-9]+)[[:space:]]+duplicates ]]; then
+		removed="${BASH_REMATCH[1]}"
+	elif [[ "$output" =~ Would[[:space:]]+remove[[:space:]]+([0-9]+)[[:space:]]+duplicates ]]; then
+		removed="${BASH_REMATCH[1]}"
+	elif [[ "$output" =~ No[[:space:]]+duplicates[[:space:]]+found ]]; then
+		removed=0
+	else
+		log_error "Unable to parse dedup count from memory-helper.sh output"
+		printf '%s\n' "$output" >&2
+		return 1
 	fi
 
 	[[ "$quiet" != "true" ]] && {
@@ -465,7 +483,7 @@ phase_consolidate() {
 	fi
 
 	local uncons_count
-	uncons_count=$(printf '%s\n' "$unconsolidated" | grep -c '.' || echo "0")
+	uncons_count=$(printf '%s\n' "$unconsolidated" | safe_grep_count '.')
 
 	if [[ "$uncons_count" -lt 3 ]]; then
 		[[ "$quiet" != "true" ]] && log_success "Consolidate: only $uncons_count unconsolidated memories (need 3+)"
@@ -674,11 +692,173 @@ EOF
 }
 
 #######################################
+# Calculate a stable fingerprint for an opportunity detail.
+#######################################
+_opportunity_fingerprint() {
+	local detail="$1"
+	local fingerprint=""
+
+	if command -v shasum >/dev/null 2>&1; then
+		fingerprint=$(printf '%s' "$detail" | shasum -a 256)
+		fingerprint="${fingerprint%% *}"
+	elif command -v sha256sum >/dev/null 2>&1; then
+		fingerprint=$(printf '%s' "$detail" | sha256sum)
+		fingerprint="${fingerprint%% *}"
+	else
+		fingerprint=$(printf '%s' "$detail" | cksum)
+		fingerprint="cksum-${fingerprint%% *}"
+	fi
+
+	printf '%s\n' "$fingerprint"
+	return 0
+}
+
+#######################################
+# Check whether an opportunity fingerprint has already filed work.
+#######################################
+_opportunity_state_has() {
+	local fingerprint="$1"
+
+	[[ -f "$OPPORTUNITY_STATE_FILE" ]] || return 1
+	grep -Fq "${fingerprint}"$'\t' "$OPPORTUNITY_STATE_FILE"
+	return $?
+}
+
+#######################################
+# Record that an opportunity fingerprint has filed work.
+#######################################
+_opportunity_state_record() {
+	local fingerprint="$1"
+	local task_ref="$2"
+	local detail="$3"
+	local timestamp
+	timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+	mkdir -p "$AUDIT_LOG_DIR"
+	printf '%s\t%s\t%s\t%s\n' "$fingerprint" "$timestamp" "$task_ref" "$detail" >>"$OPPORTUNITY_STATE_FILE"
+	return 0
+}
+
+#######################################
+# Build a concise title from an opportunity detail.
+#######################################
+_opportunity_task_title() {
+	local detail="$1"
+	local clean
+	clean="${detail#  - }"
+	clean="${clean#- }"
+	clean="${clean%% (*}"
+	clean="${clean:0:90}"
+
+	printf 'Memory audit: %s\n' "$clean"
+	return 0
+}
+
+#######################################
+# Build a worker-ready issue body for an opportunity.
+#######################################
+_opportunity_task_body() {
+	local detail="$1"
+	local fingerprint="$2"
+
+	cat <<EOF
+## Task
+Investigate and fix this memory audit self-improvement opportunity:
+
+> ${detail}
+
+## Why
+memory-audit-pulse.sh detected this pattern during Phase 5. Filing it as work keeps the self-improvement loop actionable instead of leaving it in report-only audit logs.
+
+## Files to modify
+- EDIT: .agents/scripts/memory-audit-pulse.sh — source detector and fingerprint: ${fingerprint}
+- EDIT: the framework file implicated by the queried memories or detector category
+- EDIT: .agents/reference/memory.md if the fix changes the memory audit contract
+- ADD/EDIT: .agents/scripts/tests/ — cover the implemented fix or detector refinement
+
+## Reference pattern
+Use the Phase 5 detector output and inspect the matching memory rows in the local memory DB. Prefer a focused code/doc/test fix over broad cleanup. If the premise is stale or already fixed, close with a premise-falsified rationale.
+
+## Verification
+- Run the focused test added for this fix.
+- Run shellcheck on any edited shell scripts.
+- Run memory-audit-pulse.sh run --dry-run --force and confirm the same opportunity is either resolved or remains intentionally tracked.
+
+## Source fingerprint
+${fingerprint}
+EOF
+	return 0
+}
+
+#######################################
+# File or preview tasks for opportunity details.
+#######################################
+_opportunities_action_details() {
+	local dry_run="$1"
+	local quiet="$2"
+	local opportunity_details="$3"
+	local task_cmd="${AIDEVOPS_MEMORY_AUDIT_TASK_CMD:-claim-task-id.sh}"
+
+	mkdir -p "$AUDIT_LOG_DIR"
+	: >"$OPPORTUNITY_ACTIONS_FILE"
+
+	local detail
+	while IFS= read -r detail; do
+		[[ -n "$detail" ]] || continue
+
+		local fingerprint
+		fingerprint=$(_opportunity_fingerprint "$detail")
+
+		if _opportunity_state_has "$fingerprint"; then
+			printf 'skipped-duplicate\t%s\t%s\n' "$fingerprint" "$detail" >>"$OPPORTUNITY_ACTIONS_FILE"
+			continue
+		fi
+
+		local title
+		title=$(_opportunity_task_title "$detail")
+
+		if [[ "$dry_run" == "true" ]]; then
+			printf 'would-file\t%s\t%s\n' "$fingerprint" "$title" >>"$OPPORTUNITY_ACTIONS_FILE"
+			[[ "$quiet" != "true" ]] && log_info "Opportunity dry-run: would file task for $fingerprint"
+			continue
+		fi
+
+		if ! command -v "$task_cmd" >/dev/null 2>&1 && [[ ! -x "$task_cmd" ]]; then
+			printf 'not-filed\t%s\ttask command unavailable: %s\n' "$fingerprint" "$task_cmd" >>"$OPPORTUNITY_ACTIONS_FILE"
+			[[ "$quiet" != "true" ]] && log_warn "Opportunity filing unavailable: $task_cmd"
+			continue
+		fi
+
+		local body output status task_ref
+		body=$(_opportunity_task_body "$detail" "$fingerprint")
+		status=0
+		output=$("$task_cmd" \
+			--title "$title" \
+			--description "$body" \
+			--labels "auto-dispatch,tier:standard,self-improvement" 2>&1) || status=$?
+
+		if [[ "$status" -ne 0 ]]; then
+			printf 'file-failed\t%s\t%s\n' "$fingerprint" "$output" >>"$OPPORTUNITY_ACTIONS_FILE"
+			[[ "$quiet" != "true" ]] && log_warn "Opportunity filing failed for $fingerprint"
+			continue
+		fi
+
+		task_ref="${output//$'\n'/ }"
+		_opportunity_state_record "$fingerprint" "$task_ref" "$detail"
+		printf 'filed\t%s\t%s\n' "$fingerprint" "$task_ref" >>"$OPPORTUNITY_ACTIONS_FILE"
+		[[ "$quiet" != "true" ]] && log_success "Opportunity filed: $task_ref"
+	done <<<"$opportunity_details"
+
+	return 0
+}
+
+#######################################
 # Phase 5: Opportunity scan
 # Identifies patterns that suggest self-improvement opportunities
 #######################################
 phase_opportunities() {
 	local quiet="$1"
+	local dry_run="${2:-false}"
 
 	[[ "$quiet" != "true" ]] && log_info "Phase 5: Scanning for improvement opportunities..."
 
@@ -686,6 +866,10 @@ phase_opportunities() {
 		echo "0"
 		return 0
 	fi
+
+	mkdir -p "$AUDIT_LOG_DIR"
+	: >"$OPPORTUNITY_DETAILS_FILE"
+	: >"$OPPORTUNITY_ACTIONS_FILE"
 
 	local opportunities=0
 	local opportunity_details=""
@@ -701,18 +885,23 @@ phase_opportunities() {
 		opportunities=$((opportunities + sub_count))
 		while IFS= read -r detail_line; do
 			[[ "$detail_line" == detail:* ]] || continue
-			opportunity_details+="${detail_line#detail:}\n"
+			opportunity_details+="${detail_line#detail:}"$'\n'
 		done <<<"$sub_output"
 	done
 
 	[[ "$quiet" != "true" ]] && {
 		if [[ "$opportunities" -gt 0 ]]; then
 			log_warn "Found $opportunities improvement opportunities:"
-			echo -e "$opportunity_details" >&2
+			printf '%s' "$opportunity_details" >&2
 		else
 			log_success "No improvement opportunities found"
 		fi
 	}
+
+	printf '%s' "$opportunity_details" >"$OPPORTUNITY_DETAILS_FILE"
+	if [[ "$opportunities" -gt 0 ]]; then
+		_opportunities_action_details "$dry_run" "$quiet" "$opportunity_details"
+	fi
 
 	echo "$opportunities"
 	return 0
@@ -746,27 +935,43 @@ phase_report() {
 
 	# Build report
 	local report=""
-	report+="Memory Audit Pulse Report\n"
-	report+="========================\n"
-	report+="Timestamp: $timestamp\n"
+	report+="Memory Audit Pulse Report"$'\n'
+	report+="========================"$'\n'
+	report+="Timestamp: $timestamp"$'\n'
 	local mode_label="LIVE"
 	[[ "$dry_run" == "true" ]] && mode_label="DRY RUN"
-	report+="Mode: $mode_label\n"
-	report+="\n"
-	report+="Actions:\n"
-	report+="  Duplicates removed: $dedup_count\n"
-	report+="  Stale entries pruned: $prune_count\n"
-	report+="  Memories graduated: $graduate_count\n"
-	report+="  Consolidations generated: $consolidate_count\n"
-	report+="  Opportunities found: $opportunity_count\n"
-	report+="\n"
-	report+="Database:\n"
-	report+="  Total memories: $total_memories\n"
-	report+="  Database size: $db_size\n"
+	report+="Mode: $mode_label"$'\n'
+	report+=$'\n'
+	report+="Actions:"$'\n'
+	report+="  Duplicates removed: $dedup_count"$'\n'
+	report+="  Stale entries pruned: $prune_count"$'\n'
+	report+="  Memories graduated: $graduate_count"$'\n'
+	report+="  Consolidations generated: $consolidate_count"$'\n'
+	report+="  Opportunities found: $opportunity_count"$'\n'
+	if [[ -s "$OPPORTUNITY_DETAILS_FILE" ]]; then
+		report+=$'\n'
+		report+="Opportunity details:"$'\n'
+		while IFS= read -r detail_line; do
+			[[ -n "$detail_line" ]] || continue
+			report+="${detail_line}"$'\n'
+		done <"$OPPORTUNITY_DETAILS_FILE"
+	fi
+	if [[ -s "$OPPORTUNITY_ACTIONS_FILE" ]]; then
+		report+=$'\n'
+		report+="Opportunity filing actions:"$'\n'
+		while IFS= read -r action_line; do
+			[[ -n "$action_line" ]] || continue
+			report+="  ${action_line}"$'\n'
+		done <"$OPPORTUNITY_ACTIONS_FILE"
+	fi
+	report+=$'\n'
+	report+="Database:"$'\n'
+	report+="  Total memories: $total_memories"$'\n'
+	report+="  Database size: $db_size"$'\n'
 
 	[[ "$quiet" != "true" ]] && {
 		echo ""
-		echo -e "$report"
+		printf '%s' "$report"
 	}
 
 	# Save report to audit log
@@ -827,7 +1032,7 @@ cmd_run() {
 	prune_count=$(phase_prune "$dry_run" "$quiet")
 	graduate_count=$(phase_graduate "$dry_run" "$quiet")
 	consolidate_count=$(phase_consolidate "$dry_run" "$quiet")
-	opportunity_count=$(phase_opportunities "$quiet")
+	opportunity_count=$(phase_opportunities "$quiet" "$dry_run")
 
 	# Generate report
 	phase_report "$dedup_count" "$prune_count" "$graduate_count" "$consolidate_count" "$opportunity_count" "$dry_run" "$quiet"
@@ -853,7 +1058,7 @@ cmd_status() {
 	# Last audit
 	if [[ -f "$AUDIT_MARKER" ]]; then
 		local last_run
-		last_run=$(stat -c %Y "$AUDIT_MARKER" 2>/dev/null || stat -f %m "$AUDIT_MARKER" 2>/dev/null || echo "0")
+		last_run=$(_file_mtime_epoch "$AUDIT_MARKER")
 		local now
 		now=$(date +%s)
 		local elapsed=$(((now - last_run) / 3600))

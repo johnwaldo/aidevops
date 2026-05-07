@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # runner-helper.sh - Named headless AI agent instances with persistent identity
 #
 # Runners are named, persistent agent instances that can be dispatched headlessly.
@@ -51,7 +53,7 @@ readonly OPENCODE_PORT="${OPENCODE_PORT:-4096}"
 readonly OPENCODE_HOST="${OPENCODE_HOST:-127.0.0.1}"
 readonly DEFAULT_MODEL="anthropic/claude-sonnet-4-6"
 
-readonly BOLD='\033[1m'
+[[ -z "${BOLD+x}" ]] && BOLD='\033[1m'
 
 # Logging: uses shared log_* from shared-constants.sh with RUNNER prefix
 # shellcheck disable=SC2034  # Used by shared-constants.sh log_* functions
@@ -856,7 +858,7 @@ cmd_status() {
 	# Check for memory namespace
 	if [[ -x "$MEMORY_HELPER" ]]; then
 		local mem_count
-		mem_count=$("$MEMORY_HELPER" --namespace "$name" stats 2>/dev/null | grep -c "Total" || echo "0")
+		mem_count=$("$MEMORY_HELPER" --namespace "$name" stats 2>/dev/null | safe_grep_count "Total")
 		if [[ "$mem_count" -gt 0 ]]; then
 			echo "Memory entries: $mem_count"
 		fi

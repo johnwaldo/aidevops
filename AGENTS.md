@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # AI DevOps Framework - Developer Guide
 
 <!-- AI-CONTEXT-START -->
@@ -7,7 +10,7 @@
 - **User Guide**: `.agents/AGENTS.md` (deployed to `~/.aidevops/agents/`)
 - **Commands**: `./setup.sh` (deploy) | `.agents/scripts/linters-local.sh` (quality) | `.agents/scripts/version-manager.sh release [major|minor|patch]`
 - **Config**: Runtime-specific (see `.agents/AGENTS.md` "Runtime-Specific References")
-- **Quality**: `.agents/prompts/build.txt`
+- **Quality**: `.agents/AGENTS.md` "Framework Rules"
 
 **File Structure**: `TODO.md` (tasks), `todo/` (plans, PRDs), `.agents/` (agents, tools, services, workflows, scripts).
 
@@ -27,20 +30,20 @@ The `.agents/AGENTS.md` is copied to `~/.aidevops/agents/AGENTS.md` by `setup.sh
 ## Development Lifecycle
 
 See `.agents/AGENTS.md` "Development Lifecycle" for the full lifecycle.
-Completion self-check: see `prompts/build.txt` "Completion and quality discipline".
+Completion self-check: see `.agents/AGENTS.md` "Framework Rules > Completion and quality discipline".
 
 ## Contributing
 
-See `.agents/aidevops/` for framework development guidance:
+See `.agents/aidevops/` (architecture, setup) and `.agents/tools/` (agent/MCP authoring) for framework development guidance:
 
 | File | Purpose |
 |------|---------|
-| `tools/build-agent/build-agent.md` | Composing efficient agents |
-| `tools/build-agent/agent-review.md` | Reviewing and improving agents |
-| `tools/build-mcp/build-mcp.md` | MCP server development |
-| `tools/mcp-toolkit/mcporter.md` | MCP runtime toolkit (discover, call, generate CLIs) |
-| `architecture.md` | Framework structure |
-| `setup.md` | AI guide to setup.sh |
+| `.agents/tools/build-agent/build-agent.md` | Composing efficient agents |
+| `.agents/tools/build-agent/agent-review.md` | Reviewing and improving agents |
+| `.agents/tools/build-mcp/build-mcp.md` | MCP server development |
+| `.agents/tools/mcp-toolkit/mcporter.md` | MCP runtime toolkit (discover, call, generate CLIs) |
+| `.agents/aidevops/architecture.md` | Framework structure |
+| `.agents/aidevops/setup.md` | AI guide to setup.sh |
 
 ## Agent Design Principles
 
@@ -52,9 +55,14 @@ From `tools/build-agent/build-agent.md`:
 4. **Code examples**: Only when authoritative (use `file:line` refs otherwise)
 5. **Self-assessment**: Flag issues with evidence, complete task first
 
+Contributor rule: changes that add or expand always-loaded guidance (`AGENTS.md`,
+`.agents/AGENTS.md`, `prompts/build.txt`) must prefer a short pointer plus a
+reference/workflow document, keep `.agents/AGENTS.md` under the CI size ratchet,
+and justify any intentional baseline increase in the PR body.
+
 ## Security
 
-Security rules: see `prompts/build.txt`. Additional contributor rule:
+Security rules: see `.agents/AGENTS.md` "Framework Rules > Security Rules". Additional contributor rule:
 - Use placeholders in examples, note secure storage location
 
 ## Quality Workflow

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC2155
 
 # Unstract Helper - Self-hosted document processing platform
@@ -166,7 +168,7 @@ do_status() {
 
 	cd "$UNSTRACT_DIR" || exit
 	local running
-	running=$(docker compose ps --format json 2>/dev/null | grep -c '"running"' 2>/dev/null || echo "0")
+	running=$(docker compose ps --format json 2>/dev/null | safe_grep_count '"running"')
 
 	if [[ "$running" -gt 0 ]]; then
 		print_success "Unstract: Running (${running} containers)"

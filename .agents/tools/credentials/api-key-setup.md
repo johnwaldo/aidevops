@@ -12,6 +12,9 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # API Key Setup Guide - Secure Local Storage
 
 <!-- AI-CONTEXT-START -->
@@ -77,6 +80,8 @@ bash ~/Git/aidevops/.agents/scripts/setup-local-api-keys.sh set <service-name> Y
 | Hetzner Cloud | `hcloud-token-<project>` | https://console.hetzner.cloud/projects/*/security/tokens |
 | OpenAI | `openai-api-key` | https://platform.openai.com/api-keys |
 | Daytona | `daytona-api-key` | https://app.daytona.io/settings/api-keys |
+
+**Multi-account naming**: When you hold credentials for several accounts on the same provider at once (personal + work GitHub, multiple OpenAI projects, several Hetzner projects), suffix the bare name with `-<account>` / `_<ACCOUNT>` — e.g. `github-token-personal` and `github-token-work`, or `hcloud-token-project-a` and `hcloud-token-project-b`. The bare provider name remains the default for the single-account case. Full convention: `gopass.md` "Naming with multiple accounts".
 
 ### 4. Verify
 

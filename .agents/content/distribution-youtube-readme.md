@@ -11,19 +11,18 @@ subagents:
   - pipeline
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # YouTube Distribution
 
 <!-- AI-CONTEXT-START -->
 
 ## Quick Reference
 
-- **Purpose**: YouTube long-form video distribution within the content pipeline
-- **Main Agent**: `youtube.md` (this directory) - orchestrator for all YouTube operations
-- **Subagents**: `channel-intel`, `topic-research`, `script-writer`, `optimizer`, `pipeline`
 - **Helper**: `youtube-helper.sh` - YouTube Data API v3 wrapper
 - **Commands**: `/youtube setup`, `/youtube research`, `/youtube script`
-
-**This directory is the authoritative location for all YouTube agents.** YouTube is a distribution channel within the content pipeline (`content.md`). The subagents here handle competitor research, topic ideation, script generation, metadata optimization, and automated pipelines.
+- **Pipeline**: YouTube is a distribution channel within `content.md`
 
 <!-- AI-CONTEXT-END -->
 
@@ -38,8 +37,6 @@ subagents:
 | `pipeline.md` | End-to-end cron-driven automation pipeline |
 
 ## Distribution Workflow
-
-When the content pipeline fans out to YouTube:
 
 1. **Receive story and production assets** from upstream pipeline stages
 2. **Adapt to YouTube format** using `script-writer.md`
@@ -68,19 +65,19 @@ When the content pipeline fans out to YouTube:
 
 ## Cross-Channel Repurposing
 
-From one YouTube video, generate:
-
-- **YouTube Short** - Best 30-60s clip, 9:16 reformat (`content/distribution-short-form.md`)
-- **Blog post** - Transcript-based SEO article (`content/distribution-blog.md`)
-- **Social posts** - Key insights as X thread, LinkedIn post, Reddit discussion (`content/distribution-social.md`)
-- **Email** - Newsletter featuring video + key takeaways (`content/distribution-email.md`)
-- **Podcast** - Audio-only version with show notes (`content/distribution-podcast.md`)
+| Output | Format | Agent |
+|--------|--------|-------|
+| YouTube Short | Best 30-60s clip, 9:16 reformat | `content/distribution-short-form.md` |
+| Blog post | Transcript-based SEO article | `content/distribution-blog.md` |
+| Social posts | X thread, LinkedIn post, Reddit discussion | `content/distribution-social.md` |
+| Email | Newsletter featuring video + key takeaways | `content/distribution-email.md` |
+| Podcast | Audio-only version with show notes | `content/distribution-podcast.md` |
 
 ## Related Agents
 
-- `youtube.md` - Full YouTube orchestrator (this directory)
-- `content/production-video.md` - Video generation (Sora 2 Pro, Veo 3.1)
-- `content/production-audio.md` - Voice pipeline
-- `content/story.md` - Narrative design and hook formulas
-- `content/optimization.md` - A/B testing and analytics
-- `youtube-helper.sh` - YouTube Data API v3 wrapper
+| Agent | Purpose |
+|-------|---------|
+| `content/production-video.md` | Video generation (Sora 2 Pro, Veo 3.1) |
+| `content/production-audio.md` | Voice pipeline |
+| `content/story.md` | Narrative design and hook formulas |
+| `content/optimization.md` | A/B testing and analytics |

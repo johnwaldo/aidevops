@@ -11,6 +11,9 @@ tools:
   webfetch: false
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Model Routing & Fallback
 
 <!-- AI-CONTEXT-START -->
@@ -24,56 +27,31 @@ tools:
 
 <!-- AI-CONTEXT-END -->
 
-## Overview
-
-The fallback system uses a **data-driven routing table** (JSON) that AI reads directly to understand available models per tier. The bash script only checks model availability — all routing decisions (which model to try, when to fall back, cooldown logic) are made by the AI agent.
-
-This follows the **Intelligence Over Scripts** principle: deterministic utilities (health checks) stay in bash; judgment calls (routing priority, error recovery) belong to the AI.
+AI reads the routing table directly; bash only checks availability. All routing decisions are AI judgment (**Intelligence Over Scripts**).
 
 ## Routing Table
 
-The routing table at `configs/model-routing-table.json` defines models per tier:
-
-```json
-{
-  "tiers": {
-    "haiku":  { "models": ["anthropic/claude-haiku-4-5"] },
-    "sonnet": { "models": ["anthropic/claude-sonnet-4-6"] },
-    "opus":   { "models": ["anthropic/claude-opus-4-6"] },
-    "coding": { "models": ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"] }
-  }
-}
-```
-
-Tiers: `haiku`, `flash`, `sonnet`, `pro`, `opus`, `coding`, `eval`, `health`
+`configs/model-routing-table.json` — tiers: `haiku`, `flash`, `sonnet`, `pro`, `opus`, `coding`, `eval`, `health`
 
 ## CLI Usage
 
 ```bash
-# Resolve best available model for a tier
 fallback-chain-helper.sh resolve coding
 fallback-chain-helper.sh resolve sonnet --json --quiet
-
-# Print the full routing table
 fallback-chain-helper.sh table
-
-# Help
 fallback-chain-helper.sh help
 ```
 
-## How Resolution Works
+## Resolution
 
-1. Script reads the routing table for the requested tier
-2. Walks the model list in order
-3. For each model, checks provider availability via `model-availability-helper.sh`
-4. Returns the first available model
-5. If all models exhausted, returns exit code 1
+1. Read routing table for the requested tier
+2. Walk model list in order
+3. Check each model via `model-availability-helper.sh`
+4. Return first available model; exit code 1 if all exhausted
 
-No cooldowns, triggers, gateway probing, or SQLite database. The AI handles error recovery and routing decisions using the routing table as reference data.
+No cooldowns, triggers, gateway probing, or SQLite database.
 
 ## Integration
-
-### Callers
 
 | Caller | Function | How it calls |
 |--------|----------|-------------|
@@ -81,24 +59,11 @@ No cooldowns, triggers, gateway probing, or SQLite database. The AI handles erro
 | `model-availability-helper.sh` | `resolve_tier_chain()` | `fallback-chain-helper.sh resolve <tier> --quiet` for full chain |
 | `shared-constants.sh` | `resolve_model_tier()` | `fallback-chain-helper.sh resolve <tier> --quiet` with static fallback |
 
-### AI Agent Usage
-
-AI agents read `model-routing.md` for routing rules and the routing table for available models. When a provider fails at runtime, the AI decides the next action (retry, fall back, escalate) — not bash.
-
 ## Migration from v1
 
-v2 removed (moved to AI judgment):
-- SQLite database (cooldowns, trigger logs, gateway health)
-- Provider cooldown management
-- Trigger classification (429, 5xx, timeout detection)
-- Gateway probing (OpenRouter, Cloudflare AI Gateway)
-- Per-agent YAML frontmatter parsing
-- `chain`, `status`, `validate`, `gateway`, `trigger` commands
+v2 removed (moved to AI judgment): SQLite database, provider cooldown management, trigger classification (429, 5xx, timeout), gateway probing (OpenRouter, Cloudflare AI Gateway), per-agent YAML frontmatter parsing, `chain`/`status`/`validate`/`gateway`/`trigger` commands.
 
-v2 kept:
-- `resolve <tier>` command (table lookup + availability check)
-- `is_model_available()` health check (delegates to model-availability-helper.sh)
-- Same exit codes and stdout interface
+v2 kept: `resolve <tier>` (table lookup + availability check), `is_model_available()` health check, same exit codes and stdout interface.
 
 ## Related
 

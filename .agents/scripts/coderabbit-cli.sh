@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2317
 set -euo pipefail
 
@@ -26,22 +28,16 @@ set -euo pipefail
 # Version: 1.2.0
 # License: MIT
 
-# Source shared constants (provides sed_inplace and other utilities)
+# Source shared constants (provides sed_inplace, canonical colors, and other utilities)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
-source "$SCRIPT_DIR/shared-constants.sh" 2>/dev/null || true
+# shellcheck source=shared-constants.sh
+source "${SCRIPT_DIR}/shared-constants.sh"
 
-# Colors for output
-readonly GREEN='\033[0;32m'
-readonly BLUE='\033[0;34m'
-readonly PURPLE='\033[0;35m'
-readonly NC='\033[0m' # No Color
-
-# Common constants
-readonly ERROR_UNKNOWN_COMMAND="Unknown command:"
-# Configuration constants
-readonly CODERABBIT_CLI_INSTALL_URL="https://cli.coderabbit.ai/install.sh"
-readonly CONFIG_DIR="$HOME/.config/coderabbit"
-readonly API_KEY_FILE="$CONFIG_DIR/api_key"
+# Common constants (ERROR_UNKNOWN_COMMAND is provided by shared-constants.sh)
+# Configuration constants (guarded against re-sourcing)
+[[ -z "${CODERABBIT_CLI_INSTALL_URL+x}" ]] && readonly CODERABBIT_CLI_INSTALL_URL="https://cli.coderabbit.ai/install.sh"
+[[ -z "${CONFIG_DIR+x}" ]] && readonly CONFIG_DIR="$HOME/.config/coderabbit"
+[[ -z "${API_KEY_FILE+x}" ]] && readonly API_KEY_FILE="$CONFIG_DIR/api_key"
 
 print_success() {
 	local message="$1"
@@ -426,14 +422,14 @@ show_help() {
 	echo ""
 	echo "Review modes:"
 	echo "  plain       - Plain text output (default, best for scripts/AI)"
-	echo "  prompt-only - Minimal output optimized for AI agents"
+	echo "  prompt-only - Minimal output optimised to feed AI agents"
 	echo "  interactive - Full interactive TUI mode"
 	echo ""
 	echo "Examples:"
 	echo "  $0 install                    # Install CLI"
 	echo "  $0 auth                       # Authenticate (browser)"
 	echo "  $0 review                     # Review uncommitted (plain mode)"
-	echo "  $0 review prompt-only         # Review for AI agents"
+	echo "  $0 review prompt-only         # Review to feed AI agents"
 	echo "  $0 review plain develop       # Review against develop branch"
 	echo "  $0 review-all                 # Review all changes"
 	echo "  $0 status                     # Check CLI status"

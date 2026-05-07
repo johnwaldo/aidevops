@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 set -euo pipefail
 
 # deploy-agents-on-merge.sh - Fast targeted agent deployment after PR merge
@@ -24,12 +26,10 @@ set -euo pipefail
 #   1 - Deploy failed
 #   2 - Nothing to deploy (no changes detected)
 
-# Colors
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+# Colors — sourced from shared-constants.sh (Pattern A, t2053.3)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
+# shellcheck source=shared-constants.sh
+[[ -f "${SCRIPT_DIR}/shared-constants.sh" ]] && source "${SCRIPT_DIR}/shared-constants.sh"
 
 QUIET=false
 
@@ -502,7 +502,11 @@ main() {
 			return 0
 		fi
 		AIDEVOPS_NON_INTERACTIVE=true bash "$REPO_DIR/setup.sh" --non-interactive
-		return $?
+		local _full_rc=$?
+		if [[ "$_full_rc" -eq 75 ]]; then
+			log_warn "setup.sh --non-interactive is locked by another process (exit 75). The lightweight deploy path (deploy-agents-on-merge.sh without --full) is unaffected — re-run without --full for an immediate agent sync while the full setup completes."
+		fi
+		return "$_full_rc"
 	fi
 
 	# Pull latest (only if on main)

@@ -5,6 +5,9 @@ mode: subagent
 subagents: [setup, troubleshooting, api-key-setup, list-keys, mcp-integrations, services, service-links, general, explore]
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Onboarding Wizard
 
 <!-- AI-CONTEXT-START -->
@@ -14,173 +17,132 @@ subagents: [setup, troubleshooting, api-key-setup, list-keys, mcp-integrations, 
 - **Command**: `/onboarding` or `@onboarding`
 - **Script**: `~/.aidevops/agents/scripts/onboarding-helper.sh`
 - **Settings**: `~/.config/aidevops/settings.json` — `settings-helper.sh list|set|reset`
+- **Credentials**: `~/.config/aidevops/credentials.sh` (600 perms) | `configs/*-config.json` (600, gitignored) | `~/.config/coderabbit/api_key` (600)
+- **Set keys**: `setup-local-api-keys.sh set NAME "value"` | **List**: `list-keys-helper.sh`
 
-**OpenCode Setup**: NEVER manually write `opencode.json`. Run `generate-opencode-agents.sh`. Won't start? `mv ~/.config/opencode/opencode.json{,.broken}` then re-run. JSON fixes: `"tools": {}` not `[]` | add `"type": "local"` or `"type": "remote"` | `"tool_name": true` not `{...}`. Verify: `jq . ~/.config/opencode/opencode.json > /dev/null`
+**OpenCode setup**: NEVER manually write `opencode.json` — run `generate-opencode-agents.sh`. Broken? `mv ~/.config/opencode/opencode.json{,.broken}` and re-run.
+Hand-fix: `"tools": {}` (not `[]`), `"type": "local"|"remote"`, `"tool_name": true` (not objects). Verify: `jq . ~/.config/opencode/opencode.json > /dev/null`.
 
 <!-- AI-CONTEXT-END -->
 
 ## Welcome Flow
 
-1. **Introduction** — ask new users if they want an explanation of capabilities: Orchestration, Infrastructure (Hetzner, Hostinger, Cloudron, Coolify), Domains/DNS (Cloudflare, Spaceship, 101domains), Git (GitHub, GitLab, Gitea), Code Quality (SonarCloud, Codacy, CodeRabbit, Snyk), WordPress (LocalWP, MainWP), SEO (DataForSEO, Serper, GSC), Browser (Playwright, Stagehand), Context (Augment, Context7, Repomix)
-2. **Concept familiarity** — ask which they know (Git, Terminal, API keys, Hosting, SEO, AI assistants). Save: `onboarding-helper.sh save-concepts 'git,terminal'`
-3. **Work type** — ask what they do (web dev, DevOps, SEO, WordPress, other). Save: `onboarding-helper.sh save-work-type devops`
-4. **Current status** — `onboarding-helper.sh status` — show configured vs needs-setup
-5. **Guide setup** — for each service: explain purpose, link to credentials, setup command, verification
+1. **Introduce capabilities** (if wanted) — see Service Catalog below for full list
+2. **Capture concept familiarity** (Git, terminal, API keys, hosting, SEO, AI assistants): `onboarding-helper.sh save-concepts 'git,terminal'`
+3. **Capture work type** (web-dev, devops, seo, wordpress, other): `onboarding-helper.sh save-work-type devops`
+4. **Show status**: `onboarding-helper.sh status`
+5. **Guide service-by-service setup**: purpose → credential source → setup command → verification
+6. **Per-repo platform setup**: after `gh auth login` succeeds, mention `/setup-git` for per-repo secrets (SYNC_PAT for issue-sync, etc.) — see "Scope" note below.
+
+## Scope: Per-Account vs Per-Repo
+
+`/onboarding` (this wizard) handles **per-account** setup — credentials and tooling that apply globally to a user or workstation:
+
+- Auth tokens stored in `~/.config/aidevops/credentials.sh` or `gopass` (one set of values, used everywhere)
+- Platform CLI logins: `gh auth login`, `glab auth login`, `tea login` (one auth per platform per account)
+- AI assistant API keys, hosting tokens, SEO service credentials
+
+`/setup-git` handles **per-repo** platform configuration — secrets that must be set on each individual remote repo:
+
+- `SYNC_PAT` (GitHub Actions secret used by `issue-sync.yml` to push TODO.md auto-completion past branch protection)
+- Future: GitLab CI variables, Gitea Actions secrets, Bitbucket Pipelines variables — same model, different platform UIs
+
+The two workflows compose: `/onboarding` first (you need `gh` to be authenticated before any per-repo helper can run), `/setup-git` second (run when new repos are registered or when SYNC_PAT advisories appear in the session greeting toast).
 
 ## Service Catalog
 
-### AI Providers
+| Category | Service | Env Var / Auth | Setup Link |
+|----------|---------|----------------|------------|
+| AI | OpenAI | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
+| AI | Anthropic | `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys |
+| Git | GitHub | `gh auth login` | — |
+| Git | GitLab | `glab auth login` | — |
+| Git | Gitea | `tea login add` | — |
+| Hosting | Hetzner Cloud | `HCLOUD_TOKEN_*` | https://console.hetzner.cloud/ → Security → API Tokens |
+| Hosting | Cloudflare | `CLOUDFLARE_API_TOKEN` | https://dash.cloudflare.com/profile/api-tokens |
+| Hosting | Coolify | `COOLIFY_API_TOKEN` | Your Coolify instance → Settings → API |
+| Hosting | Vercel | `VERCEL_TOKEN` | https://vercel.com/account/tokens |
+| Quality | SonarCloud | `SONAR_TOKEN` | https://sonarcloud.io/account/security |
+| Quality | Codacy | `CODACY_PROJECT_TOKEN` | https://app.codacy.com → Project → Settings |
+| Quality | CodeRabbit | `CODERABBIT_API_KEY` | https://app.coderabbit.ai/settings |
+| Quality | Snyk | `SNYK_TOKEN` | https://app.snyk.io/account |
+| SEO | DataForSEO | `DATAFORSEO_USERNAME`, `DATAFORSEO_PASSWORD` | https://app.dataforseo.com/api-access |
+| SEO | Serper | `SERPER_API_KEY` | https://serper.dev/api-key |
+| SEO | Outscraper | `OUTSCRAPER_API_KEY` | https://outscraper.com/dashboard |
+| SEO | Google Search Console | OAuth via MCP | https://search.google.com/search-console |
+| Context | Context7 | MCP config only | — |
+| Browser | Playwright | `npx playwright install` | — |
+| Browser | Stagehand | OpenAI/Anthropic key required | — |
+| Browser | Chrome DevTools | `--remote-debugging-port=9222` | — |
+| Containers | OrbStack | `brew install orbstack` — docs: `@orbstack` | — |
+| Containers | Tailscale | `brew install tailscale` — docs: `@tailscale` | — |
+| WordPress | LocalWP | — | https://localwp.com/releases |
+| WordPress | MainWP | — | https://mainwp.com/ |
+| Cloud | AWS | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | — |
+| Domains | Spaceship | `configs/spaceship-config.json` | — |
+| Domains | 101domains | `configs/101domains-config.json` | — |
+| Secrets | Vaultwarden | `configs/vaultwarden-config.json` | — |
 
-| Service | Env Var | Setup Link |
-|---------|---------|------------|
-| OpenAI | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
-| Anthropic | `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys |
+CodeRabbit key setup (single command): `read -rsp "CodeRabbit API key: " CODERABBIT_API_KEY && echo && mkdir -p ~/.config/coderabbit && chmod 700 ~/.config/coderabbit && printf '%s\n' "$CODERABBIT_API_KEY" > ~/.config/coderabbit/api_key && chmod 600 ~/.config/coderabbit/api_key && unset CODERABBIT_API_KEY`
 
-Set keys: `setup-local-api-keys.sh set OPENAI_API_KEY "sk-..."`
+SEO: `/keyword-research`, `/autocomplete-research`, `/keyword-research-extended`, `/webmaster-keywords`
 
-### Git Platforms
-
-| Service | Auth |
-|---------|------|
-| GitHub | `gh auth login` |
-| GitLab | `glab auth login` |
-| Gitea | `tea login add` |
-
-### Hosting & Infrastructure
-
-| Service | Env Var(s) | Setup Link |
-|---------|------------|------------|
-| Hetzner Cloud | `HCLOUD_TOKEN_*` | https://console.hetzner.cloud/ → Security → API Tokens |
-| Cloudflare | `CLOUDFLARE_API_TOKEN` | https://dash.cloudflare.com/profile/api-tokens |
-| Coolify | `COOLIFY_API_TOKEN` | Your Coolify instance → Settings → API |
-| Vercel | `VERCEL_TOKEN` | https://vercel.com/account/tokens |
-
-### Code Quality
-
-| Service | Env Var | Setup Link |
-|---------|---------|------------|
-| SonarCloud | `SONAR_TOKEN` | https://sonarcloud.io/account/security |
-| Codacy | `CODACY_PROJECT_TOKEN` | https://app.codacy.com → Project → Settings |
-| CodeRabbit | `CODERABBIT_API_KEY` | https://app.coderabbit.ai/settings |
-| Snyk | `SNYK_TOKEN` | https://app.snyk.io/account |
-
-CodeRabbit key: `mkdir -p ~/.config/coderabbit && echo "key" > ~/.config/coderabbit/api_key && chmod 600 ~/.config/coderabbit/api_key`
-
-### SEO & Research
-
-| Service | Env Var(s) | Setup Link |
-|---------|------------|------------|
-| DataForSEO | `DATAFORSEO_USERNAME`, `DATAFORSEO_PASSWORD` | https://app.dataforseo.com/api-access |
-| Serper | `SERPER_API_KEY` | https://serper.dev/api-key |
-| Outscraper | `OUTSCRAPER_API_KEY` | https://outscraper.com/dashboard |
-| Google Search Console | OAuth via MCP | https://search.google.com/search-console |
-
-SEO commands: `/keyword-research`, `/autocomplete-research`, `/keyword-research-extended`, `/webmaster-keywords`
-
-### Context, Browser & Containers
-
-| Tool | Setup |
-|------|-------|
-| Augment | `npm install -g @augmentcode/auggie@prerelease && auggie login` |
-| Context7 | MCP config only |
-| Playwright | `npx playwright install` (Node.js) |
-| Stagehand | OpenAI/Anthropic key required |
-| Chrome DevTools | `--remote-debugging-port=9222` |
-| OrbStack | `brew install orbstack` — docs: `@orbstack` |
-| Tailscale | `brew install tailscale` — docs: `@tailscale` |
-
-### Personal AI Assistant (OpenClaw)
+### OpenClaw (Personal AI Assistant)
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash && openclaw onboard --install-daemon
+# Tiers: (1) Native local, (2) OrbStack container, (3) Remote VPS + Tailscale
+# Post-setup: openclaw security audit --deep | Docs: @openclaw
 ```
 
-Tiers: (1) Native local, (2) OrbStack container, (3) Remote VPS with Tailscale. After setup: `openclaw security audit --deep`. Docs: `@openclaw`
-
-### WordPress & Other Services
-
-**WordPress**: LocalWP (https://localwp.com/releases) — local dev | MainWP (https://mainwp.com/) — fleet management
-
-**AWS**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`
-
-**Domains/Secrets**: `configs/spaceship-config.json` (Spaceship), `configs/101domains-config.json` (101domains), `configs/vaultwarden-config.json` (Vaultwarden)
-
-## Verification Commands
+## Verification
 
 ```bash
+# Run what applies to the selected stack
 gh auth status && glab auth status
 hcloud server list
 curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/user/tokens/verify" | jq .success
 curl -s -u "$DATAFORSEO_USERNAME:$DATAFORSEO_PASSWORD" "https://api.dataforseo.com/v3/appendix/user_data" | jq .status_message
-auggie token print && openclaw doctor && tailscale status && orb status
+openclaw doctor && tailscale status && orb status
 ~/.aidevops/agents/scripts/list-keys-helper.sh
 ```
-
-## Credential Storage
-
-| Location | Purpose | Permissions |
-|----------|---------|-------------|
-| `~/.config/aidevops/credentials.sh` | Primary credential store | 600 |
-| `~/.config/coderabbit/api_key` | CodeRabbit token | 600 |
-| `configs/*-config.json` | Service-specific configs | 600, gitignored |
-
-Set: `setup-local-api-keys.sh set NAME "value"` | List (names only): `list-keys-helper.sh`
-
-## Recommended Setup Order
-
-| Profile | Priority order |
-|---------|---------------|
-| Web Developer | GitHub CLI → OpenAI → Augment → Playwright |
-| DevOps Engineer | GitHub/GitLab CLI → Hetzner → Cloudflare → Tailscale → Coolify → OrbStack → SonarCloud/Codacy → Supervisor pulse |
-| SEO Professional | DataForSEO → Serper → Google Search Console → Outscraper |
-| WordPress Developer | LocalWP → MainWP → GitHub CLI → Hostinger |
-| Full Stack | All Git CLIs → OpenAI/Anthropic → Augment → Hetzner/Cloudflare → Tailscale → OrbStack → Code quality → Supervisor pulse → DataForSEO → OpenClaw |
 
 ## Troubleshooting
 
 ```bash
 # Key not loading
 grep "credentials.sh" ~/.zshrc ~/.bashrc && source ~/.config/aidevops/credentials.sh
-
 # MCP not connecting
 opencode mcp list && ~/.aidevops/agents/scripts/mcp-diagnose.sh <name>
-
 # Permission denied
 chmod 600 ~/.config/aidevops/credentials.sh && chmod 700 ~/.config/aidevops
 ```
 
 ## Agents & Commands
 
-**Agent layers**: Main agents (Tab key) → Subagents (`@name`) → Commands (`/name`)
-
-**Main agents**: `Build+` (coding/DevOps), `SEO` (search optimization), `WordPress` (WP ecosystem)
-
-**Common subagents**: `@hetzner`, `@cloudflare`, `@coolify`, `@vercel`, `@github-cli`, `@dataforseo`, `@augment-context-engine`, `@code-standards`, `@wp-dev`
-
-**Project init**: `cd ~/your-project && aidevops init`
-
-**Key commands**: `/create-prd`, `/generate-tasks`, `/feature`, `/bugfix`, `/hotfix`, `/pr`, `/preflight`, `/release`, `/linters-local`, `/keyword-research`
+- **Layers**: Main agents (Tab) → subagents (`@name`) → commands (`/name`)
+- **Main**: `Build+`, `SEO`, `WordPress` | **Init**: `cd ~/your-project && aidevops init`
+- **Subagents**: `@hetzner`, `@cloudflare`, `@coolify`, `@vercel`, `@github-cli`, `@dataforseo`, `@code-standards`, `@wp-dev`
+- **Commands**: `/create-prd`, `/generate-tasks`, `/feature`, `/bugfix`, `/hotfix`, `/pr`, `/preflight`, `/release`, `/linters-local`, `/keyword-research`
 
 ## Repo Sync & Orchestration
 
 ```bash
-# Configure git parent directories for repo sync
-jq --argjson dirs '["~/Git", "~/Projects"]' '. + {git_parent_dirs: $dirs}' \
-  ~/.config/aidevops/repos.json > /tmp/repos.json && mv /tmp/repos.json ~/.config/aidevops/repos.json
+# Configure git parent directories for repo sync (creates repos.json if missing)
+mkdir -p ~/.config/aidevops && { [ -s ~/.config/aidevops/repos.json ] || echo '{}' > ~/.config/aidevops/repos.json; } && \
+  tmp_file="$(mktemp "${TMPDIR:-/tmp}/repos.XXXXXX")" && \
+  jq --argjson dirs '["~/Git", "~/Projects"]' '. + {git_parent_dirs: $dirs}' \
+  ~/.config/aidevops/repos.json > "$tmp_file" && mv "$tmp_file" ~/.config/aidevops/repos.json
 aidevops repo-sync enable
-
-# Enable autonomous orchestration
-~/.aidevops/agents/scripts/onboarding-helper.sh save-orchestration true
-# See scripts/commands/runners.md for launchd (macOS) and cron (Linux) setup
+aidevops config set orchestration.supervisor_pulse true && ./setup.sh  # Enable autonomous orchestration
+# Runners: see scripts/commands/runners.md (launchd/cron)
 ```
 
-Settings: `settings-helper.sh list` to see all sections. Cost note: subscription plans (Claude Max/Pro, OpenAI Pro/Plus) are cheaper than API for sustained use.
+Settings: `settings-helper.sh list`. Cost note: subscription plans (Claude Max/Pro, OpenAI Pro/Plus) usually cheaper than API for sustained use.
 
-## Next Steps After Setup
+## Next Steps
 
-1. **Create playground**: `mkdir ~/Git/aidevops-playground && cd ~/Git/aidevops-playground && git init && aidevops init`
-2. **Test**: "List my GitHub repos" or "Check my Hetzner servers"
-3. **Enable orchestration**: see `scripts/commands/runners.md`
-4. **Try a workflow**: `/create-prd` → `/generate-tasks` → `/feature` → build → `/release`
-5. **Try autonomous mode**: Add `#auto-dispatch` to a TODO.md task
-6. **Read the docs**: `@aidevops` for framework guidance
+1. **Playground**: `mkdir ~/Git/aidevops-playground && cd $_ && git init && aidevops init`
+2. **Smoke test**: "List my GitHub repos" or "Check my Hetzner servers"
+3. **First flow**: `/create-prd` → `/generate-tasks` → `/feature` → build → `/release`
+4. **Orchestration**: see `scripts/commands/runners.md`, add `#auto-dispatch` to a TODO.md task

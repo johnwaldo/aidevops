@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # memory-pressure-monitor.sh — Process-focused memory pressure monitor
 #
 # Monitors aidevops process health: individual RSS, process runtime, process count.
@@ -30,7 +32,9 @@
 # Usage:
 #   memory-pressure-monitor.sh              # Single check (for launchd)
 #   memory-pressure-monitor.sh --status     # Print current process + memory state
-#   memory-pressure-monitor.sh --daemon     # Continuous monitoring (60s interval)
+#   memory-pressure-monitor.sh --daemon     # Continuous monitoring (120s interval)
+#   memory-pressure-monitor.sh --stop       # Stop a running daemon
+#   memory-pressure-monitor.sh --restart    # Stop existing daemon and start a new one
 #   memory-pressure-monitor.sh --install    # Install launchd plist
 #   memory-pressure-monitor.sh --uninstall  # Remove launchd plist and state files
 #   memory-pressure-monitor.sh --help       # Show usage
@@ -60,6 +64,29 @@
 
 set -euo pipefail
 
+# --- Bash 3.2 re-exec self-heal (GH#19348, t2146) ----------------------------
+# This script uses `${var,,}` case conversion at lines ~463-466 (bash 4.0+)
+# to avoid `tr` subprocess forks in the pattern-matcher hot path. Running
+# under /bin/bash 3.2 on macOS the script aborts with "bad substitution"
+# before it can do any useful work. The associative-array maps at the old
+# lines 399/508 were already converted to sparse indexed arrays as a first
+# line of defense, but the case-conversion path is the showstopper.
+#
+# Sourcing shared-constants.sh triggers the framework-wide re-exec guard:
+# if this script is invoked under bash < 4 AND a modern bash is available
+# at /opt/homebrew/bin/bash, /usr/local/bin/bash, or linuxbrew, the guard
+# transparently re-execs this script under the modern bash. Transparent
+# self-heal; no behaviour change on bash 4+.
+#
+# If no modern bash is installed (user set AIDEVOPS_AUTO_UPGRADE_BASH=0),
+# the guard falls through and the script fails loudly on the first bash 4+
+# construct — the right signal for a configuration that deliberately opts
+# out of the upgrade path.
+_MEMPRESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)" || exit 1
+# shellcheck source=/dev/null
+source "${_MEMPRESS_DIR}/shared-constants.sh"
+unset _MEMPRESS_DIR
+
 # --- Configuration -----------------------------------------------------------
 
 readonly SCRIPT_NAME="memory-pressure-monitor"
@@ -86,8 +113,8 @@ readonly AUTO_KILL_SHELLCHECK="${AUTO_KILL_SHELLCHECK:-true}"
 
 # Notification — COOLDOWN_SECS and DAEMON_INTERVAL validated below with _validate_int
 COOLDOWN_SECS="${MEMORY_COOLDOWN_SECS:-300}"
-readonly NOTIFY_ENABLED="${MEMORY_NOTIFY:-true}"
-DAEMON_INTERVAL="${MEMORY_DAEMON_INTERVAL:-60}"
+readonly NOTIFY_ENABLED="${MEMORY_NOTIFY:-false}"
+DAEMON_INTERVAL="${MEMORY_DAEMON_INTERVAL:-120}"
 
 # Paths
 readonly LOG_DIR="${MEMORY_LOG_DIR:-${HOME}/.aidevops/logs}"
@@ -146,7 +173,7 @@ TOOL_RUNTIME_MAX=$(_validate_int TOOL_RUNTIME_MAX "$TOOL_RUNTIME_MAX" 1800 120)
 SESSION_COUNT_WARN=$(_validate_int SESSION_COUNT_WARN "$SESSION_COUNT_WARN" 8 2)
 AGGREGATE_RSS_WARN_MB=$(_validate_int AGGREGATE_RSS_WARN_MB "$AGGREGATE_RSS_WARN_MB" 8192 1024)
 COOLDOWN_SECS=$(_validate_int COOLDOWN_SECS "$COOLDOWN_SECS" 300 30)
-DAEMON_INTERVAL=$(_validate_int DAEMON_INTERVAL "$DAEMON_INTERVAL" 60 10)
+DAEMON_INTERVAL=$(_validate_int DAEMON_INTERVAL "$DAEMON_INTERVAL" 120 10)
 readonly COOLDOWN_SECS DAEMON_INTERVAL
 
 # --- Helpers ------------------------------------------------------------------
@@ -181,15 +208,13 @@ notify() {
 	fi
 
 	# terminal-notifier (preferred — clickable, persistent)
+	# Sound disabled — visual popup only. Was causing repeated system beeps
+	# every 5 min (cooldown interval) when thresholds were breached.
+	# To re-enable: add -sound "${sound}" back to the terminal-notifier call.
 	if command -v terminal-notifier &>/dev/null; then
-		local sound="default"
-		if [[ "${urgency}" == "critical" ]]; then
-			sound="Sosumi"
-		fi
 		terminal-notifier \
 			-title "${title}" \
 			-message "${message}" \
-			-sound "${sound}" \
 			-group "${SCRIPT_NAME}" \
 			-sender "com.apple.ActivityMonitor" 2>/dev/null || true
 		return 0
@@ -352,6 +377,184 @@ _is_app_process() {
 	printf '%s\n' "${APP_PROCESS_NAMES[@]}" | grep -qixF -- "$cmd_name"
 }
 
+# Batch-fetch process ages for a list of PIDs.
+# On Linux, reads /proc/$pid/stat (no subprocess per PID).
+# On macOS/fallback, issues a single `ps -p pid1,pid2,...` call instead of N calls.
+# Arguments: $@ = PIDs
+# Output: one line per PID: PID SECONDS (space-separated)
+_batch_get_process_ages() {
+	local -a pids=("$@")
+	[[ "${#pids[@]}" -eq 0 ]] && return 0
+
+	# Linux fast path: /proc is available — read each PID's stat without forking
+	if [[ -d "/proc" ]]; then
+		local uptime_secs
+		uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)
+		local clk_tck
+		clk_tck=$(getconf CLK_TCK 2>/dev/null || echo 100)
+		[[ "$clk_tck" =~ ^[0-9]+$ ]] || clk_tck=100
+		[[ "$clk_tck" -gt 0 ]] || clk_tck=100
+
+		local pid
+		for pid in "${pids[@]}"; do
+			local start_time
+			start_time=$(awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null || echo "")
+			if [[ -n "$start_time" && "$start_time" =~ ^[0-9]+$ ]]; then
+				local start_secs=$((start_time / clk_tck))
+				echo "$pid $((uptime_secs - start_secs))"
+			else
+				echo "$pid 0"
+			fi
+		done
+		return 0
+	fi
+
+	# macOS/fallback: single ps call for all PIDs at once
+	local pid_csv
+	pid_csv=$(printf '%s,' "${pids[@]}")
+	pid_csv="${pid_csv%,}"
+
+	# ps -p accepts comma-separated PIDs; output: PID ETIME (space-separated)
+	local ps_age_output
+	ps_age_output=$(ps -p "$pid_csv" -o pid=,etime= 2>/dev/null || true)
+
+	# Build a PID→etime lookup. PIDs are numeric, so a sparse indexed array
+	# is a drop-in for an associative array and works on bash 3.2 (GH#19348).
+	local -a etime_map=()
+	local p_pid p_etime
+	while IFS= read -r line; do
+		[[ -z "$line" ]] && continue
+		read -r p_pid p_etime <<<"$line"
+		[[ "$p_pid" =~ ^[0-9]+$ ]] || continue
+		etime_map[$p_pid]="${p_etime:-}"
+	done <<<"$ps_age_output"
+
+	# Convert etime strings to seconds for each requested PID
+	local pid
+	for pid in "${pids[@]}"; do
+		local etime="${etime_map[$pid]:-}"
+		if [[ -z "$etime" ]]; then
+			echo "$pid 0"
+			continue
+		fi
+		# Parse etime: [[DD-]HH:]MM:SS
+		etime=$(printf '%s' "$etime" | tr -d ' ')
+		local days=0 hours=0 minutes=0 seconds=0
+		if [[ "$etime" == *-* ]]; then
+			days="${etime%%-*}"
+			etime="${etime#*-}"
+		fi
+		local colon_count
+		colon_count=$(printf '%s' "$etime" | tr -cd ':' | wc -c | tr -d ' ')
+		if [[ "$colon_count" -eq 2 ]]; then
+			IFS=':' read -r hours minutes seconds <<<"$etime"
+		elif [[ "$colon_count" -eq 1 ]]; then
+			IFS=':' read -r minutes seconds <<<"$etime"
+		else
+			seconds="$etime"
+		fi
+		[[ "$days" =~ ^[0-9]+$ ]] || days=0
+		[[ "$hours" =~ ^[0-9]+$ ]] || hours=0
+		[[ "$minutes" =~ ^[0-9]+$ ]] || minutes=0
+		[[ "$seconds" =~ ^[0-9]+$ ]] || seconds=0
+		days=$((10#${days}))
+		hours=$((10#${hours}))
+		minutes=$((10#${minutes}))
+		seconds=$((10#${seconds}))
+		echo "$pid $((days * 86400 + hours * 3600 + minutes * 60 + seconds))"
+	done
+	return 0
+}
+
+# Check if a process command matches a monitoring pattern.
+# Simple patterns match against the command basename only (case-insensitive).
+# Regex patterns (containing ".*") match against the full command line.
+# Arguments: $1=pattern, $2=cmd_name (basename), $3=full_cmd
+# Returns: 0 if match, 1 if no match
+_matches_monitor_pattern() {
+	local pattern="$1"
+	local cmd_name="$2"
+	local full_cmd="$3"
+
+	if [[ "$pattern" == *".*"* ]]; then
+		# Regex pattern — match against full command line
+		# Use here-string to avoid issues with values starting with '-' or containing backslashes
+		if grep -iqE "$pattern" <<<"$full_cmd"; then
+			return 0
+		fi
+	else
+		# Simple pattern — match against basename only
+		# Use bash 4+ ${var,,} lowercasing to avoid tr subprocess forks
+		local cmd_lower="${cmd_name,,}"
+		local pattern_lower="${pattern,,}"
+		if [[ "$cmd_lower" == *"$pattern_lower"* ]]; then
+			return 0
+		fi
+	fi
+	return 1
+}
+
+# Check if a process should be excluded from monitoring results.
+# Excludes grep processes, this script itself, and already-seen PIDs.
+# Arguments: $1=pid, $2=cmd_name, $3=full_cmd
+# Uses caller-scope: seen_pids[] (read-only check)
+# Returns: 0 if should be skipped, 1 if should be included
+_should_skip_process() {
+	local pid="$1"
+	local cmd_name="$2"
+	local full_cmd="$3"
+
+	# Skip grep and this script
+	if [[ "$cmd_name" == "grep" ]] || [[ "$full_cmd" == *"${SCRIPT_NAME}"* ]]; then
+		return 0
+	fi
+
+	# Skip already-seen PIDs (dedup across overlapping patterns)
+	local seen_pid
+	for seen_pid in "${seen_pids[@]+"${seen_pids[@]}"}"; do
+		if [[ "$seen_pid" == "$pid" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Batch-fetch process ages and emit final pipe-delimited rows sorted by RSS.
+# Arguments: matched_rows[] and seen_pids[] from caller scope
+# Output: PID|RSS_MB|RUNTIME_SECS|COMMAND_NAME|FULL_COMMAND (sorted by RSS desc)
+_resolve_ages_and_emit() {
+	# No matches — nothing to emit
+	if [[ "${#matched_rows[@]}" -eq 0 ]]; then
+		return 0
+	fi
+
+	# Batch-fetch process ages for all matched PIDs in a single ps call.
+	# PIDs are numeric, so a sparse indexed array replaces the associative
+	# array (bash 4.0+ only) with identical semantics on bash 3.2 (GH#19348).
+	local -a age_map=()
+	local age_line age_pid age_secs
+	while IFS= read -r age_line; do
+		[[ -z "$age_line" ]] && continue
+		read -r age_pid age_secs <<<"$age_line"
+		[[ "$age_pid" =~ ^[0-9]+$ ]] || continue
+		age_map[$age_pid]="${age_secs:-0}"
+	done < <(_batch_get_process_ages "${seen_pids[@]}")
+
+	# Emit final rows with ages, then sort by RSS descending
+	# Rows use SOH (\x01) as delimiter — safe against colons in command names/args
+	local row
+	for row in "${matched_rows[@]}"; do
+		local r_pid r_rss r_cmd_name r_cmd
+		IFS=$'\1' read -r r_pid r_rss r_cmd_name r_cmd <<<"$row"
+		# Validate numeric fields after parsing — defense-in-depth against delimiter shifting
+		[[ "$r_pid" =~ ^[0-9]+$ ]] || continue
+		[[ "$r_rss" =~ ^[0-9]+$ ]] || continue
+		local r_age="${age_map[$r_pid]:-0}"
+		printf '%s|%s|%s|%s|%s\n' "$r_pid" "$r_rss" "$r_age" "$r_cmd_name" "$r_cmd"
+	done | sort -t'|' -k2 -rn
+	return 0
+}
+
 # Collect all monitored processes with their RSS and runtime
 # Output: one line per process: PID|RSS_MB|RUNTIME_SECS|COMMAND_NAME|FULL_COMMAND
 #
@@ -361,10 +564,16 @@ _is_app_process() {
 _collect_monitored_processes() {
 	# Collect all processes once, then filter by pattern against basename
 	local ps_output
-	ps_output=$(ps axo pid=,rss=,command= 2>/dev/null || true)
+	# t2190: ps axwwo to avoid Linux procps truncating the command column, which
+	# otherwise strips the pattern-matching substring from worker commands.
+	ps_output=$(ps axwwo pid=,rss=,command= 2>/dev/null || true)
 
 	# Track PIDs we've already emitted to avoid duplicates from overlapping patterns
 	local -a seen_pids=()
+
+	# Accumulate matched process data before fetching ages (avoids per-PID ps forks)
+	# Format: PID<SOH>RSS_MB<SOH>CMD_NAME<SOH>FULL_CMD (SOH=\x01, safe delimiter — never appears in cmd)
+	local -a matched_rows=()
 
 	local pattern
 	for pattern in "${MONITORED_PATTERNS[@]}"; do
@@ -379,59 +588,31 @@ _collect_monitored_processes() {
 			[[ "$rss_kb" =~ ^[0-9]+$ ]] || rss_kb=0
 
 			# Extract short command name (basename of the executable path)
+			# Use parameter expansion — avoids a subprocess fork per process per pattern
 			local cmd_path="${cmd%% *}"
-			local cmd_name
-			cmd_name=$(basename "$cmd_path" 2>/dev/null || echo "unknown")
+			local cmd_name="${cmd_path##*/}"
+			[[ -z "$cmd_name" ]] && cmd_name="unknown"
 
-			# Match pattern against the command basename, NOT the full command line.
-			# This prevents false positives like `zsh -l -c "opencode"` matching
-			# the "opencode" pattern — zsh is not an opencode process.
-			# Exception: patterns containing ".*" (regex) are matched against full
-			# command for cases like "node.*language-server".
-			local match=false
-			if [[ "$pattern" == *".*"* ]]; then
-				# Regex pattern — match against full command line
-				if echo "$cmd" | grep -iqE "$pattern"; then
-					match=true
-				fi
-			else
-				# Simple pattern — match against basename only
-				local cmd_lower pattern_lower
-				cmd_lower=$(printf '%s' "$cmd_name" | tr '[:upper:]' '[:lower:]')
-				pattern_lower=$(printf '%s' "$pattern" | tr '[:upper:]' '[:lower:]')
-				if [[ "$cmd_lower" == *"$pattern_lower"* ]]; then
-					match=true
-				fi
-			fi
-
-			if [[ "$match" != "true" ]]; then
+			# Check pattern match
+			if ! _matches_monitor_pattern "$pattern" "$cmd_name" "$cmd"; then
 				continue
 			fi
 
-			# Skip grep, this script, and already-seen PIDs
-			if [[ "$cmd_name" == "grep" ]] || [[ "$cmd" == *"${SCRIPT_NAME}"* ]]; then
-				continue
-			fi
-			local seen_pid
-			local is_dup=false
-			for seen_pid in "${seen_pids[@]+"${seen_pids[@]}"}"; do
-				if [[ "$seen_pid" == "$pid" ]]; then
-					is_dup=true
-					break
-				fi
-			done
-			if [[ "$is_dup" == "true" ]]; then
+			# Check exclusions and dedup
+			if _should_skip_process "$pid" "$cmd_name" "$cmd"; then
 				continue
 			fi
 			seen_pids+=("$pid")
 
 			local rss_mb=$((rss_kb / 1024))
-			local runtime
-			runtime=$(_get_process_age "$pid")
-
-			printf '%s|%s|%s|%s|%s\n' "$pid" "$rss_mb" "$runtime" "$cmd_name" "$cmd"
+			# Accumulate row — age fetched in batch below
+			# Use SOH (\x01) as delimiter — safe because it never appears in process names or args
+			matched_rows+=("${pid}"$'\1'"${rss_mb}"$'\1'"${cmd_name}"$'\1'"${cmd}")
 		done <<<"$ps_output"
-	done | sort -t'|' -k2 -rn
+	done
+
+	# Resolve ages and emit sorted output
+	_resolve_ages_and_emit
 	return 0
 }
 
@@ -439,7 +620,8 @@ _collect_monitored_processes() {
 _count_interactive_sessions() {
 	local count=0
 	local ps_output
-	ps_output=$(ps axo pid=,tty=,command= 2>/dev/null | grep -iE "(opencode|claude)" | grep -v "grep" | grep -v "run " || true)
+	# t2190: ps axwwo to avoid Linux procps truncating the command column.
+	ps_output=$(ps axwwo pid=,tty=,command= 2>/dev/null | grep -iE "(opencode|claude)" | grep -v "grep" | grep -v "run " || true)
 
 	while read -r _ tty _; do
 		# Parse with read builtin — avoids spawning echo/awk subshells per line
@@ -821,6 +1003,27 @@ _status_print_os_and_config() {
 	echo "  Notifications:            ${NOTIFY_ENABLED}"
 
 	echo ""
+	echo "--- Daemon ---"
+	echo ""
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	local lock_dir="${TMPDIR:-/tmp}/aidevops-memory-pressure.lockdir"
+	# Check lock dir first (atomic lock), fall back to legacy PID file
+	local daemon_pid=""
+	if [[ -f "${lock_dir}/pid" ]]; then
+		daemon_pid=$(cat "${lock_dir}/pid" 2>/dev/null) || daemon_pid=""
+	fi
+	if [[ -z "$daemon_pid" ]] && [[ -f "${pid_file}" ]]; then
+		daemon_pid=$(cat "${pid_file}" 2>/dev/null) || daemon_pid=""
+	fi
+	if [[ -n "$daemon_pid" ]] && [[ "$daemon_pid" =~ ^[0-9]+$ ]] && kill -0 "$daemon_pid" 2>/dev/null; then
+		echo "  Daemon: running (PID ${daemon_pid})"
+	elif [[ -n "$daemon_pid" ]]; then
+		echo "  Daemon: not running (stale lock)"
+	else
+		echo "  Daemon: not running"
+	fi
+
+	echo ""
 	echo "--- Launchd ---"
 	echo ""
 	if [[ -f "${PLIST_PATH}" ]]; then
@@ -851,8 +1054,44 @@ cmd_status() {
 }
 
 # Run continuous monitoring loop with adaptive polling (faster when shellcheck detected)
+# Prevents multiple concurrent daemon instances via atomic mkdir lock (GH#17408, GH#17674).
 cmd_daemon() {
-	echo "[${SCRIPT_NAME}] Starting daemon mode (interval: ${DAEMON_INTERVAL}s, fast: 10s when shellcheck detected)"
+	ensure_dirs
+
+	# Atomic lock using mkdir (atomic on all filesystems, works on macOS bash 3.2)
+	# Replaces the previous PID file check-then-write which had a TOCTOU race (GH#17674).
+	local lock_dir="${TMPDIR:-/tmp}/aidevops-memory-pressure.lockdir"
+	if ! mkdir "$lock_dir" 2>/dev/null; then
+		# Lock exists — check if the holding process is still alive
+		local lock_pid=""
+		lock_pid=$(cat "${lock_dir}/pid" 2>/dev/null) || lock_pid=""
+		if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
+			echo "[${SCRIPT_NAME}] Daemon already running (PID ${lock_pid}). Use --stop or --restart to control it." >&2
+			return 1
+		fi
+		# Stale lock — remove and retry
+		rm -rf "$lock_dir"
+		if ! mkdir "$lock_dir" 2>/dev/null; then
+			echo "[${SCRIPT_NAME}] Failed to acquire lock after stale removal" >&2
+			return 1
+		fi
+	fi
+
+	# Write our PID into the lock dir — surface failures instead of swallowing
+	if ! printf '%s' "$$" >"${lock_dir}/pid"; then
+		echo "[${SCRIPT_NAME}] Failed to write PID to lock dir" >&2
+		rmdir "$lock_dir" 2>/dev/null
+		return 1
+	fi
+
+	# Also write legacy PID file for cmd_stop/cmd_status compatibility
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	printf '%s' "$$" >"${pid_file}" || echo "[${SCRIPT_NAME}] Warning: failed to write legacy PID file" >&2
+
+	# Remove lock dir and PID file on exit (Ctrl+C, SIGTERM, or normal exit)
+	trap 'rm -rf "${lock_dir}"; rm -f "${pid_file}"; trap - EXIT INT TERM' EXIT INT TERM
+
+	echo "[${SCRIPT_NAME}] Starting daemon mode (PID $$, interval: ${DAEMON_INTERVAL}s, fast: 10s when shellcheck detected)"
 	echo "[${SCRIPT_NAME}] Press Ctrl+C to stop"
 
 	while true; do
@@ -860,7 +1099,7 @@ cmd_daemon() {
 		cmd_check || check_exit=$?
 
 		# Adaptive polling: if shellcheck processes are running, poll every 10s
-		# instead of the normal 60s interval. ShellCheck can grow from 0 to 18 GB
+		# instead of the normal interval. ShellCheck can grow from 0 to 18 GB
 		# in under 60s (observed Mar 7 crash), so the normal interval is too slow.
 		local interval="$DAEMON_INTERVAL"
 		if pgrep -x shellcheck >/dev/null 2>&1; then
@@ -871,7 +1110,68 @@ cmd_daemon() {
 	done
 }
 
-# Install launchd plist for periodic monitoring (every 30 seconds)
+# Stop a running daemon by sending SIGTERM to the PID.
+# Checks both the atomic lock dir and legacy PID file for the daemon PID.
+cmd_stop() {
+	ensure_dirs
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	local lock_dir="${TMPDIR:-/tmp}/aidevops-memory-pressure.lockdir"
+
+	# Try lock dir first (new atomic lock), fall back to legacy PID file
+	local pid=""
+	if [[ -f "${lock_dir}/pid" ]]; then
+		pid=$(cat "${lock_dir}/pid" 2>/dev/null) || pid=""
+	fi
+	if [[ -z "$pid" ]] && [[ -f "${pid_file}" ]]; then
+		pid=$(cat "${pid_file}" 2>/dev/null) || pid=""
+	fi
+
+	if [[ -z "$pid" ]] || ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+		echo "[${SCRIPT_NAME}] No valid PID found. Is the daemon running?" >&2
+		# Clean up any stale files
+		rm -f "${pid_file}"
+		rm -rf "${lock_dir}"
+		return 1
+	fi
+
+	if ! kill -0 "$pid" 2>/dev/null; then
+		echo "[${SCRIPT_NAME}] No running daemon found (PID ${pid} is gone). Removing stale lock."
+		rm -f "${pid_file}"
+		rm -rf "${lock_dir}"
+		return 0
+	fi
+
+	echo "[${SCRIPT_NAME}] Stopping daemon (PID ${pid})..."
+	kill -TERM "$pid" 2>/dev/null || true
+
+	# Wait up to 5 seconds for the process to exit
+	local waited=0
+	while kill -0 "$pid" 2>/dev/null && [[ "$waited" -lt 5 ]]; do
+		sleep 1
+		waited=$((waited + 1))
+	done
+
+	if kill -0 "$pid" 2>/dev/null; then
+		echo "[${SCRIPT_NAME}] Daemon did not stop after SIGTERM, sending SIGKILL..."
+		kill -KILL "$pid" 2>/dev/null || true
+	fi
+
+	rm -f "${pid_file}"
+	rm -rf "${lock_dir}"
+	echo "[${SCRIPT_NAME}] Daemon stopped."
+	return 0
+}
+
+# Stop any running daemon and start a fresh one.
+cmd_restart() {
+	local stop_rc=0
+	cmd_stop 2>/dev/null || stop_rc=$?
+	# stop_rc=1 is acceptable (no daemon was running)
+	cmd_daemon
+	return $?
+}
+
+# Install launchd plist for periodic monitoring (every 300 seconds / 5 minutes)
 cmd_install() {
 	# Resolve script path — prefer installed location
 	local script_path
@@ -901,7 +1201,7 @@ cmd_install() {
 		<string>${script_path}</string>
 	</array>
 	<key>StartInterval</key>
-	<integer>30</integer>
+	<integer>300</integer>
 	<key>StandardOutPath</key>
 	<string>${home_escaped}/.aidevops/logs/memory-pressure-launchd.log</string>
 	<key>StandardErrorPath</key>
@@ -909,7 +1209,7 @@ cmd_install() {
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<string>$(aidevops_launchd_sanitized_path "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")</string>
 		<key>HOME</key>
 		<string>${home_escaped}</string>
 	</dict>
@@ -929,12 +1229,13 @@ EOF
 
 	# Load the plist
 	launchctl bootout "gui/$(id -u)" "${PLIST_PATH}" 2>/dev/null || true
+	# shell-portability: ignore next — memory-pressure-monitor is macOS-only (launchd)
 	launchctl bootstrap "gui/$(id -u)" "${PLIST_PATH}"
 
 	echo "Installed and loaded: ${LAUNCHD_LABEL}"
 	echo "Plist: ${PLIST_PATH}"
 	echo "Log: ${LOG_FILE}"
-	echo "Check interval: 30 seconds"
+	echo "Check interval: 300 seconds"
 	return 0
 }
 
@@ -948,9 +1249,16 @@ cmd_uninstall() {
 		echo "Not installed"
 	fi
 
-	# Clean up state files
+	# Stop any running daemon before cleaning up
+	cmd_stop 2>/dev/null || true
+
+	# Clean up state files and lock directory
+	local pid_file="${STATE_DIR}/memory-pressure-monitor.pid"
+	local lock_dir="${TMPDIR:-/tmp}/aidevops-memory-pressure.lockdir"
 	rm -f "${STATE_DIR}"/memory-pressure-*.cooldown
-	echo "Cleaned up state files"
+	rm -f "${pid_file}"
+	rm -rf "${lock_dir}"
+	echo "Cleaned up state files and lock directory"
 	return 0
 }
 
@@ -963,7 +1271,9 @@ Commands:
   --check, -c       Single check (default, for launchd)
   --status, -s      Print current process + memory state
   --daemon, -d      Continuous monitoring (${DAEMON_INTERVAL}s interval)
-  --install, -i     Install launchd plist (runs every 60s)
+  --stop            Stop a running daemon (via lock dir)
+  --restart         Stop existing daemon and start a new one
+  --install, -i     Install launchd plist (runs every 300s)
   --uninstall, -u   Remove launchd plist and state files
   --help, -h        Show this help
 
@@ -1011,6 +1321,12 @@ main() {
 		;;
 	--daemon | -d | daemon)
 		cmd_daemon
+		;;
+	--stop | stop)
+		cmd_stop
+		;;
+	--restart | restart)
+		cmd_restart
 		;;
 	--install | -i | install)
 		cmd_install

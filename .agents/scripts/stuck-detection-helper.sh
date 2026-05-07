@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # stuck-detection-helper.sh - Advisory stuck detection for long-running workers (t1332)
 #
 # Deterministic utility for milestone tracking and GitHub label management.
@@ -51,11 +53,9 @@ SD_REPO="${SUPERVISOR_STUCK_DETECTION_REPO:-}"
 # COLOURS (stderr output)
 # ============================================================
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=shared-constants.sh
+[[ -f "${SCRIPT_DIR}/shared-constants.sh" ]] && source "${SCRIPT_DIR}/shared-constants.sh"
 
 # ============================================================
 # STATE FILE
@@ -366,7 +366,7 @@ ${suggested_actions}
 *This is an advisory notification only. No automated action has been taken. The worker continues running. The \`${STUCK_LABEL}\` label will be automatically removed if the task completes successfully.*"
 
 	local comment_failed=0
-	gh issue comment "$issue_number" --repo "$repo_slug" \
+	gh_issue_comment "$issue_number" --repo "$repo_slug" \
 		--body "$comment_body" || {
 		_sd_log_warn "failed to comment on issue #$issue_number"
 		comment_failed=1
@@ -493,7 +493,7 @@ cmd_label_clear() {
 	}
 
 	# Post resolution comment
-	gh issue comment "$issue_number" --repo "$repo_slug" \
+	gh_issue_comment "$issue_number" --repo "$repo_slug" \
 		--body "Stuck detection resolved: task completed successfully. Removing \`${STUCK_LABEL}\` label." \
 		2>/dev/null || true
 

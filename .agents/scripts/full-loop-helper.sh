@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
-# Full Development Loop Orchestrator — state management for AI-driven dev workflow.
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+# =============================================================================
+# Full Development Loop Orchestrator -- state management for AI-driven dev workflow.
+# =============================================================================
 # Phases: task -> preflight -> pr-create -> pr-review -> postflight -> deploy
 # Decision logic lives in full-loop.md; this script handles state + background exec.
+#
+# Sub-libraries (sourced below):
+#   full-loop-helper-state.sh   -- state persistence, phase emitters, lifecycle commands
+#   full-loop-helper-commit.sh  -- staging, validators, PR creation, merge summary
+#   full-loop-helper-merge.sh   -- merge execution, admin fallback, resource unlocking
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
 source "${SCRIPT_DIR}/shared-constants.sh"
+source "${SCRIPT_DIR}/shared-claim-lifecycle.sh"
 
 readonly SCRIPT_DIR
 readonly STATE_DIR=".agents/loop-state"
 readonly STATE_FILE="${STATE_DIR}/full-loop.local.state"
 readonly DEFAULT_MAX_TASK_ITERATIONS=50 DEFAULT_MAX_PREFLIGHT_ITERATIONS=5 DEFAULT_MAX_PR_ITERATIONS=20
-readonly BOLD='\033[1m'
+[[ -z "${BOLD+x}" ]] && BOLD='\033[1m'
 
 HEADLESS="${FULL_LOOP_HEADLESS:-false}"
 _FG_PID_FILE=""
@@ -23,355 +33,179 @@ print_phase() {
 	printf "\n${BOLD}${CYAN}=== Phase: %s ===${NC}\n${CYAN}%s${NC}\n\n" "$1" "$2"
 }
 
-save_state() {
-	local phase="$1" prompt="$2" pr_number="${3:-}" started_at="${4:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
-	mkdir -p "$STATE_DIR"
-	cat >"$STATE_FILE" <<EOF
----
-active: true
-phase: ${phase}
-started_at: "${started_at}"
-updated_at: "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-pr_number: "${pr_number}"
-max_task_iterations: ${MAX_TASK_ITERATIONS:-$DEFAULT_MAX_TASK_ITERATIONS}
-max_preflight_iterations: ${MAX_PREFLIGHT_ITERATIONS:-$DEFAULT_MAX_PREFLIGHT_ITERATIONS}
-max_pr_iterations: ${MAX_PR_ITERATIONS:-$DEFAULT_MAX_PR_ITERATIONS}
-skip_preflight: ${SKIP_PREFLIGHT:-false}
-skip_postflight: ${SKIP_POSTFLIGHT:-false}
-skip_runtime_testing: ${SKIP_RUNTIME_TESTING:-false}
-no_auto_pr: ${NO_AUTO_PR:-false}
-no_auto_deploy: ${NO_AUTO_DEPLOY:-false}
-headless: ${HEADLESS:-false}
----
+# --- Source sub-libraries ---
 
-${prompt}
-EOF
-}
+# shellcheck source=./full-loop-helper-state.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via $SCRIPT_DIR
+source "${SCRIPT_DIR}/full-loop-helper-state.sh"
 
-load_state() {
-	[[ -f "$STATE_FILE" ]] || return 1
-	# Pre-initialize all state variables with safe defaults so that set -u does
-	# not abort when the state file is incomplete (missing fields are never set
-	# by the awk parse loop, leaving variables unbound).
-	PHASE=""
-	ACTIVE=""
-	ITERATION=""
-	STARTED_AT="unknown"
-	UPDATED_AT=""
-	PR_NUMBER=""
-	MAX_TASK_ITERATIONS="$DEFAULT_MAX_TASK_ITERATIONS"
-	MAX_PREFLIGHT_ITERATIONS="$DEFAULT_MAX_PREFLIGHT_ITERATIONS"
-	MAX_PR_ITERATIONS="$DEFAULT_MAX_PR_ITERATIONS"
-	SKIP_PREFLIGHT="false"
-	SKIP_POSTFLIGHT="false"
-	SKIP_RUNTIME_TESTING="false"
-	NO_AUTO_PR="false"
-	NO_AUTO_DEPLOY="false"
-	HEADLESS="${FULL_LOOP_HEADLESS:-false}"
-	SAVED_PROMPT=""
-	# Single-pass parse of YAML frontmatter — safe variable assignment via printf -v
-	local _key _val _line
-	while IFS= read -r _line; do
-		_key="${_line%%=*}"
-		_val="${_line#*=}"
-		# Allowlist: only set known state variables
-		case "$_key" in
-		PHASE | ACTIVE | ITERATION | STARTED_AT | UPDATED_AT | \
-			MAX_TASK_ITERATIONS | MAX_PREFLIGHT_ITERATIONS | \
-			MAX_PR_ITERATIONS | SKIP_PREFLIGHT | SKIP_POSTFLIGHT | SKIP_RUNTIME_TESTING | \
-			NO_AUTO_PR | NO_AUTO_DEPLOY | HEADLESS | PR_NUMBER)
-			printf -v "$_key" '%s' "$_val"
-			;;
-		esac
-	done < <(awk -F': ' '/^---$/{n++;next} n==1 && NF>=2{
-		gsub(/[" ]/, "", $2); k=$1; gsub(/-/, "_", k)
-		print toupper(k) "=" $2
-	}' "$STATE_FILE")
-	CURRENT_PHASE="${PHASE:-}"
-	SAVED_PROMPT=$(sed -n '/^---$/,/^---$/d; p' "$STATE_FILE")
-	return 0
-}
+# shellcheck source=./full-loop-helper-commit.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via $SCRIPT_DIR
+source "${SCRIPT_DIR}/full-loop-helper-commit.sh"
 
-is_loop_active() { [[ -f "$STATE_FILE" ]] && grep -q '^active: true' "$STATE_FILE"; }
+# shellcheck source=./full-loop-helper-merge.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via $SCRIPT_DIR
+source "${SCRIPT_DIR}/full-loop-helper-merge.sh"
 
-is_aidevops_repo() {
-	local r
-	r=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
-	[[ "$r" == *"/aidevops"* ]] || [[ -f "$r/.aidevops-repo" ]]
-}
-get_current_branch() { git branch --show-current 2>/dev/null || echo ""; }
-is_on_feature_branch() {
-	local b
-	b=$(get_current_branch)
-	[[ -n "$b" && "$b" != "main" && "$b" != "master" ]]
-}
+# --- cmd_commit_and_pr ---
+# Kept in the orchestrator because the function body exceeds 100 lines,
+# triggering the function-complexity gate. Moving it to a sub-library would
+# create a new (file, fname) identity-key violation. See reference/large-file-split.md §3.
+#
+# Commit-and-PR: stage, commit, rebase, push, create PR, post merge summary.
+# Collapses full-loop steps 4.1-4.2.1 into a single deterministic call.
+# Workers and interactive sessions both use this — no parallel logic.
+#
+# Usage: full-loop-helper.sh commit-and-pr --issue <N> --message <msg> [--title <title>] [--summary <what>] [--testing <how>] [--decisions <notes>] [--label <label>...] [--allow-parent-close] [--skip-hooks]
+# Exit codes: 0 = PR created (prints PR number to stdout), 1 = failure
+# --allow-parent-close: skip the parent-task keyword guard (final-phase PR only)
+# --skip-hooks: pass --no-verify to git push (bypasses pre-push hooks). Use for doc-only PRs
+#   after manually verifying no secrets/private-slugs in the diff. See GH#20138.
+#
+# On rebase conflict: returns 1 with instructions. Caller must resolve and retry.
+# On push failure: returns 1. Caller should check remote state.
+# On PR creation failure: returns 1. Changes are committed and pushed — caller
+# can create the PR manually.
+cmd_commit_and_pr() {
+	local issue_number="" commit_message="" pr_title="" summary_what="" summary_testing="" summary_decisions=""
+	local -a extra_labels=()
+	local allow_parent_close=0
+	local skip_hooks=0
 
-# Phase emitters — AI reads these markers and acts per full-loop.md
-emit_task_phase() {
-	print_phase "Task Development" "AI will iterate on task until TASK_COMPLETE"
-	echo "PROMPT: $1"
-	echo "When complete, emit: <promise>TASK_COMPLETE</promise>"
-}
-emit_preflight_phase() {
-	print_phase "Preflight" "AI runs quality checks"
-	[[ "${SKIP_PREFLIGHT:-false}" == "true" ]] && {
-		print_warning "Preflight skipped"
-		echo "<promise>PREFLIGHT_SKIPPED</promise>"
-		return 0
-	}
-	echo "Run quality checks per full-loop.md guidance."
-}
-emit_pr_create_phase() {
-	print_phase "PR Creation" "AI creates pull request"
-	[[ "${NO_AUTO_PR:-false}" == "true" ]] && ! is_headless && {
-		print_warning "Auto PR disabled"
-		return 0
-	}
-	echo "Create PR per full-loop.md guidance."
-}
-emit_pr_review_phase() {
-	print_phase "PR Review" "AI monitors CI and reviews"
-	echo "Monitor PR per full-loop.md guidance."
-}
-emit_postflight_phase() {
-	print_phase "Postflight" "AI verifies release health"
-	[[ "${SKIP_POSTFLIGHT:-false}" == "true" ]] && {
-		print_warning "Postflight skipped"
-		echo "<promise>POSTFLIGHT_SKIPPED</promise>"
-		return 0
-	}
-	echo "Verify release per full-loop.md guidance."
-}
-emit_deploy_phase() {
-	print_phase "Deploy" "AI deploys changes"
-	! is_aidevops_repo && {
-		print_info "Not aidevops repo, skipping deploy"
-		return 0
-	}
-	[[ "${NO_AUTO_DEPLOY:-false}" == "true" ]] && {
-		print_warning "Auto deploy disabled"
-		return 0
-	}
-	echo "Run setup.sh per full-loop.md guidance."
-}
+	_parse_commit_and_pr_args "$@" || return 1
 
-# Initialize option variables with defaults so set -u doesn't crash on
-# export when flags are not passed.
-_init_start_defaults() {
-	MAX_TASK_ITERATIONS="${MAX_TASK_ITERATIONS:-$DEFAULT_MAX_TASK_ITERATIONS}"
-	MAX_PREFLIGHT_ITERATIONS="${MAX_PREFLIGHT_ITERATIONS:-$DEFAULT_MAX_PREFLIGHT_ITERATIONS}"
-	MAX_PR_ITERATIONS="${MAX_PR_ITERATIONS:-$DEFAULT_MAX_PR_ITERATIONS}"
-	SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-false}"
-	SKIP_POSTFLIGHT="${SKIP_POSTFLIGHT:-false}"
-	SKIP_RUNTIME_TESTING="${SKIP_RUNTIME_TESTING:-false}"
-	NO_AUTO_PR="${NO_AUTO_PR:-false}"
-	NO_AUTO_DEPLOY="${NO_AUTO_DEPLOY:-false}"
-	DRY_RUN="${DRY_RUN:-false}"
-	_BACKGROUND=false
-	return 0
-}
+	# Validate inputs and detect repo/branch (sets $repo and $branch in this scope)
+	local repo="" branch=""
+	_validate_commit_and_pr_inputs "$issue_number" "$commit_message" || return 1
 
-# Parse start subcommand options. Sets global option variables and _BACKGROUND.
-# Arguments: all remaining args after the prompt string.
-# Returns: 0 on success, 1 on unknown option.
-_parse_start_options() {
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--max-task-iterations)
-			MAX_TASK_ITERATIONS="$2"
-			shift 2
-			;;
-		--max-preflight-iterations)
-			MAX_PREFLIGHT_ITERATIONS="$2"
-			shift 2
-			;;
-		--max-pr-iterations)
-			MAX_PR_ITERATIONS="$2"
-			shift 2
-			;;
-		--skip-preflight)
-			SKIP_PREFLIGHT=true
-			shift
-			;;
-		--skip-postflight)
-			SKIP_POSTFLIGHT=true
-			shift
-			;;
-		--skip-runtime-testing)
-			SKIP_RUNTIME_TESTING=true
-			shift
-			;;
-		--no-auto-pr)
-			NO_AUTO_PR=true
-			shift
-			;;
-		--no-auto-deploy)
-			NO_AUTO_DEPLOY=true
-			shift
-			;;
-		--headless)
-			HEADLESS=true
-			shift
-			;;
-		--dry-run)
-			DRY_RUN=true
-			shift
-			;;
-		--background | --bg)
-			_BACKGROUND=true
-			shift
-			;;
-		*)
-			print_error "Unknown option: $1"
+	_stage_and_commit "$commit_message" || return 1
+	# t2842: project-aware validators (auto-fix format/lint, fail-closed typecheck).
+	# Inserted between commit and push so amends apply to the same commit
+	# the worker just made, and so failures abort BEFORE we push broken code.
+	_run_project_validators "$skip_hooks" || return 1
+	_rebase_and_push "$branch" "$skip_hooks" || return 1
+
+	# Build PR metadata (t2720: prefer tNNN from TODO.md so issue-sync's
+	# PR-merge auto-completion regex can extract a task_id and flip [ ] → [x]).
+	# t2825/RC3: use _compose_pr_title so a commit_message that already begins
+	# with tNNN: or GH#NNN: is not double-prefixed (canonical failure: PR #20817).
+	if [[ -z "$pr_title" ]]; then
+		pr_title="$(_compose_pr_title "$issue_number" "$commit_message")"
+	fi
+
+	# t3088: use canonical session_origin_label() instead of hand-rolling the
+	# headless-env check. Previous logic checked only HEADLESS=1 / FULL_LOOP_HEADLESS=true,
+	# while detect_session_origin() (consulted by gh_create_pr's self-injection)
+	# also recognises AIDEVOPS_HEADLESS, OPENCODE_HEADLESS, GITHUB_ACTIONS, and
+	# AIDEVOPS_SESSION_ORIGIN. When the two checks disagreed (e.g., AIDEVOPS_HEADLESS=true
+	# without HEADLESS=1) the worker PR ended up with BOTH origin:interactive and
+	# origin:worker labels — the t2200 mutual-exclusion violation observed on PR #21825.
+	# Single source of truth: session_origin_label() returns "origin:worker" or
+	# "origin:interactive" based on the canonical env-var set.
+	local origin_label
+	origin_label=$(session_origin_label)
+
+	local sig_footer=""
+	local sig_helper="${SCRIPT_DIR}/gh-signature-helper.sh"
+	if [[ -x "$sig_helper" ]]; then
+		sig_footer=$("$sig_helper" footer 2>/dev/null || echo "")
+	fi
+
+	local files_changed=""
+	files_changed=$(git diff --name-only origin/main..HEAD 2>/dev/null | tr '\n' ', ' | sed 's/,$//' || echo "")
+
+	# t2242: Determine closing keyword — auto-swap Resolves to For when linked
+	# issue has parent-task label, unless --allow-parent-close overrides.
+	local closing_keyword="Resolves"
+	if [[ "$allow_parent_close" -eq 1 ]]; then
+		closing_keyword="Resolves"
+	elif _issue_has_parent_task_label "$issue_number" "$repo"; then
+		closing_keyword="For"
+		print_info "Issue #${issue_number} has parent-task label — using 'For' keyword (t2242)"
+	fi
+
+	local pr_body=""
+	pr_body=$(_build_pr_body "$issue_number" "$summary_what" "$summary_testing" "$files_changed" "$sig_footer" "$closing_keyword")
+
+	# t2046: parent-task keyword guard — prevent Resolves/Closes/Fixes on
+	# parent-task issues. The parent must stay open until all phase children merge.
+	# Runs in --strict mode (exit 2 = abort PR creation). Pass --allow-parent-close
+	# for the legitimate final-phase PR that intentionally closes the parent tracker.
+	local keyword_guard="${SCRIPT_DIR}/parent-task-keyword-guard.sh"
+	if [[ -x "$keyword_guard" ]]; then
+		local tmp_pr_body
+		tmp_pr_body=$(mktemp)
+		printf '%s\n' "$pr_body" >"$tmp_pr_body"
+		local guard_args=("check-body" "--body-file" "$tmp_pr_body" "--repo" "$repo" "--strict")
+		[[ "$allow_parent_close" -eq 1 ]] && guard_args+=("--allow-parent-close")
+		local guard_rc=0
+		"$keyword_guard" "${guard_args[@]}" 2>&1 >&2 || guard_rc=$?
+		rm -f "$tmp_pr_body"
+		if [[ "$guard_rc" -eq 2 ]]; then
+			print_error "Aborting PR creation: parent-task keyword violation (t2046). See error above."
 			return 1
-			;;
-		esac
-	done
+		fi
+	fi
+
+	# t1955: Validate dispatch claim before creating PR. In headless mode,
+	# abort if this worker was stale-recovered and replaced by another runner.
+	_validate_worker_claim "$issue_number" "$repo" || {
+		print_error "Aborting: dispatch claim no longer valid for #${issue_number} (t1955)"
+		return 1
+	}
+
+	# t2091: Guard against filing PRs on already-closed issues.
+	# A worker racing an interactive session may finish implementation after
+	# the issue was already resolved. Opening a PR against a closed issue
+	# creates noise, wastes review time, and can trigger duplicate closures.
+	# Applies to all modes (interactive and headless).
+	local _pre_pr_issue_state=""
+	_pre_pr_issue_state=$(gh issue view "$issue_number" --repo "$repo" \
+		--json state -q '.state' 2>/dev/null || echo "")
+	if [[ "$_pre_pr_issue_state" == "CLOSED" ]]; then
+		print_error "Aborting: issue #${issue_number} is already closed — not opening a duplicate PR (t2091)"
+		gh_issue_comment "$issue_number" --repo "$repo" \
+			--body "<!-- ops:start — workers: skip this comment, it is audit trail not implementation context -->
+Worker aborted PR creation: issue #${issue_number} was already closed by the time this session completed implementation. No PR was opened.
+<!-- ops:end -->" \
+			2>/dev/null || true
+		return 1
+	fi
+
+	local pr_number=""
+	pr_number=$(_create_pr "$repo" "$pr_title" "$pr_body" "$origin_label" "${extra_labels[@]+"${extra_labels[@]}"}") || return 1
+
+	_post_merge_summary "$pr_number" "$repo" "$issue_number" "$summary_what" "$files_changed" "$summary_testing" "$summary_decisions"
+	_label_issue_in_review "$issue_number" "$repo"
+
+	# Output PR number for caller to pass to `merge`
+	printf '%s\n' "$pr_number"
 	return 0
 }
 
-# Launch the loop in the background via nohup.
-# Arguments: $1 — prompt string.
-_launch_background() {
-	local prompt="$1"
-	mkdir -p "$STATE_DIR"
-	export MAX_TASK_ITERATIONS MAX_PREFLIGHT_ITERATIONS MAX_PR_ITERATIONS
-	export SKIP_PREFLIGHT SKIP_POSTFLIGHT SKIP_RUNTIME_TESTING NO_AUTO_PR NO_AUTO_DEPLOY FULL_LOOP_HEADLESS="$HEADLESS"
-	nohup "$0" _run_foreground "$prompt" >"${STATE_DIR}/full-loop.log" 2>&1 &
-	echo "$!" >"${STATE_DIR}/full-loop.pid"
-	print_success "Background loop started (PID: $!). Use 'status' or 'logs' to monitor."
-	return 0
-}
-
-cmd_start() {
-	local prompt="$1"
-	shift
-
-	_init_start_defaults
-	_parse_start_options "$@" || return 1
-
-	[[ -z "$prompt" ]] && {
-		print_error "Usage: full-loop-helper.sh start \"<prompt>\" [options]"
-		return 1
-	}
-	is_loop_active && {
-		print_warning "Loop already active. Use 'resume' or 'cancel'."
-		return 1
-	}
-	is_on_feature_branch || {
-		print_error "Must be on a feature branch"
-		return 1
-	}
-
-	printf "\n${BOLD}${BLUE}=== FULL DEVELOPMENT LOOP - STARTING ===${NC}\n  Task: %s\n  Branch: %s | Headless: %s\n\n" \
-		"$prompt" "$(get_current_branch)" "$HEADLESS"
-	[[ "${DRY_RUN:-false}" == "true" ]] && {
-		print_info "Dry run - no changes made"
-		return 0
-	}
-
-	save_state "task" "$prompt"
-	SAVED_PROMPT="$prompt"
-
-	if [[ "$_BACKGROUND" == "true" ]]; then
-		_launch_background "$prompt"
-		return 0
-	fi
-	emit_task_phase "$prompt"
-}
-
-# Phase transition map: current -> next phase + emit function
-_next_phase() {
-	case "$1" in
-	task) echo "preflight emit_preflight_phase" ;;
-	preflight) echo "pr-create emit_pr_create_phase" ;;
-	pr-create) echo "pr-review emit_pr_review_phase" ;;
-	pr-review) echo "postflight emit_postflight_phase" ;;
-	postflight) echo "deploy emit_deploy_phase" ;;
-	deploy) echo "complete cmd_complete" ;;
-	complete) echo "complete cmd_complete" ;;
-	*) return 1 ;;
-	esac
-}
-
-cmd_resume() {
-	is_loop_active || {
-		print_error "No active loop to resume"
-		return 1
-	}
-	load_state
-	print_info "Resuming from phase: $CURRENT_PHASE"
-	local transition
-	transition=$(_next_phase "$CURRENT_PHASE") || {
-		print_error "Unknown phase: $CURRENT_PHASE"
-		return 1
-	}
-	local next_phase="${transition%% *}" emit_fn="${transition#* }"
-	save_state "$next_phase" "$SAVED_PROMPT" "${PR_NUMBER:-}" "$STARTED_AT"
-	$emit_fn
-}
-
-cmd_status() {
-	is_loop_active || {
-		echo "No active full loop"
-		return 0
-	}
-	load_state
-	printf "\n${BOLD}Full Loop Status${NC}\nPhase: ${CYAN}%s${NC} | Started: %s | PR: %s | Headless: %s\nPrompt: %s\n\n" \
-		"$CURRENT_PHASE" "$STARTED_AT" "${PR_NUMBER:-none}" "$HEADLESS" "$(echo "$SAVED_PROMPT" | head -3)"
-}
-
-cmd_cancel() {
-	is_loop_active || {
-		print_warning "No active loop to cancel"
-		return 0
-	}
-	local pid_file="${STATE_DIR}/full-loop.pid"
-	if [[ -f "$pid_file" ]]; then
-		local pid
-		pid=$(cat "$pid_file")
-		kill -0 "$pid" 2>/dev/null && {
-			kill "$pid" 2>/dev/null || true
-			sleep 1
-			kill -9 "$pid" 2>/dev/null || true
-		}
-		rm -f "$pid_file"
-	fi
-	rm -f "$STATE_FILE" ".agents/loop-state/ralph-loop.local.state" ".agents/loop-state/quality-loop.local.state" 2>/dev/null
-	print_success "Full loop cancelled"
-}
-
-cmd_logs() {
-	local log_file="${STATE_DIR}/full-loop.log" lines="${1:-50}"
-	[[ -f "$log_file" ]] || {
-		print_warning "No log file. Start with --background first."
-		return 1
-	}
-	local pid_file="${STATE_DIR}/full-loop.pid"
-	if [[ -f "$pid_file" ]]; then
-		local pid
-		pid=$(cat "$pid_file")
-		kill -0 "$pid" 2>/dev/null && print_info "Running (PID: $pid)" || print_warning "Not running (was PID: $pid)"
-	fi
-	printf "\n${BOLD}Full Loop Logs (last %d lines)${NC}\n" "$lines"
-	tail -n "$lines" "$log_file"
-}
-
-cmd_complete() {
-	load_state 2>/dev/null || true
-	printf "\n${BOLD}${GREEN}=== FULL DEVELOPMENT LOOP - COMPLETE ===${NC}\n"
-	printf "Task: done | Preflight: passed | PR: #%s | Postflight: healthy" "${PR_NUMBER:-unknown}"
-	is_aidevops_repo && printf " | Deploy: done"
-	printf "\n\n"
-	rm -f "$STATE_FILE"
-	echo "<promise>FULL_LOOP_COMPLETE</promise>"
-}
+# --- Help & Main ---
 
 show_help() {
 	cat <<'EOF'
 Full Development Loop Orchestrator
 Usage: full-loop-helper.sh <command> [options]
-Commands: start "<prompt>" | resume | status | cancel | logs [N] | help
+Commands:
+  start "<prompt>"              Start a new development loop
+  resume                        Resume from last phase
+  status                        Show current loop state
+  cancel                        Cancel active loop
+  logs [N]                      Show last N log lines (default: 50)
+  commit-and-pr --issue N --message "msg"  Stage, commit, rebase, push, create PR, post merge summary
+                [--skip-hooks]             Pass --no-verify to git push (doc-only PRs, GH#20138)
+  pre-merge-gate <PR> [REPO]    Check review bot gate before merge (GH#17541)
+  merge <PR> [REPO] [--squash|--merge|--rebase] [--admin] [--auto]
+                                Gate-enforced merge (runs pre-merge-gate first).
+                                --admin / --auto pass through to gh pr merge
+                                for branch-protected personal-account repos (GH#18731).
+                                --admin and --auto are mutually exclusive at the
+                                gh CLI level; if both are given, --admin wins and
+                                --auto is dropped (GH#19310).
+  help                          Show this help
 Options: --max-task-iterations N (50) | --max-preflight-iterations N (5)
   --max-pr-iterations N (20) | --skip-preflight | --skip-postflight
   --skip-runtime-testing | --no-auto-pr | --no-auto-deploy
@@ -397,6 +231,9 @@ main() {
 	case "$command" in
 	start) cmd_start "$@" ;; resume) cmd_resume ;; status) cmd_status ;;
 	cancel) cmd_cancel ;; logs) cmd_logs "$@" ;; _run_foreground) _run_foreground "$@" ;;
+	commit-and-pr) cmd_commit_and_pr "$@" ;;
+	pre-merge-gate) cmd_pre_merge_gate "$@" ;;
+	merge) cmd_merge "$@" ;;
 	help | --help | -h) show_help ;;
 	*)
 		print_error "Unknown command: $command"

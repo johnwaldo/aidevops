@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # venv-health-check-helper.sh — Lightweight Python venv smoke tests for managed projects
 #
 # Discovers .venv/ directories in repos registered in repos.json and runs
@@ -27,8 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
 # shellcheck source=shared-constants.sh
 source "${SCRIPT_DIR}/shared-constants.sh"
 
-# BOLD is not in shared-constants.sh — define locally
-readonly BOLD='\033[1m'
+[[ -z "${BOLD+x}" ]] && BOLD='\033[1m'
 
 readonly REPOS_JSON="${HOME}/.config/aidevops/repos.json"
 

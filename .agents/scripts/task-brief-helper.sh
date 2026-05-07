@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # task-brief-helper.sh — Generate a task brief from OpenCode session history
 #
 # Usage: task-brief-helper.sh <task_id> [project_root]
@@ -599,6 +601,93 @@ _enrich_context() {
 	return 0
 }
 
+# Check if the task's linked issue body is already worker-ready (t2417) and
+# write a stub brief linking to the issue instead of duplicating its content.
+# Arguments: task_id project_root
+# Returns: 0 if stub was written (caller should return early); 1 otherwise.
+_try_worker_ready_stub_brief() {
+	local task_id="$1"
+	local project_root="$2"
+
+	local _readiness_helper="$SCRIPT_DIR/brief-readiness-helper.sh"
+	[[ -x "$_readiness_helper" ]] || return 1
+
+	# Extract issue number from TODO.md ref:GH#NNN for this task
+	local _issue_ref=""
+	_issue_ref=$(grep -E "^\s*- \[.\] ${task_id} " "$project_root/TODO.md" 2>/dev/null \
+		| grep -oE 'ref:GH#[0-9]+' | head -1 | sed 's/ref:GH#//' || true)
+	[[ -n "$_issue_ref" ]] || return 1
+
+	local _slug=""
+	_slug=$(git -C "$project_root" remote get-url origin 2>/dev/null \
+		| sed -E 's#.*github\.com[:/]##; s/\.git$//' || true)
+	[[ -n "$_slug" ]] || return 1
+
+	local _body=""
+	_body=$(gh issue view "$_issue_ref" --repo "$_slug" --json body --jq '.body' 2>/dev/null) || true
+	[[ -n "$_body" ]] || return 1
+
+	local _readiness_output=""
+	_readiness_output=$("$_readiness_helper" check --body "$_body" 2>/dev/null) || true
+	if printf '%s\n' "$_readiness_output" | grep -q 'WORKER_READY=true'; then
+		log_info "$task_id: linked issue #${_issue_ref} body is worker-ready — writing stub brief"
+		"$_readiness_helper" stub "$task_id" "$_issue_ref" "$_slug" "$project_root" 2>/dev/null || true
+		return 0
+	fi
+
+	return 1
+}
+
+# Combine attribution derivation (Step 6) with context-block extraction
+# (Step 7). Outputs results via module-level globals, since bash 3.2 has
+# no local -n namerefs for multi-value returns.
+# Arguments:
+#   session_id session_title parent_session supervisor_info commit_author
+#   task_id context
+# Globals set:
+#   _BRIEF_SESSION_ORIGIN, _BRIEF_CREATED_BY, _BRIEF_CONTEXT_BLOCK, _BRIEF_SUP_ID
+_resolve_final_attribution() {
+	local session_id="$1"
+	local session_title="$2"
+	local parent_session="$3"
+	local supervisor_info="$4"
+	local commit_author="$5"
+	local task_id="$6"
+	local context="$7"
+
+	# Step 6: derive session_origin, created_by, sup_id from attribution helper
+	local session_origin="" created_by="" sup_id=""
+	while IFS='=' read -r key value; do
+		case "$key" in
+		SESSION_ORIGIN) session_origin="$value" ;;
+		CREATED_BY) created_by="$value" ;;
+		SUP_ID) sup_id="$value" ;;
+		esac
+	done <<<"$(_derive_attribution "$session_id" "$session_title" "$parent_session" \
+		"$supervisor_info" "$commit_author" "$task_id")"
+
+	# Step 7: extract context block and enrich session_origin
+	local context_block="" _in_ctx=0
+	while IFS= read -r line; do
+		case "$line" in
+		SESSION_ORIGIN=*) session_origin="${line#SESSION_ORIGIN=}" ;;
+		CONTEXT_BLOCK_START) _in_ctx=1 ;;
+		CONTEXT_BLOCK_END) _in_ctx=0 ;;
+		*)
+			if [[ "$_in_ctx" -eq 1 ]]; then
+				context_block="${context_block:+${context_block}$'\n'}${line}"
+			fi
+			;;
+		esac
+	done <<<"$(_enrich_context "$context" "$session_origin")"
+
+	_BRIEF_SESSION_ORIGIN="$session_origin"
+	_BRIEF_CREATED_BY="$created_by"
+	_BRIEF_CONTEXT_BLOCK="$context_block"
+	_BRIEF_SUP_ID="$sup_id"
+	return 0
+}
+
 generate_brief() {
 	local task_id
 	local project_root
@@ -609,6 +698,12 @@ generate_brief() {
 
 	validate_task_id "$task_id" || return 1
 	mkdir -p "$project_root/todo/tasks"
+
+	# Step 0 (t2417): If linked issue body is already worker-ready, write a
+	# stub brief and return. See _try_worker_ready_stub_brief / GH#20015.
+	if _try_worker_ready_stub_brief "$task_id" "$project_root"; then
+		return 0
+	fi
 
 	# Step 1: Resolve commit
 	local commit="" commit_date="" commit_author="" commit_msg="" commit_epoch=""
@@ -658,31 +753,14 @@ generate_brief() {
 	local task_block=""
 	[[ -f "$task_block_file" ]] && task_block=$(cat "$task_block_file") && rm -f "$task_block_file"
 
-	# Step 6: Derive session_origin and created_by
-	local session_origin="" created_by="" sup_id=""
-	while IFS='=' read -r key value; do
-		case "$key" in
-		SESSION_ORIGIN) session_origin="$value" ;;
-		CREATED_BY) created_by="$value" ;;
-		SUP_ID) sup_id="$value" ;;
-		esac
-	done <<<"$(_derive_attribution "$session_id" "$session_title" "$parent_session" \
-		"$supervisor_info" "$commit_author" "$task_id")"
-
-	# Step 7: Extract context block and enrich session_origin
-	local context_block="" _in_ctx=0
-	while IFS= read -r line; do
-		case "$line" in
-		SESSION_ORIGIN=*) session_origin="${line#SESSION_ORIGIN=}" ;;
-		CONTEXT_BLOCK_START) _in_ctx=1 ;;
-		CONTEXT_BLOCK_END) _in_ctx=0 ;;
-		*)
-			if [[ "$_in_ctx" -eq 1 ]]; then
-				context_block="${context_block:+${context_block}$'\n'}${line}"
-			fi
-			;;
-		esac
-	done <<<"$(_enrich_context "$context" "$session_origin")"
+	# Steps 6+7: Derive attribution and extract context block.
+	# Results arrive via _BRIEF_* globals (bash 3.2: no local -n namerefs).
+	_resolve_final_attribution "$session_id" "$session_title" "$parent_session" \
+		"$supervisor_info" "$commit_author" "$task_id" "$context"
+	local session_origin="$_BRIEF_SESSION_ORIGIN"
+	local created_by="$_BRIEF_CREATED_BY"
+	local context_block="$_BRIEF_CONTEXT_BLOCK"
+	local sup_id="$_BRIEF_SUP_ID"
 
 	local parent_task=""
 	if echo "$task_id" | grep -qE '\.'; then
@@ -697,6 +775,102 @@ generate_brief() {
 		"$supervisor_info" "$sup_id"
 
 	log_info "$task_id: brief written to $output_file"
+
+	# t2821: After writing the brief, scan its content for dispatch-path patterns.
+	# If any are found, append a Dispatch-Path Classification notice so the author
+	# knows to use #parent + no-auto-dispatch rather than #auto-dispatch.
+	_append_dispatch_path_notice "$output_file" "$task_id"
+
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch-path classification notice (t2821)
+#
+# Scans a just-written brief file for references to dispatch-path scripts.
+# When found, appends a ## Dispatch-Path Classification section recommending
+# #parent + no-auto-dispatch + origin:interactive.
+#
+# The canonical pattern list is loaded from self-hosting-files.conf (shared
+# with pre-dispatch-validator-helper.sh). Falls back to hardcoded defaults
+# when the conf file is absent.
+#
+# Arguments:
+#   $1 - brief_file (absolute path to the just-written brief)
+#   $2 - task_id (for log messages only)
+#
+# Environment:
+#   AIDEVOPS_DISPATCH_PATH_FILES_CONF — override conf file path
+#   AIDEVOPS_SKIP_DISPATCH_PATH_CHECK=1 — disable entirely
+# ---------------------------------------------------------------------------
+_append_dispatch_path_notice() {
+	local brief_file="$1"
+	local task_id="$2"
+
+	if [[ "${AIDEVOPS_SKIP_DISPATCH_PATH_CHECK:-}" == "1" ]]; then
+		return 0
+	fi
+
+	[[ -f "$brief_file" ]] || return 0
+
+	# Resolve conf file relative to this script's directory
+	local _script_dir
+	_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || true
+	local _conf_file="${AIDEVOPS_DISPATCH_PATH_FILES_CONF:-${_script_dir}/../configs/self-hosting-files.conf}"
+
+	# Load patterns
+	local _patterns=()
+	if [[ -f "$_conf_file" ]]; then
+		while IFS= read -r _line; do
+			[[ -z "$_line" || "$_line" == \#* ]] && continue
+			_patterns+=("$_line")
+		done <"$_conf_file"
+	fi
+	if [[ ${#_patterns[@]} -eq 0 ]]; then
+		_patterns=(
+			"pulse-wrapper.sh" "pulse-dispatch-" "pulse-cleanup.sh"
+			"headless-runtime-helper.sh" "headless-runtime-lib.sh"
+			"worker-lifecycle-common.sh" "shared-dispatch-dedup.sh"
+			"shared-claim-lifecycle.sh" "worker-activity-watchdog.sh"
+		)
+	fi
+
+	# Scan the brief file for any pattern match
+	local _matched=""
+	local _p
+	for _p in "${_patterns[@]}"; do
+		if grep -qF "$_p" "$brief_file" 2>/dev/null; then
+			_matched="$_p"
+			break
+		fi
+	done
+
+	[[ -z "$_matched" ]] && return 0
+
+	log_info "$task_id: dispatch-path file detected in brief ('${_matched}') — opus-4-7 will auto-elevate at dispatch (t2920)"
+
+	cat >>"$brief_file" <<'DISPATCH_NOTICE'
+
+## Dispatch-Path Classification (advisory)
+
+> **Dispatch-path files detected in this brief.**
+>
+> This task modifies files on the worker dispatch/spawn path. The pre-dispatch
+> detector (t2819) will automatically elevate the worker to `model:opus-4-7`
+> before dispatch — workers can fix dispatch code reliably with the right tier.
+>
+> **No special TODO tags required.** Use the normal `#auto-dispatch` flow. Workers
+> run in their own worktrees, so a buggy in-flight fix doesn't break the live pulse;
+> CI gates and the pulse circuit breaker (t2690) catch regressions before merge.
+>
+> **Opt out only when needed:** if you specifically want to implement this
+> interactively (e.g. to observe the running system mid-fix), add `#no-auto-dispatch
+> #interactive` to the TODO entry — but this is the exception, not the default.
+>
+> Reference: `reference/auto-dispatch.md` "Dispatch-Path Default (t2821 / t2920)"
+
+DISPATCH_NOTICE
+
 	return 0
 }
 

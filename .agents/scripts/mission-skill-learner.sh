@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # mission-skill-learner.sh — Auto-capture reusable patterns from completed missions
 #
 # Scans mission directories for agents, scripts, and patterns that proved useful.
@@ -746,10 +748,10 @@ cmd_scan() {
 	lesson_out=$(_scan_lessons "$mission_file" "$mission_id")
 
 	# Print buffered output (all display lines except the trailing count)
-	echo "$agent_out" | head -n -1
-	echo "$script_out" | head -n -1
-	echo "$decision_out" | head -n -1
-	echo "$lesson_out" | head -n -1
+	echo "$agent_out" | sed '$d'
+	echo "$script_out" | sed '$d'
+	echo "$decision_out" | sed '$d'
+	echo "$lesson_out" | sed '$d'
 
 	# Sum counts (last line of each output block)
 	local agent_count script_count decision_count lesson_count found_count

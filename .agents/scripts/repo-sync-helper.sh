@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # repo-sync-helper.sh - Daily git pull for repos in configured parent directories
 #
 # Scans configured parent directories for git repos cloned from a remote and
@@ -55,6 +57,8 @@ readonly DEFAULT_INTERVAL=1440
 readonly LAUNCHD_LABEL="sh.aidevops.repo-sync"
 readonly LAUNCHD_DIR="$HOME/Library/LaunchAgents"
 readonly LAUNCHD_PLIST="${LAUNCHD_DIR}/${LAUNCHD_LABEL}.plist"
+readonly SYSTEMD_SERVICE_DIR="$HOME/.config/systemd/user"
+readonly SYSTEMD_UNIT_NAME="aidevops-repo-sync"
 readonly INSTALL_DIR="$HOME/Git/aidevops"
 readonly DEFAULT_PARENT_DIRS=("$HOME/Git")
 
@@ -93,10 +97,23 @@ ensure_dirs() {
 
 #######################################
 # Detect scheduler backend for current platform
-# Returns: "launchd" on macOS, "cron" on Linux/other
+# Sources platform-detect.sh for accurate detection (GH#17695 Finding C).
+# Returns: "launchd" on macOS, "systemd" or "cron" on Linux
 #######################################
 _get_scheduler_backend() {
-	if [[ "$(uname)" == "Darwin" ]]; then
+	# Source platform-detect.sh if AIDEVOPS_SCHEDULER is not already set
+	if [[ -z "${AIDEVOPS_SCHEDULER:-}" ]]; then
+		local _pd_path
+		_pd_path="$(dirname "${BASH_SOURCE[0]}")/platform-detect.sh"
+		if [[ -f "$_pd_path" ]]; then
+			# shellcheck source=platform-detect.sh
+			source "$_pd_path"
+		fi
+	fi
+	# Fall back to simple uname check if platform-detect.sh unavailable
+	if [[ -n "${AIDEVOPS_SCHEDULER:-}" ]]; then
+		echo "$AIDEVOPS_SCHEDULER"
+	elif [[ "$(uname)" == "Darwin" ]]; then
 		echo "launchd"
 	else
 		echo "cron"
@@ -128,6 +145,7 @@ _generate_plist() {
 	local script_path="$1"
 	local interval_seconds="$2"
 	local env_path="$3"
+	env_path=$(aidevops_launchd_sanitized_path "$env_path")
 
 	cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -190,11 +208,7 @@ acquire_lock() {
 		# Safety net: remove locks older than 10 minutes
 		if [[ -d "$LOCK_FILE" ]]; then
 			local lock_age
-			if [[ "$(uname)" == "Darwin" ]]; then
-				lock_age=$(($(date +%s) - $(stat -f %m "$LOCK_FILE" 2>/dev/null || echo "0")))
-			else
-				lock_age=$(($(date +%s) - $(stat -c %Y "$LOCK_FILE" 2>/dev/null || echo "0")))
-			fi
+			lock_age=$(($(date +%s) - $(_file_mtime_epoch "$LOCK_FILE")))
 			if [[ $lock_age -gt 600 ]]; then
 				log_warn "Removing stale lock (age ${lock_age}s > 600s)"
 				rm -rf "$LOCK_FILE"
@@ -609,6 +623,115 @@ _enable_launchd() {
 }
 
 #######################################
+# Enable repo-sync via systemd user timer (Linux with systemd)
+# Arguments:
+#   $1 - script_path
+#   $2 - interval (minutes)
+# Returns: 0 on success, falls back to cron on failure
+# Modelled on worker-watchdog.sh:_install_systemd() (GH#17691)
+#######################################
+_enable_systemd() {
+	local script_path="$1"
+	local interval="$2"
+	local service_file="${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.service"
+	local timer_file="${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.timer"
+	local interval_sec
+	interval_sec=$((interval * 60))
+
+	mkdir -p "${SYSTEMD_SERVICE_DIR}"
+
+	printf '%s' "[Unit]
+Description=aidevops repo-sync
+After=network.target
+
+[Service]
+Type=oneshot
+KillMode=process
+ExecStart=/bin/bash -lc '\"${script_path}\" check'
+TimeoutStartSec=300
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+" >"$service_file"
+
+	printf '%s' "[Unit]
+Description=aidevops repo-sync Timer
+
+[Timer]
+OnBootSec=${interval_sec}
+OnUnitActiveSec=${interval_sec}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+" >"$timer_file"
+
+	systemctl --user daemon-reload 2>/dev/null || true
+	if ! systemctl --user enable --now "${SYSTEMD_UNIT_NAME}.timer" 2>/dev/null; then
+		print_error "Failed to enable systemd timer — falling back to cron" >&2
+		_enable_cron "$script_path" "$interval"
+		return $?
+	fi
+
+	update_state_action "enable" "enabled"
+
+	print_success "Repo sync enabled (every ${interval} minutes)"
+	echo ""
+	echo "  Scheduler: systemd user timer"
+	echo "  Unit:      ${SYSTEMD_UNIT_NAME}.timer"
+	echo "  Service:   ${service_file}"
+	echo "  Timer:     ${timer_file}"
+	echo "  Logs:      ${LOG_FILE}"
+	echo ""
+	echo "  Disable with: aidevops repo-sync disable"
+	return 0
+}
+
+#######################################
+# Disable repo-sync systemd user timer
+# Returns: 0 on success
+#######################################
+_disable_systemd() {
+	local had_entry=false
+
+	if systemctl --user is-enabled "${SYSTEMD_UNIT_NAME}.timer" >/dev/null 2>&1; then
+		had_entry=true
+		systemctl --user disable --now "${SYSTEMD_UNIT_NAME}.timer" 2>/dev/null || true
+	fi
+
+	local service_file="${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.service"
+	local timer_file="${SYSTEMD_SERVICE_DIR}/${SYSTEMD_UNIT_NAME}.timer"
+	if [[ -f "$timer_file" ]]; then
+		had_entry=true
+		rm -f "$timer_file"
+	fi
+	if [[ -f "$service_file" ]]; then
+		rm -f "$service_file"
+	fi
+	systemctl --user daemon-reload 2>/dev/null || true
+
+	# Also remove any lingering cron entry
+	if crontab -l 2>/dev/null | grep -qF "$CRON_MARKER"; then
+		local temp_cron
+		temp_cron=$(mktemp)
+		crontab -l 2>/dev/null | grep -vF "$CRON_MARKER" >"$temp_cron" || true
+		crontab "$temp_cron"
+		rm -f "$temp_cron"
+		had_entry=true
+	fi
+
+	update_state_action "disable" "disabled"
+
+	if [[ "$had_entry" == "true" ]]; then
+		print_success "Repo sync disabled"
+	else
+		print_info "Repo sync was not enabled"
+	fi
+	return 0
+}
+
+#######################################
 # Enable repo-sync via cron (Linux)
 # Arguments:
 #   $1 - script_path
@@ -685,6 +808,9 @@ cmd_enable() {
 	if [[ "$backend" == "launchd" ]]; then
 		_enable_launchd "$script_path" "$interval"
 		return $?
+	elif [[ "$backend" == "systemd" ]]; then
+		_enable_systemd "$script_path" "$interval"
+		return $?
 	fi
 
 	_enable_cron "$script_path" "$interval"
@@ -743,6 +869,9 @@ cmd_disable() {
 			print_info "Repo sync was not enabled"
 		fi
 		return 0
+	elif [[ "$backend" == "systemd" ]]; then
+		_disable_systemd
+		return $?
 	fi
 
 	# Linux: cron backend

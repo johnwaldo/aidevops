@@ -1,0 +1,486 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+# pulse-merge-routine.sh — Standalone fast-cadence merge routine (t2862, GH#20919)
+#
+# Decouples `merge_ready_prs_all_repos()` from the monolithic pulse cycle so
+# green PRs are merged within ~3 min of CI completion regardless of how long
+# the preflight stack takes (typically 5-10 min for a full pulse cycle).
+#
+# Problem: the pulse cycle's preflight stack
+# (`preflight_cleanup_and_ledger` + `preflight_capacity_and_labels` +
+# `preflight_early_dispatch` + `complexity_scan` etc.) often takes 5+ min
+# before `deterministic_merge_pass` starts. In a 24h sample, the merge pass
+# ran only ~7 times despite ~40+ pulse cycles. Green `origin:interactive` +
+# OWNER PRs sat unmerged for 10+ minutes; the workaround was `gh pr merge
+# --admin --squash`, which works but should not be the primary path.
+#
+# Solution: run merge_ready_prs_all_repos() as a fast independent routine on
+# a 120s launchd/cron schedule. The in-cycle merge call in pulse-wrapper.sh
+# is kept as defense-in-depth but short-circuits when this routine ran within
+# the last 60s (file-timestamp marker at PULSE_MERGE_ROUTINE_LAST_RUN).
+#
+# Architecture: modelled on complexity-scan-runner.sh (t2903) — independent
+# file-based lock (mkdir, PID stale-reclaim), runner-level log, minimal
+# source chain, --dry-run / --repo / --pr spot-check flags.
+#
+# Usage:
+#   pulse-merge-routine.sh [run]           Run the merge pass (default; called by launchd)
+#   pulse-merge-routine.sh --dry-run       Dry-run: print what would be merged, no side effects
+#   pulse-merge-routine.sh --repo SLUG     Limit to a single repo
+#   pulse-merge-routine.sh --pr N          Spot-check one PR (requires --repo)
+#   pulse-merge-routine.sh help            Show usage
+#
+# Lock:       ~/.aidevops/.agent-workspace/locks/pulse-merge-routine.lock
+# Runner log: ~/.aidevops/logs/pulse-merge-routine.log
+# Last-run:   ~/.aidevops/logs/pulse-merge-routine-last-run
+#             (also written as PULSE_MERGE_ROUTINE_LAST_RUN; read by pulse-wrapper.sh
+#             short-circuit)
+#
+# Part of aidevops framework: https://aidevops.sh
+
+set -euo pipefail
+
+# PATH normalisation for launchd/cron environments where PATH is minimal.
+_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/bin:/usr/bin"
+if [[ "$(uname -s 2>/dev/null || true)" != "Darwin" && -d "/home/linuxbrew/.linuxbrew/bin" ]]; then
+	_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/bin:/usr/bin"
+fi
+export PATH="${_aidevops_path_prefix}:${PATH}"
+unset _aidevops_path_prefix
+
+# SCRIPT_DIR resolution — uses BASH_SOURCE[0]:-$0 for zsh portability (GH#3931).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
+# =============================================================================
+# Source pulse libraries
+# =============================================================================
+# Order matters (mirrors complexity-scan-runner.sh):
+#   1. shared-constants.sh  — bash 4+ re-exec guard fires here at depth 1; also
+#                             auto-sources shared-gh-wrappers.sh.
+#   2. config-helper.sh     — provides config_get used by pulse-wrapper-config.sh.
+#   3. worker-lifecycle-common.sh — provides _validate_int used by pulse-wrapper-config.sh.
+#   4. credentials.sh       — picks up gh tokens / API keys before merge calls gh.
+#   5. pulse-wrapper-config.sh — defines LOGFILE, REPOS_JSON, STOP_FLAG, etc.
+#   6. pulse-repo-meta.sh   — get_repo_role_by_slug, get_repo_path_by_slug.
+#   7. pulse-dispatch-core.sh — provides unlock_issue_after_worker (called from
+#                             pulse-merge.sh:338,385 in _handle_post_merge_actions
+#                             and _handle_post_close_actions). Without this,
+#                             stderr emits 'unlock_issue_after_worker: command not
+#                             found' on every merged/closed PR (t3036).
+#   8. pulse-fast-fail.sh   — provides fast_fail_reset (called from pulse-merge.sh:383
+#                             in _handle_post_close_actions). Without this, stderr
+#                             emits 'fast_fail_reset: command not found' on every
+#                             closed PR (t3036).
+#   9. pulse-merge.sh       — merge_ready_prs_all_repos + gate helpers; also
+#                             transitively sources shared-claim-lifecycle.sh and
+#                             shared-phase-filing.sh.
+#  10. pulse-merge-conflict.sh — conflict handling, interactive PR handover.
+#  11. pulse-merge-feedback.sh — CI/conflict/review feedback routing to linked issues.
+#
+# pulse-merge.sh normally requires PULSE_MERGE_BATCH_LIMIT and PULSE_START_EPOCH
+# to be set by the pulse-wrapper.sh bootstrap (lines 180, 727). They are
+# initialised below in the env-var defaults section before any function is
+# called (see also the ${VAR:-default} guards added to merge_ready_prs_all_repos
+# itself in t2862 — belt-and-suspenders).
+
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/shared-constants.sh"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/config-helper.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/worker-lifecycle-common.sh"
+
+if [[ -f "${HOME}/.config/aidevops/credentials.sh" ]]; then
+	# shellcheck source=/dev/null
+	. "${HOME}/.config/aidevops/credentials.sh" 2>/dev/null || true
+fi
+
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/pulse-wrapper-config.sh"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/pulse-repo-meta.sh"
+# t3036 (GH#21616): pulse-dispatch-core defines unlock_issue_after_worker;
+# pulse-fast-fail defines fast_fail_reset. Both are called from
+# _handle_post_merge_actions / _handle_post_close_actions in pulse-merge.sh.
+# Without these, every successful merge/close emits 'command not found'
+# stderr noise. Source defensively before pulse-merge.sh.
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/pulse-dispatch-core.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/pulse-fast-fail.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/pulse-merge.sh"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/pulse-merge-conflict.sh"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/pulse-merge-feedback.sh"
+# t3193: stuck-merge detector module — sourced after the conflict/feedback
+# downstream modules so its functions resolve via bash lazy lookup.
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/pulse-merge-stuck.sh"
+
+# =============================================================================
+# Env-var defaults (belt-and-suspenders — also guarded inside the function)
+# =============================================================================
+
+# PULSE_MERGE_BATCH_LIMIT is normally set by pulse-wrapper.sh:727. Set a
+# safe default here so standalone invocation doesn't hit an unbound variable.
+PULSE_MERGE_BATCH_LIMIT="${PULSE_MERGE_BATCH_LIMIT:-50}"
+
+# PULSE_START_EPOCH is normally set by pulse-wrapper.sh:180 (the canonical
+# bootstrap path). It's referenced by pulse-merge.sh:326 inside
+# _handle_post_merge_actions and by pulse-simplification-*.sh. Under
+# `set -euo pipefail` (line 42 of this file), an unset reference is a hard
+# fail — every launchd invocation would crash before doing anything useful
+# (t3036, GH#21616). Initialise to current epoch so elapsed-time math works
+# even when no pulse cycle preceded this invocation. Export so subprocesses
+# (gh-signature-helper.sh, etc.) inherit the value consistently.
+PULSE_START_EPOCH="${PULSE_START_EPOCH:-$(date +%s)}"
+export PULSE_START_EPOCH
+
+# STOP_FLAG / REPOS_JSON: normally set by pulse-wrapper-config.sh; the
+# ${VAR:-default} guards below are defence-in-depth for edge-case sourcing
+# order issues (e.g. unit test harnesses that source a subset of the chain).
+STOP_FLAG="${STOP_FLAG:-${HOME}/.aidevops/logs/pulse-session.stop}"
+REPOS_JSON="${REPOS_JSON:-${HOME}/.config/aidevops/repos.json}"
+
+# Hard ceiling on routine runtime (t3041, GH#21708). The merge routine has
+# historically hung for 30+ hours with green PRs sitting unmerged. Root cause
+# could not be reliably reproduced on the canonical marcusquinn/aidevops repo
+# (Phase 1, PR #21643), so a defence-in-depth timeout ceiling is the
+# durability fix: whatever the underlying hang site (gh API call without
+# timeout, flock deadlock, infinite retry loop on transient network error,
+# wait on dead PID), the routine cannot run longer than this ceiling.
+#
+# Default: 600s (10 min). Typical run on a healthy aidevops state with 5+ open
+# PRs completes in <60s. Set higher only if you have repos with many PRs
+# requiring extended remote ops; set lower for testing/CI.
+#
+# Watchdog interaction: launchd respawns the routine every 120s. If a single
+# invocation runs longer than 120s the next launchd tick will short-circuit
+# on the lock owned by the still-running PID — only one runner is ever active.
+# A 600s ceiling is well below the 30+ hour symptom and well above the
+# typical run duration, leaving headroom for slow remote round-trips.
+PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS="${PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS:-600}"
+# Validate — non-numeric or zero means a config error; clamp to default.
+[[ "$PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS=600
+[[ "$PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS" -lt 1 ]] && PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS=600
+
+# =============================================================================
+# Runner-level state files
+# =============================================================================
+
+RUNNER_LOG_FILE="${HOME}/.aidevops/logs/pulse-merge-routine.log"
+LOCK_DIR="${HOME}/.aidevops/.agent-workspace/locks/pulse-merge-routine.lock"
+PULSE_MERGE_ROUTINE_LAST_RUN="${HOME}/.aidevops/logs/pulse-merge-routine-last-run"
+
+mkdir -p "$(dirname "$RUNNER_LOG_FILE")" "$(dirname "$LOCK_DIR")"
+
+# =============================================================================
+# Logging
+# =============================================================================
+
+_pmr_log() {
+	local level="$1"
+	shift
+	local timestamp
+	timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	printf '[%s] [%s] %s\n' "$timestamp" "$level" "$*" >>"$RUNNER_LOG_FILE"
+	return 0
+}
+
+# =============================================================================
+# File-based lock (mkdir-based for bash 3.2 + macOS portability)
+# =============================================================================
+# mkdir is atomic on POSIX filesystems and works without flock (Linux-only) or
+# any FD-inheritance gotchas. PID-based stale detection lets the next runner
+# reclaim the lock if the previous instance crashed.
+
+_pmr_release_lock() {
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	return 0
+}
+
+# =============================================================================
+# Hard timeout ceiling (t3041, GH#21708)
+# =============================================================================
+# Background a function/command in a subshell and kill its process tree if it
+# exceeds $1 seconds. Returns:
+#   0   — child completed successfully
+#   124 — timeout exceeded (matches GNU coreutils `timeout` exit convention)
+#   N>0 — child's own non-zero exit
+#
+# Uses _kill_tree / _force_kill_tree from worker-lifecycle-common.sh (already
+# sourced by this routine on line 87). Polling at 2s — same cadence as
+# run_stage_with_timeout in pulse-watchdog.sh, which is the reference pattern
+# this implementation mirrors. Inlined here (rather than sourcing
+# pulse-watchdog.sh) to keep the routine's dependency graph minimal — the
+# watchdog module pulls in PRE_RUN_STAGE_TIMEOUT, PULSE_STAGE_TIMINGS_LOG,
+# and several pulse-cycle-specific globals this standalone routine doesn't
+# need.
+#
+# Args:
+#   $1 — timeout in seconds (positive integer)
+#   $@ — command and arguments (after shift); may be a function name
+_pmr_run_with_timeout() {
+	local timeout_seconds="$1"
+	shift
+	if [[ -z "${1:-}" ]]; then
+		_pmr_log ERROR "_pmr_run_with_timeout: missing command"
+		return 2
+	fi
+	[[ "$timeout_seconds" =~ ^[0-9]+$ ]] || timeout_seconds=600
+	[[ "$timeout_seconds" -lt 1 ]] && timeout_seconds=1
+
+	local _start_epoch
+	_start_epoch=$(date +%s)
+
+	# Background the function/command in a subshell.
+	"$@" &
+	local _child_pid=$!
+
+	# Poll for child completion or timeout. sleep 2 keeps the loop cheap;
+	# overshoot is bounded by 2s.
+	while kill -0 "$_child_pid" 2>/dev/null; do
+		local _now="" _elapsed=""
+		_now=$(date +%s)
+		_elapsed=$((_now - _start_epoch))
+		if [[ "$_elapsed" -gt "$timeout_seconds" ]]; then
+			_pmr_log ERROR "Merge routine body timed out after ${_elapsed}s (ceiling=${timeout_seconds}s, pid=${_child_pid}); killing process tree"
+			# Use _kill_tree if available (sourced from worker-lifecycle-common.sh);
+			# fall back to direct kill if the helper is missing (e.g. test harness
+			# that didn't source the full chain).
+			if command -v _kill_tree >/dev/null 2>&1; then
+				_kill_tree "$_child_pid" || true
+				sleep 2
+				if kill -0 "$_child_pid" 2>/dev/null; then
+					if command -v _force_kill_tree >/dev/null 2>&1; then
+						_force_kill_tree "$_child_pid" || true
+					else
+						kill -9 "$_child_pid" 2>/dev/null || true
+					fi
+				fi
+			else
+				kill "$_child_pid" 2>/dev/null || true
+				sleep 2
+				if kill -0 "$_child_pid" 2>/dev/null; then
+					kill -9 "$_child_pid" 2>/dev/null || true
+				fi
+			fi
+			wait "$_child_pid" 2>/dev/null || true
+			return 124
+		fi
+		sleep 2
+	done
+
+	wait "$_child_pid"
+	return $?
+}
+
+_pmr_acquire_lock() {
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		printf '%s\n' "$$" >"${LOCK_DIR}/pid"
+		trap '_pmr_release_lock' EXIT INT TERM
+		return 0
+	fi
+
+	# Lock dir exists — check if owner is alive.
+	local owner_pid=""
+	if [[ -f "${LOCK_DIR}/pid" ]]; then
+		owner_pid=$(cat "${LOCK_DIR}/pid" 2>/dev/null || true)
+	fi
+	if [[ -n "$owner_pid" ]] && kill -0 "$owner_pid" 2>/dev/null; then
+		_pmr_log INFO "Skipping: previous instance still running (pid=${owner_pid})"
+		return 1
+	fi
+
+	# Stale lock — reclaim. mkdir again after rm to confirm we won the race.
+	rm -rf "$LOCK_DIR" 2>/dev/null || true
+	if mkdir "$LOCK_DIR" 2>/dev/null; then
+		printf '%s\n' "$$" >"${LOCK_DIR}/pid"
+		trap '_pmr_release_lock' EXIT INT TERM
+		_pmr_log WARN "Reclaimed stale lock (was pid=${owner_pid:-unknown})"
+		return 0
+	fi
+	_pmr_log WARN "Could not acquire lock after stale-reclaim attempt"
+	return 1
+}
+
+# =============================================================================
+# Commands
+# =============================================================================
+
+cmd_run() {
+	_pmr_log INFO "Starting merge routine (pid=$$, timeout=${PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS}s)"
+	if ! _pmr_acquire_lock; then
+		exit 0
+	fi
+
+	# Wrap merge_ready_prs_all_repos with a hard timeout ceiling (t3041, GH#21708).
+	# Whatever the underlying hang site (gh API call, flock deadlock, infinite
+	# retry loop, dead-PID wait), the routine cannot exceed this ceiling. On
+	# timeout, _pmr_run_with_timeout returns 124 (matching GNU `timeout`).
+	local merge_exit=0
+	_pmr_run_with_timeout "$PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS" merge_ready_prs_all_repos || merge_exit=$?
+
+	# Always write the last-run marker so pulse-wrapper.sh short-circuit can
+	# compare elapsed time (consistent with DIRTY_PR_SWEEP_LAST_RUN pattern).
+	# This runs even on timeout — we still completed our scheduled tick.
+	date +%s >"$PULSE_MERGE_ROUTINE_LAST_RUN" 2>/dev/null || true
+
+	if [[ "$merge_exit" -eq 124 ]]; then
+		_pmr_log ERROR "Merge routine completed via TIMEOUT (exit=124, ceiling=${PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS}s)"
+	else
+		_pmr_log INFO "Merge routine completed (exit=${merge_exit})"
+	fi
+	return "$merge_exit"
+}
+
+cmd_help() {
+	cat <<EOF
+pulse-merge-routine.sh — Standalone fast-cadence merge routine (t2862, GH#20919)
+
+Usage:
+  pulse-merge-routine.sh [run]         Run the merge pass (default; called by launchd)
+  pulse-merge-routine.sh --dry-run     Dry-run: print what would be merged, no side effects
+  pulse-merge-routine.sh --repo SLUG   Limit to a single repo
+  pulse-merge-routine.sh --pr N        Spot-check one PR (requires --repo)
+  pulse-merge-routine.sh help          Show this help
+
+Scheduled via launchd: sh.aidevops.pulse-merge-routine (every 120s, RunAtLoad=true).
+Install via setup.sh / setup_pulse_merge_routine in .agents/scripts/setup/modules/schedulers.sh.
+
+Paths:
+  Lock dir:    ${LOCK_DIR}
+  Runner log:  ${RUNNER_LOG_FILE}
+  Pulse log:   ${LOGFILE:-~/.aidevops/logs/pulse.log}
+  Last-run:    ${PULSE_MERGE_ROUTINE_LAST_RUN}
+
+The underlying pass (merge_ready_prs_all_repos in pulse-merge.sh) processes all
+pulse-enabled repos from REPOS_JSON (${REPOS_JSON}). The in-cycle merge call
+in pulse-wrapper.sh short-circuits when this routine ran within the last 60s.
+
+Env overrides:
+  PULSE_MERGE_BATCH_LIMIT=50              Max PRs fetched per repo per run.
+  PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS=600 Hard ceiling on routine runtime (t3041).
+                                          Process tree killed on overrun. Min 1s.
+  DRY_RUN=1                               Same as --dry-run.
+EOF
+	return 0
+}
+
+# Dry-run: set DRY_RUN=1 so merge_ready_prs_all_repos logs "would merge" but
+# skips actual gh pr merge calls. The underlying function checks DRY_RUN via
+# the shared wrapper helpers.
+cmd_dry_run() {
+	export DRY_RUN=1
+	_pmr_log INFO "DRY-RUN mode: merge routine (pid=$$, timeout=${PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS}s)"
+	if ! _pmr_acquire_lock; then
+		exit 0
+	fi
+
+	# Same timeout protection as cmd_run (t3041, GH#21708).
+	local merge_exit=0
+	_pmr_run_with_timeout "$PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS" merge_ready_prs_all_repos || merge_exit=$?
+
+	if [[ "$merge_exit" -eq 124 ]]; then
+		_pmr_log ERROR "DRY-RUN merge routine TIMED OUT (exit=124, ceiling=${PULSE_MERGE_ROUTINE_TIMEOUT_SECONDS}s)"
+	else
+		_pmr_log INFO "DRY-RUN merge routine completed (exit=${merge_exit})"
+	fi
+	return "$merge_exit"
+}
+
+# =============================================================================
+# Entry point
+# =============================================================================
+
+_pmr_main() {
+	local _subcommand="${1:-run}"
+	local _repo_filter=""
+	local _pr_filter=""
+
+	while [[ $# -gt 0 ]]; do
+		local _arg="$1"
+		local _next="${2:-}"
+		case "$_arg" in
+		run | --run | "")
+			_subcommand="run"
+			shift
+			;;
+		--dry-run | dry-run)
+			_subcommand="dry-run"
+			shift
+			;;
+		--repo)
+			_repo_filter="$_next"
+			shift 2
+			;;
+		--repo=*)
+			_repo_filter="${_arg#--repo=}"
+			shift
+			;;
+		--pr)
+			_pr_filter="$_next"
+			shift 2
+			;;
+		--pr=*)
+			_pr_filter="${_arg#--pr=}"
+			shift
+			;;
+		help | -h | --help)
+			_subcommand="help"
+			shift
+			;;
+		*)
+			printf 'Unknown option: %s\n' "$_arg" >&2
+			printf "Run '%s help' for usage.\n" "$0" >&2
+			return 2
+			;;
+		esac
+	done
+
+	# Single-repo or single-PR spot mode: override REPOS_JSON with a synthetic
+	# single-entry repo list so merge_ready_prs_all_repos only processes that repo.
+	if [[ -n "$_repo_filter" ]]; then
+		local _SPOT_REPOS_JSON
+		_SPOT_REPOS_JSON="$(mktemp)"
+		# shellcheck disable=SC2064
+		trap "rm -f '$_SPOT_REPOS_JSON' 2>/dev/null || true" EXIT INT TERM
+		printf '{"initialized_repos":[{"slug":"%s","pulse":true,"local_only":false,"path":""}]}\n' \
+			"$_repo_filter" >"$_SPOT_REPOS_JSON"
+		REPOS_JSON="$_SPOT_REPOS_JSON"
+		if [[ -n "$_pr_filter" ]]; then
+			_pmr_log INFO "Spot-check: --repo=${_repo_filter} --pr=${_pr_filter}"
+			# For single-PR mode, set PULSE_MERGE_BATCH_LIMIT to 1 and let the
+			# function discover and process only that PR. Note: the current
+			# merge_ready_prs_all_repos API processes all open ready PRs for the
+			# repo; single-PR filtering is a best-effort convenience.
+			PULSE_MERGE_BATCH_LIMIT=1
+		else
+			_pmr_log INFO "Spot-check: --repo=${_repo_filter}"
+		fi
+	fi
+
+	case "$_subcommand" in
+	run)
+		cmd_run
+		;;
+	dry-run)
+		cmd_dry_run
+		;;
+	help)
+		cmd_help
+		;;
+	*)
+		printf 'Unknown command: %s\n' "$_subcommand" >&2
+		printf "Run '%s help' for usage.\n" "$0" >&2
+		return 2
+		;;
+	esac
+	return 0
+}
+
+_pmr_main "$@"
+exit $?

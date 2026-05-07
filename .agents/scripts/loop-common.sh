@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # =============================================================================
 # Loop Common - Shared Infrastructure for All Loop Components
 # =============================================================================
@@ -615,7 +617,8 @@ $todo_in_progress
 loop_create_receipt() {
 	local receipt_type="$1"
 	local outcome="$2"
-	local evidence="${3:-{}}"
+	local evidence="${3:-}"
+	[[ -n "$evidence" ]] || evidence="{}"
 
 	# Validate evidence is valid JSON, fallback to empty object
 	if ! echo "$evidence" | jq empty 2>/dev/null; then
@@ -1083,8 +1086,11 @@ loop_handle_workflow_push_failure() {
 		local remote_url
 		remote_url=$(git remote get-url origin 2>/dev/null || echo "")
 		if [[ -n "$remote_url" ]]; then
-			# Extract owner/repo from SSH or HTTPS URL
-			repo_slug=$(echo "$remote_url" | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#')
+			# Extract owner/repo from SSH or HTTPS URL.
+			# Strip .git first, then use POSIX ERE (avoids non-greedy +? which
+			# BSD sed on macOS does not support — GH#21782).
+			local _remote_no_git="${remote_url%.git}"
+			repo_slug=$(echo "$_remote_no_git" | sed -E 's#.*[:/]([^/]+/[^/]+)$#\1#' || true)
 		fi
 	fi
 
@@ -1117,7 +1123,7 @@ loop_handle_workflow_push_failure() {
 	fi
 
 	# Post fallback comment
-	gh issue comment "$issue_number" --repo "$repo_slug" \
+	gh_issue_comment "$issue_number" --repo "$repo_slug" \
 		--body "**Worker push failed: missing \`workflow\` scope** (t1540)
 
 Branch \`$branch\` modifies \`.github/workflows/\` files but the GitHub OAuth token lacks the \`workflow\` scope. The implementation is complete locally but could not be pushed.
@@ -1391,7 +1397,7 @@ loop_show_status() {
 
 	# Show receipts
 	local receipt_count
-	receipt_count=$(find "$LOOP_RECEIPTS_DIR" -name "*.json" -type f 2>/dev/null | grep -c . || echo "0")
+	receipt_count=$(find "$LOOP_RECEIPTS_DIR" -name "*.json" -type f 2>/dev/null | safe_grep_count .)
 	echo "Receipts: $receipt_count"
 
 	# Show blocked tasks

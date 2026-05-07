@@ -11,6 +11,9 @@ tools:
   webfetch: false
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Terminal Title Integration
 
 <!-- AI-CONTEXT-START -->
@@ -19,22 +22,22 @@ tools:
 
 - **Purpose**: Sync terminal tab titles with git repo/branch via OSC escape sequences
 - **Script**: `~/.aidevops/agents/scripts/terminal-title-helper.sh`
-- **Auto-sync**: Runs automatically via `pre-edit-check.sh` when on a feature branch in a git repo
-- **Session sync**: OpenCode session names sync via `session-rename_sync_branch` tool; tab titles via the helper script
+- **Auto-sync**: Runs via `pre-edit-check.sh` on feature branches in git repos
+- **Session sync**: For issue/PR work, OpenCode session titles should begin with `Issue #123:` or `PR #456:` plus a succinct description; branch auto-sync is only the fallback when no issue/PR context exists. Force branch sync via `session-rename_sync_branch`.
 
 **Commands**:
 
 ```bash
-terminal-title-helper.sh sync      # Sync tab with current repo/branch
+terminal-title-helper.sh sync              # Sync tab with current repo/branch
 terminal-title-helper.sh rename "My Project"  # Set custom title
-terminal-title-helper.sh reset     # Reset to default
-terminal-title-helper.sh detect    # Check terminal compatibility
+terminal-title-helper.sh reset             # Reset to default
+terminal-title-helper.sh detect            # Check terminal compatibility
 ```
 
 **Title Formats** (set via `TERMINAL_TITLE_FORMAT`):
 
-| Format | Example Output |
-|--------|----------------|
+| Format | Example |
+|--------|---------|
 | `repo/branch` (default) | `aidevops/feature/xyz` |
 | `branch` | `feature/xyz` |
 | `repo` | `aidevops` |
@@ -44,62 +47,28 @@ terminal-title-helper.sh detect    # Check terminal compatibility
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TERMINAL_TITLE_FORMAT` | `repo/branch` | Title format (see table above) |
-| `TERMINAL_TITLE_ENABLED` | `true` | Set to `false` to disable |
+| `TERMINAL_TITLE_FORMAT` | `repo/branch` | Title format |
+| `TERMINAL_TITLE_ENABLED` | `true` | Set `false` to disable |
 
 <!-- AI-CONTEXT-END -->
 
 ## How It Works
 
-Sets terminal titles using OSC (Operating System Command) escape sequences — a standard supported by virtually all modern terminal emulators:
-
-```bash
-printf '\033]0;%s\007' "title"   # OSC 0 - Set window title and icon name
-printf '\033]2;%s\007' "title"   # OSC 2 - Set window title only
-```
-
-## Supported Terminals
-
-**Full support**: Tabby, iTerm2, Windows Terminal, Kitty, Alacritty, WezTerm, Hyper, GNOME Terminal, Konsole, VS Code Terminal, xterm, and most xterm-compatible terminals.
-
-**Partial**: Apple Terminal (basic), tmux/screen (requires config — see Troubleshooting).
+Uses OSC escape sequences (`printf '\033]0;%s\007' "title"`). **Full support**: Tabby, iTerm2, Windows Terminal, Kitty, Alacritty, WezTerm, Hyper, GNOME Terminal, Konsole, VS Code Terminal, xterm. **Partial**: Apple Terminal (basic), tmux/screen (requires config).
 
 ## Shell Integration
 
-For automatic tab title updates on every directory change, add to your shell config:
-
-**Bash** (`~/.bashrc`):
-
-```bash
-PROMPT_COMMAND='~/.aidevops/agents/scripts/terminal-title-helper.sh sync 2>/dev/null'
-```
-
-**Zsh** (`~/.zshrc`):
-
-```zsh
-precmd() {
-    ~/.aidevops/agents/scripts/terminal-title-helper.sh sync 2>/dev/null
-}
-```
-
-**Fish** (`~/.config/fish/config.fish`):
-
-```fish
-function fish_prompt
-    ~/.aidevops/agents/scripts/terminal-title-helper.sh sync 2>/dev/null
-    # ... rest of your prompt
-end
-```
+| Shell | Config file | Hook |
+|-------|-------------|------|
+| Bash | `~/.bashrc` | `PROMPT_COMMAND='terminal-title-helper.sh sync 2>/dev/null'` |
+| Zsh | `~/.zshrc` | `precmd() { terminal-title-helper.sh sync 2>/dev/null }` |
+| Fish | `~/.config/fish/config.fish` | `function fish_prompt; terminal-title-helper.sh sync 2>/dev/null; end` |
 
 ## Troubleshooting
 
-**Tab title not updating**: Run `terminal-title-helper.sh detect` to check compatibility. Verify you're in a git repo (`git rev-parse --is-inside-work-tree`) and that `TERMINAL_TITLE_ENABLED` is not `false`.
-
-**Wrong format**: Check `echo $TERMINAL_TITLE_FORMAT`.
-
-**Terminal-specific config required**:
-
-- **tmux** (`~/.tmux.conf`): `set -g set-titles on` and `set -g set-titles-string "#T"`
+- **Not updating**: Run `terminal-title-helper.sh detect`. Verify git repo (`git rev-parse --is-inside-work-tree`) and `TERMINAL_TITLE_ENABLED != false`.
+- **Wrong format**: `echo $TERMINAL_TITLE_FORMAT`
+- **tmux** (`~/.tmux.conf`): `set -g set-titles on` + `set -g set-titles-string "#T"`
 - **screen** (`~/.screenrc`): `termcapinfo xterm* ti@:te@`
 - **VS Code**: Enable "Terminal > Integrated: Allow Workspace Shell"
 

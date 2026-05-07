@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034
 
 # Email Design Test Helper Script
@@ -476,7 +478,7 @@ eoa_auth() {
 	local http_code
 	http_code=$(echo "$response" | tail -1)
 	local body
-	body=$(echo "$response" | head -n -1)
+	body=$(echo "$response" | sed '$d')
 
 	if [[ "$http_code" == "200" ]]; then
 		print_success "EOA API authentication successful"
@@ -645,7 +647,7 @@ eoa_create_test() {
 	local http_code
 	http_code=$(echo "$response" | tail -1)
 	local body
-	body=$(echo "$response" | head -n -1)
+	body=$(echo "$response" | sed '$d')
 
 	if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
 		local test_id
@@ -826,8 +828,8 @@ eoa_poll() {
 			processing_count=$(echo "$response" | jq -r '.processing | length' 2>/dev/null || echo "0")
 		else
 			# Rough count without jq
-			completed_count=$(echo "$response" | grep -c '"completed"' 2>/dev/null || echo "0")
-			processing_count=$(echo "$response" | grep -c '"processing"' 2>/dev/null || echo "0")
+			completed_count=$(echo "$response" | safe_grep_count '"completed"')
+			processing_count=$(echo "$response" | safe_grep_count '"processing"')
 		fi
 
 		echo -e "  [${attempt}/${EOA_POLL_MAX_ATTEMPTS}] Completed: ${completed_count}, Processing: ${processing_count}"

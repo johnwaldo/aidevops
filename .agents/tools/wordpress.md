@@ -4,67 +4,34 @@ description: WordPress ecosystem management - local development, fleet managemen
 mode: subagent
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # WordPress - Orchestrator
 
 <!-- AI-CONTEXT-START -->
 
 ## Quick Reference
 
-- **Purpose**: WordPress ecosystem management
-- **Local Dev**: LocalWP with MCP integration
-- **Fleet Management**: MainWP for multi-site operations
-- **Preferred Plugins**: See `wp-preferred.md` (127+ plugins)
-
-**Subagents**:
-- `wp-dev.md` - Theme/plugin development, debugging
-- `wp-admin.md` - Content management, maintenance
-- `localwp.md` - Local development with MCP
-- `mainwp.md` - Multi-site fleet management
-- `wp-preferred.md` - Curated plugin list by category
-- `scf.md` - Secure Custom Fields / ACF
-
-**MCP Integration**:
-- LocalWP MCP: Direct database access for local sites
-- MainWP REST API: Fleet operations
-
-**Key Commands**:
-
-```bash
-# LocalWP sites
-.agents/scripts/wordpress-mcp-helper.sh list-sites
-
-# MainWP operations
-.agents/scripts/mainwp-helper.sh [command] [site]
-```
+- **LocalWP MCP** — direct DB access for local sites: `.agents/scripts/wordpress-mcp-helper.sh list-sites`
+- **MainWP REST API** — fleet ops: `.agents/scripts/mainwp-helper.sh [command] [site]`
 
 <!-- AI-CONTEXT-END -->
 
-## WordPress Ecosystem
+## Route by task
 
-### Local Development
+| Need | Use | Why |
+|------|-----|-----|
+| Build or debug code | `wp-dev.md` | Development workflow, debugging, implementation patterns |
+| Manage content or routine upkeep | `wp-admin.md` | Admin tasks and site maintenance |
+| Inspect a local site or database | `localwp.md` | LocalWP setup and MCP-backed local DB access |
+| Update many sites | `mainwp.md` | Centralized MainWP operations |
+| Choose plugins | `wp-preferred.md` | 127+ curated plugins across 19 categories |
+| Work with custom fields | `scf.md` | Field modeling and SCF/ACF guidance |
 
-Use LocalWP for local WordPress development:
-- Full MCP integration for database access
-- See `localwp.md` for setup
+## Default workflow
 
-### Fleet Management
-
-MainWP provides centralized WordPress management:
-- Bulk updates, backups, security scans
-- See `mainwp.md` for operations
-
-### Development Workflow
-
-1. **Local**: Develop in LocalWP environment
-2. **Test**: Use `wp-dev.md` patterns
-3. **Deploy**: Push via MainWP or hosting provider
-4. **Manage**: Ongoing via `wp-admin.md`
-
-### Plugin Selection
-
-`wp-preferred.md` contains 127+ curated plugins across 19 categories:
-- Performance, Security, SEO
-- Forms, E-commerce, Membership
-- Backup, Staging, Development tools
-
-Always prefer curated plugins for reliability.
+1. **Local** — develop in a LocalWP environment.
+2. **Test** — follow `wp-dev.md` patterns.
+3. **Deploy** — push via MainWP or the hosting provider.
+4. **Manage** — handle ongoing operations via `wp-admin.md`.

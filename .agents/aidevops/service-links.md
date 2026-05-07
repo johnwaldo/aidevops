@@ -1,5 +1,5 @@
 ---
-description: Directory of service links and URLs
+description: Service consoles and documentation directory
 mode: subagent
 tools:
   read: true
@@ -11,22 +11,12 @@ tools:
   webfetch: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Service Links Directory
 
-<!-- AI-CONTEXT-START -->
-
-## Quick Reference
-
-- **Hosting**: Hostinger (hpanel.hostinger.com), Hetzner (console.hetzner.cloud), Closte (app.closte.com)
-- **Deployment**: Coolify (coolify.io/docs), Cloudron (docs.cloudron.io)
-- **DNS**: Cloudflare (dash.cloudflare.com), Route 53 (console.aws.amazon.com/route53)
-- **Git**: GitHub (github.com), GitLab (gitlab.com), Gitea (gitea.io)
-- **Quality**: SonarCloud (sonarcloud.io), CodeFactor (codefactor.io), Codacy (app.codacy.com), CodeRabbit (coderabbit.ai)
-- **Security**: Vaultwarden (github.com/dani-garcia/vaultwarden)
-- **AI Tools**: Factory AI (factory.ai), Augment (augmentcode.com), Warp (warp.dev)
-- **MCP**: Chrome DevTools, Playwright, Ahrefs, Perplexity, Google Search Console, Context7, LocalWP
-
-<!-- AI-CONTEXT-END -->
+**Sections:** [Infrastructure](#infrastructure--hosting) · [DNS](#domain--dns) · [Dev & Git](#development--git) · [Browser Automation](#browser-automation) · [Security & Quality](#security--quality) · [Monitoring](#performance--monitoring) · [AI Tools](#ai-tools) · [MCP](#mcp-integrations) · [Framework](#framework-documentation)
 
 ## Infrastructure & Hosting
 
@@ -60,6 +50,12 @@ tools:
 | [LocalWP](https://localwp.com/) | [localwp.com](https://localwp.com/) | [localwp.com/help-docs](https://localwp.com/help-docs/) |
 | [Agno](https://agno.ai/) | [agno.ai](https://agno.ai/) | [docs.agno.ai](https://docs.agno.ai/) |
 | [Pandoc](https://pandoc.org/) | — | [pandoc.org/MANUAL.html](https://pandoc.org/MANUAL.html) |
+| CLI tools | — | [jq](https://stedolan.github.io/jq/) · [yq](https://mikefarah.gitbook.io/yq/) · [ShellCheck](https://www.shellcheck.net/) · [Homebrew](https://brew.sh/) |
+
+## Browser Automation
+
+| Tool | Console | Docs |
+|------|---------|------|
 | [Playwright](https://playwright.dev/) | — | [playwright.dev/docs/intro](https://playwright.dev/docs/intro) |
 | [Selenium](https://www.selenium.dev/) | — | [selenium.dev](https://www.selenium.dev/) |
 | [Puppeteer](https://pptr.dev/) | — | [pptr.dev](https://pptr.dev/) |
@@ -74,13 +70,6 @@ tools:
 | [Codacy](https://www.codacy.com/) | [app.codacy.com](https://app.codacy.com/) | [docs.codacy.com](https://docs.codacy.com/) |
 | [CodeRabbit](https://coderabbit.ai/) | [app.coderabbit.ai](https://app.coderabbit.ai/) | [docs.coderabbit.ai](https://docs.coderabbit.ai/) |
 
-## AI Prompt Optimization
-
-| Service | Console | Docs |
-|---------|---------|------|
-| [DSPy](https://dspy.ai/) | [dspy.ai](https://dspy.ai/) | [dspy.ai/learn](https://dspy.ai/learn/) |
-| [DSPyGround](https://dspyground.com/) | [playground.dspyground.com](https://playground.dspyground.com/) | [docs.dspyground.com](https://docs.dspyground.com/) |
-
 ## Performance & Monitoring
 
 | Service | Console | Docs |
@@ -89,17 +78,19 @@ tools:
 | [PageSpeed Insights](https://pagespeed.web.dev/) | [pagespeed.web.dev](https://pagespeed.web.dev/) | [developers.google.com/speed/pagespeed](https://developers.google.com/speed/pagespeed/) |
 | [Lighthouse](https://developer.chrome.com/docs/lighthouse/) | — | [developer.chrome.com/docs/lighthouse](https://developer.chrome.com/docs/lighthouse/) |
 
-## AI CLI Tools
+## AI Tools
 
 | Service | Console | Docs |
 |---------|---------|------|
 | [Factory AI](https://www.factory.ai/) | [app.factory.ai](https://app.factory.ai/) | [docs.factory.ai](https://docs.factory.ai/) |
 | [Augment Code](https://www.augmentcode.com/) | [augmentcode.com](https://www.augmentcode.com/) | [docs.augmentcode.com](https://docs.augmentcode.com/) |
 | [Claude](https://claude.ai/) | [claude.ai](https://claude.ai/) | [docs.anthropic.com/claude](https://docs.anthropic.com/claude) |
-| [Warp AI](https://www.warp.dev/) | [warp.dev](https://www.warp.dev/) | [docs.warp.dev](https://docs.warp.dev/) |
+| [Warp AI](https://www.warp.dev/) | [warp.dev](https://warp.dev/) | [docs.warp.dev](https://docs.warp.dev/) |
 | [OpenAI](https://openai.com/) | [platform.openai.com/playground](https://platform.openai.com/playground) | [platform.openai.com/docs](https://platform.openai.com/docs) |
 | [AmpCode](https://ampcode.com/) | [ampcode.com](https://ampcode.com/) | [docs.ampcode.com](https://docs.ampcode.com/) |
 | [Continue.dev](https://continue.dev/) | [continue.dev](https://continue.dev/) | [docs.continue.dev](https://docs.continue.dev/) |
+| [DSPy](https://dspy.ai/) | [dspy.ai](https://dspy.ai/) | [dspy.ai/learn](https://dspy.ai/learn/) |
+| [DSPyGround](https://dspyground.com/) | [playground.dspyground.com](https://playground.dspyground.com/) | [docs.dspyground.com](https://docs.dspyground.com/) |
 
 ## MCP Integrations
 
@@ -115,14 +106,10 @@ tools:
 | Context7 | [context7.io](https://context7.io/) | [docs.context7.io](https://docs.context7.io/) |
 | LocalWP | [localwp.com](https://localwp.com/) | [localwp.com/help-docs](https://localwp.com/help-docs/) |
 
-## Development Tools & Support
-
-**CLI tools**: [jq](https://stedolan.github.io/jq/) · [yq](https://mikefarah.gitbook.io/yq/) · [ShellCheck](https://www.shellcheck.net/) · [Homebrew](https://brew.sh/)
-
-**Support**: [GitHub Issues](https://github.com/marcusquinn/aidevops/issues) · [GitHub Discussions](https://github.com/marcusquinn/aidevops/discussions) · [Stack Overflow](https://stackoverflow.com/) · [Reddit r/devops](https://www.reddit.com/r/devops/)
-
 ## Framework Documentation
 
-**Core**: [README](https://github.com/marcusquinn/aidevops) · [AGENTS.md](https://github.com/marcusquinn/aidevops/blob/main/AGENTS.md) · [Security](.agents/aidevops/security.md) · [API Integrations](.agents/aidevops/api-integrations.md)
-
-**Platform guides**: [MCP Integrations](.agents/aidevops/mcp-integrations.md) · [Quality Control](.agents/tools/code-review/code-standards.md) · [Troubleshooting](.agents/aidevops/troubleshooting.md)
+| Category | Links |
+|----------|-------|
+| Core | [README](https://github.com/marcusquinn/aidevops) · [AGENTS.md](https://github.com/marcusquinn/aidevops/blob/main/AGENTS.md) · [Security](.agents/aidevops/security.md) · [API Integrations](.agents/aidevops/api-integrations.md) |
+| Platform guides | [MCP Integrations](.agents/aidevops/mcp-integrations.md) · [Quality Control](.agents/tools/code-review/code-standards.md) · [Troubleshooting](.agents/aidevops/troubleshooting.md) |
+| Support | [GitHub Issues](https://github.com/marcusquinn/aidevops/issues) · [GitHub Discussions](https://github.com/marcusquinn/aidevops/discussions) · [Stack Overflow](https://stackoverflow.com/) · [Reddit r/devops](https://www.reddit.com/r/devops/) |

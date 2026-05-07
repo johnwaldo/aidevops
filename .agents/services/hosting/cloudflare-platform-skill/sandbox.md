@@ -1,15 +1,9 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cloudflare Sandbox SDK
 
-Secure isolated code execution in containers on Cloudflare's edge. Run untrusted code, manage files, expose services, integrate with AI agents.
-
-**Use cases**: AI code execution, interactive dev environments, data analysis, CI/CD, code interpreters, multi-tenant execution.
-
-## Architecture
-
-- Each sandbox = Durable Object + Container
-- Persistent across requests (same ID = same sandbox)
-- Isolated filesystem/processes/network
-- Configurable sleep/wake for cost optimization
+Run isolated containers on Cloudflare's edge. Each sandbox pairs a Durable Object with a container, reuses state when IDs match. Use cases: AI code execution, dev environments, CI/CD, data analysis, multi-tenant runners.
 
 ## Quick Start
 
@@ -32,25 +26,24 @@ export default {
 };
 ```
 
-**wrangler.jsonc**:
+## Configuration
+
+**`wrangler.jsonc`**
 
 ```jsonc
 {
   "name": "my-sandbox-worker",
   "main": "src/index.ts",
   "compatibility_date": "2024-01-01",
-  
   "containers": [{
     "class_name": "Sandbox",
     "image": "./Dockerfile",
-    "instance_type": "lite",        // lite | standard | heavy
+    "instance_type": "lite",  // lite | standard | heavy
     "max_instances": 5
   }],
-  
   "durable_objects": {
     "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
   },
-  
   "migrations": [{
     "tag": "v1",
     "new_sqlite_classes": ["Sandbox"]
@@ -58,7 +51,7 @@ export default {
 }
 ```
 
-**Dockerfile**:
+**`Dockerfile`**
 
 ```dockerfile
 FROM docker.io/cloudflare/sandbox:latest
@@ -75,16 +68,14 @@ EXPOSE 8080 3000  # Required for wrangler dev
 - `sandbox.exposePort(port, options)` → Get preview URL
 - `sandbox.createSession(options)` → Isolated session
 
-## Critical Rules
+## Key Rules
 
-- ALWAYS call `proxyToSandbox()` first
-- Same ID = reuse sandbox
-- Use `/workspace` for persistent files
-- `normalizeId: true` for preview URLs
-- Retry on `CONTAINER_NOT_READY`
+- Call `proxyToSandbox()` first so preview URLs resolve correctly
+- Reuse the sandbox ID when you want persistent state
+- Store persistent files in `/workspace`
+- Use `normalizeId: true` for preview URLs
+- Retry `CONTAINER_NOT_READY` during provisioning or wake-up
 
 ## Resources
 
-- [Patterns](./patterns.md) - Common workflows, CI/CD
-- [Gotchas](./gotchas.md) - Issues, limits, best practices
-- [Official Docs](https://developers.cloudflare.com/sandbox/)
+[Patterns](./sandbox-patterns.md) · [Gotchas](./sandbox-gotchas.md) · [Official Docs](https://developers.cloudflare.com/sandbox/)

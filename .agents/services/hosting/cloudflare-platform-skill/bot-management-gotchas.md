@@ -1,86 +1,83 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Bot Management Gotchas
-
-## Bot Score = 0
-
-**Cause**: Bot Management didn't run  
-**Reasons**: Internal Cloudflare request, Worker routing to zone (Orange-to-Orange), Request handled before BM (Redirect Rules, etc.)  
-**Solution**: Check request flow, ensure BM runs in request lifecycle
-
-## JavaScript Detections Not Working
-
-**Issue**: `js_detection.passed` always false or undefined  
-**Causes**:
-1. CSP headers don't allow `/cdn-cgi/challenge-platform/`
-2. Using on first page visit (needs HTML page first)
-3. Ad blockers or disabled JS
-4. JSD not enabled in dashboard
-5. Using Block action (must use Managed Challenge)
-
-**CSP Fix**:
-
-```txt
-Content-Security-Policy: script-src 'self' /cdn-cgi/challenge-platform/;
-```
 
 ## False Positives
 
-**Issue**: Legitimate users blocked  
-**Solutions**:
-1. Check Bot Analytics for affected IPs/paths
-2. Identify detection source (ML, Heuristics, etc.)
-3. Create exception rule:
+1. Check Bot Analytics for affected IPs and paths.
+2. Identify detection source (ML, heuristics, etc.).
+3. Add exception rule for isolated issues:
 
 ```txt
 (cf.bot_management.score lt 30 and http.request.uri.path eq "/problematic-path")
 Action: Skip (Bot Management)
 ```
 
-4. Or allowlist by IP/ASN/country
+4. Allowlist by IP, ASN, or country if necessary.
 
-## False Negatives (Bots Not Caught)
+## False Negatives
 
-**Issue**: Bots bypassing detection  
-**Solutions**:
-1. Lower score threshold (30 → 50)
-2. Enable JavaScript Detections
-3. Add JA3/JA4 fingerprinting rules
-4. Use rate limiting as fallback
+1. Increase enforcement threshold (e.g., 30 → 50).
+2. Enable JavaScript Detections (JSD).
+3. Add JA3/JA4 fingerprinting rules.
+4. Use rate limiting as fallback.
+
+## Bot Score = 0
+
+- Indicates Bot Management did not execute (not a score of 100).
+- Causes: internal Cloudflare requests, Worker-routed Orange-to-Orange traffic, or request completion before execution.
+- Fix: Trace request path; ensure Bot Management runs in the lifecycle.
+
+## JavaScript Detections (JSD) Not Working
+
+If `js_detection.passed` is `false` or `undefined`:
+
+- **CSP:** Ensure `/cdn-cgi/challenge-platform/` is allowed.
+- **First Visit:** JSD requires an initial HTML page visit.
+- **Client:** Check for disabled JS or ad blockers.
+- **Dashboard:** Verify JSD is enabled.
+- **Action:** Rule must be `Managed Challenge` (not `Block`).
+
+**CSP fix:**
+
+```txt
+Content-Security-Policy: script-src 'self' /cdn-cgi/challenge-platform/;
+```
 
 ## Verified Bot Blocked
 
-**Issue**: Search engine bot blocked  
-**Causes**: WAF Managed Rules (not just Bot Management), Yandex bot during IP update (48h)  
-**Solution**: Create WAF exception for specific rule ID, verify bot via reverse DNS
+- Usually WAF Managed Rules, not Bot Management.
+- Yandex bot verification may fail for 48h during Cloudflare IP updates.
+- Fix: Create WAF exception for the rule ID; verify bot via reverse DNS.
 
 ## JA3/JA4 Missing
 
-**Issue**: `ja3Hash` or `ja4` is undefined  
-**Causes**: Non-HTTPS traffic, Worker routing traffic, Orange-to-Orange traffic via Worker, Bot Management skipped  
-**Solution**: Only available for HTTPS/TLS traffic; check request routing
+- Requires HTTPS/TLS traffic.
+- Missing on Worker-routed or Orange-to-Orange traffic.
+- Only exists if Bot Management executed.
 
-## Bot Score Limitations
+## Detection Limits
 
-- Score = 0 means **not computed** (not score = 100)
-- First request may not have JSD data
-- Score doesn't guarantee 100% accuracy
-- False positives/negatives possible
+### Bot score
 
-## JavaScript Detections Limitations
+- `0` = not computed.
+- Initial requests may lack JSD data.
+- Scores are probabilistic; false positives/negatives occur.
 
-- Doesn't work on first HTML page visit
-- Requires JavaScript-enabled browser
-- Strips ETags from HTML responses
-- Not compatible with some CSP configurations
-- Not supported via `<meta>` CSP tags
-- Websocket endpoints not supported
-- Native mobile apps won't pass
+### JavaScript Detections
 
-## JA3/JA4 Fingerprint Limitations
+- Fails on first HTML page visit.
+- Requires JS-enabled browser.
+- Strips ETags from HTML.
+- Breaks with restrictive CSP (no `<meta>` CSP support).
+- No WebSocket or native mobile app support.
 
-- Only available for HTTPS/TLS traffic
-- Missing for Worker-routed traffic
-- Not unique per user (shared by clients with same browser/library)
-- Can change with browser/library updates
+### JA3/JA4 fingerprints
+
+- HTTPS/TLS only.
+- Missing on Worker-routed traffic.
+- Not unique per user; fingerprints can change on browser/library updates.
 
 ## Plan Restrictions
 
@@ -95,8 +92,7 @@ Action: Skip (Bot Management)
 
 ## Technical Constraints
 
-- Max 25 WAF custom rules on Free (varies by plan)
-- Workers CPU time limits apply to bot logic
-- Bot Analytics sampling (1-10%)
-- 30-day maximum history
-- CSP requirements for JSD (must allow `/cdn-cgi/challenge-platform/`)
+- Max 25 WAF custom rules on Free (varies by plan).
+- Workers CPU limits apply to bot logic.
+- Bot Analytics sampled at 1-10%; 30-day history max.
+- JSD requires CSP allowing `/cdn-cgi/challenge-platform/`.

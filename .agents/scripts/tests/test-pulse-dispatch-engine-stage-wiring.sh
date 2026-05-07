@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+#
+# shellcheck disable=SC2016  # single-quoted regex patterns are literal by design
+#
+# test-pulse-dispatch-engine-stage-wiring.sh — regression guard for t2443
+#
+# Verifies that post-dispatch housekeeping stages remain independently timed
+# and are wired through the async housekeeping launcher, not wrapped in a
+# shared-budget group that blocks worker refill.
+#
+# Background: _preflight_daily_scans() wrapped 4+ children under a single
+# 600s timeout. A slow complexity_scan (200-340s) would exhaust the budget
+# before auto_decomposer_scanner could run. t2443 promoted each scanner to
+# an independent stage so each gets its own timeout budget; t3055 then moved
+# those independent stages behind an async post-dispatch lock so housekeeping
+# cannot hold the dispatch cycle open while worker slots drain.
+
+set -u
+
+if [[ -t 1 ]]; then
+	TEST_GREEN=$'\033[0;32m'
+	TEST_RED=$'\033[0;31m'
+	TEST_NC=$'\033[0m'
+else
+	TEST_GREEN="" TEST_RED="" TEST_NC=""
+fi
+
+TESTS_RUN=0
+TESTS_FAILED=0
+
+assert_grep() {
+	local label="$1" pattern="$2" file="$3"
+	TESTS_RUN=$((TESTS_RUN + 1))
+	if grep -qE "$pattern" "$file" 2>/dev/null; then
+		echo "${TEST_GREEN}PASS${TEST_NC}: $label"
+	else
+		TESTS_FAILED=$((TESTS_FAILED + 1))
+		echo "${TEST_RED}FAIL${TEST_NC}: $label"
+		echo "  expected pattern: $pattern"
+		echo "  in file:          $file"
+	fi
+	return 0
+}
+
+assert_not_grep() {
+	local label="$1" pattern="$2" file="$3"
+	TESTS_RUN=$((TESTS_RUN + 1))
+	if ! grep -qE "$pattern" "$file" 2>/dev/null; then
+		echo "${TEST_GREEN}PASS${TEST_NC}: $label"
+	else
+		TESTS_FAILED=$((TESTS_FAILED + 1))
+		echo "${TEST_RED}FAIL${TEST_NC}: $label"
+		echo "  pattern should NOT match: $pattern"
+		echo "  in file:                  $file"
+	fi
+	return 0
+}
+
+# Resolve paths relative to this test file
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENGINE="$SCRIPT_DIR/pulse-dispatch-engine.sh"
+
+echo "=== t2443 + t2903: pulse-dispatch-engine stage wiring regression tests ==="
+echo "Engine: $ENGINE"
+echo ""
+
+# --- Each daily scanner is still independently timed inside housekeeping ---
+#
+# t2903 (#21049): complexity_scan was REMOVED from the dispatch engine and
+# moved to its own launchd plist (sh.aidevops.complexity-scan) backed by
+# complexity-scan-runner.sh. The function still exists in pulse-simplification.sh
+# but is no longer invoked from the preflight stages. Slot #1 below is the
+# negative assertion that pins the removal.
+
+assert_not_grep \
+	"1: complexity_scan extracted to standalone launchd plist (t2903) — must NOT be in dispatch engine" \
+	'run_stage_with_timeout "complexity_scan"' \
+	"$ENGINE"
+
+# Assertions 2-6: each stage uses two separate greps (2a/2b pattern) because the
+# dispatch engine wires stages with a backslash line-continuation:
+#   _pulse_run_optional_stage_with_timeout "coderabbit_review" "$stage_timeout" run_daily_codebase_review || true
+# Single-line grep -E cannot span the newline, so split into stage-name + function-name.
+
+assert_grep \
+	"2a: coderabbit_review stage call present" \
+	'_pulse_run_optional_stage_with_timeout "coderabbit_review"' \
+	"$ENGINE"
+assert_grep \
+	"2b: coderabbit_review function name present" \
+	'run_daily_codebase_review' \
+	"$ENGINE"
+
+assert_grep \
+	"3a: post_merge_scanner stage call present" \
+	'_pulse_run_optional_stage_with_timeout "post_merge_scanner"' \
+	"$ENGINE"
+assert_grep \
+	"3b: post_merge_scanner function name present" \
+	'_run_post_merge_review_scanner' \
+	"$ENGINE"
+
+assert_grep \
+	"4a: auto_decomposer_scanner stage call present" \
+	'_pulse_run_optional_stage_with_timeout "auto_decomposer_scanner"' \
+	"$ENGINE"
+assert_grep \
+	"4b: auto_decomposer_scanner function name present" \
+	'_run_auto_decomposer_scanner' \
+	"$ENGINE"
+
+assert_grep \
+	"5a: dedup_cleanup stage call present" \
+	'_pulse_run_optional_stage_with_timeout "dedup_cleanup"' \
+	"$ENGINE"
+assert_grep \
+	"5b: dedup_cleanup function name present" \
+	'run_simplification_dedup_cleanup' \
+	"$ENGINE"
+
+assert_grep \
+	"6a: fast_fail_prune_expired stage call present" \
+	'_pulse_run_optional_stage_with_timeout "fast_fail_prune_expired"' \
+	"$ENGINE"
+assert_grep \
+	"6b: fast_fail_prune_expired function name present" \
+	'fast_fail_prune_expired' \
+	"$ENGINE"
+
+# --- The shared-budget wrapper must NOT exist ---
+
+assert_not_grep \
+	"7: _preflight_daily_scans() function wrapper removed (no shared budget)" \
+	'^_preflight_daily_scans\(\)' \
+	"$ENGINE"
+
+assert_not_grep \
+	"8: no run_stage_with_timeout wrapping preflight_daily_scans as a group" \
+	'run_stage_with_timeout "preflight_daily_scans"' \
+	"$ENGINE"
+
+# --- The async launcher receives the same timeout variable as peer preflight groups ---
+# (complexity_scan removed in t2903 — moved to standalone launchd plist;
+# kept the launcher call as the canary for _pflt_timeout wiring.)
+
+assert_grep \
+	"9: async post-dispatch housekeeping uses _pflt_timeout" \
+	'_pulse_start_post_dispatch_housekeeping "\$_pflt_timeout"' \
+	"$ENGINE"
+
+# --- Summary ---
+
+echo ""
+echo "=== Results: $TESTS_RUN tests, $TESTS_FAILED failures ==="
+
+if [[ "$TESTS_FAILED" -gt 0 ]]; then
+	exit 1
+fi
+exit 0

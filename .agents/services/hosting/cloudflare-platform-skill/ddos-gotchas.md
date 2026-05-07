@@ -1,50 +1,17 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # DDoS Gotchas
 
-## False Positives
+## Always-on Protection
 
-**Symptom**: Legitimate traffic blocked/challenged
-
-**Diagnosis**:
-
-```typescript
-// Query GraphQL API for flagged requests
-const query = `
-  query {
-    viewer {
-      zones(filter: { zoneTag: "${zoneId}" }) {
-        httpRequestsAdaptiveGroups(
-          filter: { ruleId: "${ruleId}", action: "log" }
-          limit: 100
-          orderBy: [datetime_DESC]
-        ) {
-          dimensions {
-            clientCountryName
-            clientRequestHTTPHost
-            clientRequestPath
-            userAgent
-          }
-          count
-        }
-      }
-    }
-  }
-`;
-```
-
-**Fix**:
-1. Lower sensitivity for specific rule/category
-2. Use `log` action first to validate (Enterprise Advanced)
-3. Add exception with custom expression (e.g., allowlist IPs)
-4. Reduce category sensitivity: `{ category: "http-flood", sensitivity_level: "low" }`
+DDoS managed rulesets cannot be fully disabled. Minimum mitigation: `sensitivity_level: "eoff"`.
 
 ## Attacks Getting Through
 
-**Cause**: Sensitivity too low, wrong action
-
-**Fix**:
+Sensitivity too low or wrong action. Fix — increase to default (high) sensitivity:
 
 ```typescript
-// Increase to default (high) sensitivity
 const config = {
   rules: [{
     expression: "true",
@@ -57,60 +24,65 @@ const config = {
 };
 ```
 
+## False Positives
+
+Legitimate traffic blocked/challenged. Diagnose via GraphQL:
+
+```graphql
+{
+  viewer {
+    zones(filter: { zoneTag: "<ZONE_ID>" }) {
+      httpRequestsAdaptiveGroups(
+        filter: { ruleId: "<RULE_ID>", action: "log" }
+        limit: 100
+        orderBy: [datetime_DESC]
+      ) {
+        dimensions { clientCountryName clientRequestHTTPHost clientRequestPath userAgent }
+        count
+      }
+    }
+  }
+}
+```
+
+Fix:
+
+1. Lower sensitivity for specific rule/category
+2. Use `log` action first to validate (Enterprise Advanced)
+3. Add exception with custom expression (e.g., allowlist IPs)
+4. Reduce category sensitivity: `{ category: "http-flood", sensitivity_level: "low" }`
+
 ## Adaptive Rules Not Working
 
-**Cause**: Insufficient traffic history (needs 7 days)
-
-**Fix**: Wait for baseline to establish, check dashboard for adaptive rule status
+Needs 7 days of traffic history for baseline. Check dashboard for adaptive rule status.
 
 ## Zone vs Account Override Conflict
 
-**Issue**: Account overrides ignored when zone has overrides
-
-**Solution**: Configure at zone level OR remove zone overrides to use account-level
+Account overrides ignored when zone has overrides. Configure at zone level OR remove zone overrides to use account-level.
 
 ## Log Action Not Available
 
-**Cause**: Not on Enterprise Advanced DDoS plan
+Requires Enterprise Advanced DDoS plan. Workaround: use `managed_challenge` with low sensitivity for testing.
 
-**Workaround**: Use `managed_challenge` with low sensitivity for testing
+## Rule Limits
 
-## Rule Limit Exceeded
+| Plan | Override rules |
+|------|---------------|
+| Free/Pro/Business | 1 |
+| Enterprise Advanced | Up to 10 |
 
-**Plans**:
-- Free/Pro/Business: 1 override rule only
-- Enterprise Advanced: Up to 10 rules
-
-**Workaround**: Combine conditions in single expression using `and`/`or`
+Workaround: combine conditions in single expression using `and`/`or`.
 
 ## Read-only Managed Rules
 
-**Issue**: Some rules cannot be overridden
-
-**Check**: API response indicates if rule is read-only
-
-## Always-on Protection
-
-**Reality**: DDoS managed rulesets cannot be fully disabled
-
-**Minimum**: Set `sensitivity_level: "eoff"` for minimal mitigation
+Some rules cannot be overridden — API response indicates if rule is read-only.
 
 ## Tuning Strategy
 
 1. Start with `log` action + `medium` sensitivity
-2. Monitor for 24-48 hours
-3. Identify false positives, add exceptions
-4. Gradually increase to `default` sensitivity
-5. Change action from `log` → `managed_challenge` → `block`
-6. Document all adjustments
-
-## Best Practices
-
-- Test during low-traffic periods
-- Use zone-level for per-site tuning
-- Reference IP lists for easier management
-- Set appropriate alert thresholds (avoid noise)
-- Combine with WAF for layered defense
-- Avoid over-tuning (keep config simple)
+2. Monitor 24-48 hours, identify false positives, add exceptions
+3. Gradually increase to `default` sensitivity
+4. Escalate action: `log` → `managed_challenge` → `block`
+5. Document all adjustments; test during low-traffic periods; combine with WAF for layered defense
 
 See [patterns.md](./patterns.md) for progressive rollout examples.

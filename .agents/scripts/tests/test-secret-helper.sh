@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
 HELPER="${SCRIPT_DIR}/../secret-helper.sh"
 
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly RESET='\033[0m'
+readonly TEST_RED='\033[0;31m'
+readonly TEST_GREEN='\033[0;32m'
+readonly TEST_RESET='\033[0m'
 
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -24,10 +26,10 @@ print_result() {
 	TESTS_RUN=$((TESTS_RUN + 1))
 
 	if [[ "$result" -eq 0 ]]; then
-		echo -e "${GREEN}PASS${RESET} $test_name"
+		echo -e "${TEST_GREEN}PASS${TEST_RESET} $test_name"
 		TESTS_PASSED=$((TESTS_PASSED + 1))
 	else
-		echo -e "${RED}FAIL${RESET} $test_name"
+		echo -e "${TEST_RED}FAIL${TEST_RESET} $test_name"
 		if [[ -n "$message" ]]; then
 			echo "       $message"
 		fi

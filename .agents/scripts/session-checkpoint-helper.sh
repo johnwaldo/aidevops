@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # session-checkpoint-helper.sh - Persist session state to survive context compaction
 # Part of aidevops framework: https://aidevops.sh
 #
@@ -39,7 +41,7 @@ source "${SCRIPT_DIR}/shared-constants.sh"
 readonly CHECKPOINT_DIR="${HOME}/.aidevops/.agent-workspace/tmp"
 readonly CHECKPOINT_FILE="${CHECKPOINT_DIR}/session-checkpoint.md"
 
-readonly BOLD='\033[1m'
+[[ -z "${BOLD+x}" ]] && BOLD='\033[1m'
 
 # Credential patterns to redact from checkpoint content.
 # Focused on secrets (API keys, tokens, passwords, connection strings).
@@ -376,11 +378,7 @@ cmd_status() {
 	local file_mtime
 
 	now="$(date +%s)"
-	if [[ "$(uname)" == "Darwin" ]]; then
-		file_mtime="$(stat -f %m "$CHECKPOINT_FILE")"
-	else
-		file_mtime="$(stat -c %Y "$CHECKPOINT_FILE")"
-	fi
+	file_mtime="$(_file_mtime_epoch "$CHECKPOINT_FILE")"
 	file_age_seconds=$((now - file_mtime))
 
 	local age_display
@@ -427,7 +425,7 @@ _gather_continuation_state() {
 
 	# Supervisor batch state
 	_cont_batch_state="none"
-	local supervisor_helper="${SCRIPT_DIR}/supervisor-helper.sh"
+	local supervisor_helper="${SCRIPT_DIR}/pulse-wrapper.sh"
 	if [[ -x "$supervisor_helper" ]]; then
 		_cont_batch_state="$(bash "$supervisor_helper" list --active 2>/dev/null || echo "none")"
 	fi
@@ -577,7 +575,7 @@ cmd_auto_save() {
 
 	# Auto-detect batch from supervisor if not provided
 	local batch=""
-	local supervisor_helper="${SCRIPT_DIR}/supervisor-helper.sh"
+	local supervisor_helper="${SCRIPT_DIR}/pulse-wrapper.sh"
 	if [[ -x "$supervisor_helper" ]]; then
 		batch="$(bash "$supervisor_helper" list --active --format=id 2>/dev/null | head -1 || echo "")"
 	fi
@@ -586,10 +584,9 @@ cmd_auto_save() {
 	if [[ -z "$next_tasks" ]]; then
 		local todo_file
 		for todo_file in "$(pwd)/TODO.md" "${worktree}/TODO.md"; do
-			if [[ -f "$todo_file" ]]; then
-				next_tasks="$(grep -E '^\s*- \[ \] t[0-9]' "$todo_file" 2>/dev/null | head -3 | sed 's/.*\(t[0-9][0-9]*[^ ]*\).*/\1/' | tr '\n' ',' | sed 's/,$//' || echo "")"
-				break
-			fi
+			[[ -f "$todo_file" ]] || continue
+			next_tasks="$(grep -E '^\s*- \[ \] t[0-9]' "$todo_file" 2>/dev/null | head -3 | sed 's/.*\(t[0-9][0-9]*[^ ]*\).*/\1/' | tr '\n' ',' | sed 's/,$//' || echo "")"
+			break
 		done
 	fi
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # MCP Registration Script for Claude Code
 # Reads configs/mcp-templates/*.json and registers MCP servers via `claude mcp add-json`.
@@ -64,7 +66,7 @@ Options:
   --skip <name>   Skip specific template (repeatable)
   --help          Show this help
 
-Templates are matched by filename stem (e.g. 'augment' matches augment-context-engine.json).
+Templates are matched by filename stem (e.g. 'context7' matches context7.json).
 If no templates specified, all templates with claude_code_command entries are processed.
 EOF
 	return 0

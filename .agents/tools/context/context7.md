@@ -11,9 +11,14 @@ tools:
   webfetch: true
   task: true
   context7_*: true
+  # TODO(permission-migration): Replace with permission: context7: allow
+  # once anomalyco/opencode#6892 is resolved.
 mcp:
   - context7
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Context7 MCP Setup Guide
 

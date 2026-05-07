@@ -4,6 +4,9 @@ description: Agent design and composition - creating efficient, token-optimized 
 mode: subagent
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Build-Agent - Composing Efficient AI Agents
 
 <!-- AI-CONTEXT-START -->
@@ -15,6 +18,7 @@ mode: subagent
 - **MCP servers**: Disabled globally, enabled per-agent
 - **Code refs**: `rg "pattern"` search patterns, not `file:line` (line numbers drift)
 - **Subagents**: `agent-review.md` (review), `agent-testing.md` (testing)
+- **Slash command**: `/build-agent {name} {kind} [category]` → `.agents/scripts/commands/build-agent.md` (interactive harness for creating new agents)
 - **Related**: `@code-standards`, `.agents/aidevops/architecture.md`, `tools/browser/browser-automation.md`
 - **After creating/promoting**: `~/.aidevops/agents/scripts/subagent-index-helper.sh generate`
 - **Testing**: `agent-test-helper.sh run my-tests` or `claude -p "Test query"`
@@ -49,11 +53,14 @@ tools:
 ---
 ```
 
-- **MCP tool patterns** (subagents only): `context7_*: true`, `wordpress-mcp_*: true`. Path-based → `opencode.json`.
+- **MCP tool patterns** (subagents only): `context7_*: true`, `wordpress-mcp_*: true`. Injected by plugin at startup — do not set in `opencode.json` directly.
 - **MCP tool filtering** (future `includeTools` — 17k→1.5k token savings): `mcp_requirements: { chrome-devtools: { tools: [navigate_page, take_screenshot] } }`
 - **Main-branch write restrictions**: ALLOWED: `README.md`, `TODO.md`, `todo/PLANS.md`, `todo/tasks/*`. BLOCKED: all other files.
-- **MCP config** (global disabled, per-agent enabled): `"mcp": { "hostinger-api": { "enabled": false } }` + `"agent": { "hostinger": { "tools": { "hostinger-api_*": true } } }`
-- **Source of truth**: `.agents/` → deployed to `~/.aidevops/agents/` by `setup.sh`. Stubs: `.opencode/agent/` via `generate-opencode-agents.sh`.
+- **Adding a new MCP** (two files required — plugin is authoritative, not `opencode.json`):
+  1. `mcp-registry.mjs` `getMcpRegistry()`: `{ name, command/url, eager: false, toolPattern: "foo_*", globallyEnabled: false }`
+  2. `agent-loader.mjs` `AGENT_MCP_TOOLS`: `"my-agent": ["foo_*"]`
+  Then add `foo_*: true` to the agent's frontmatter `tools:` block for documentation.
+- **Source of truth**: `.agents/` → deployed to `~/.aidevops/agents/` by `setup.sh`. Stubs: `~/.config/opencode/agent/` via `generate-opencode-agents.sh`.
 - **Deployment sync**: changes in `.agents/` require `./setup.sh`. Offer to run on create/rename/move/merge/delete.
 
 ## Folder Organization
@@ -104,13 +111,30 @@ External skills retain `-skill` suffix (provenance marker for `skill-update-help
 
 ## Model Tier Selection
 
-Record outcomes: `/remember "SUCCESS/FAILURE: agent with model — reason"`. Frontmatter: `model: sonnet  # 87% success, 14 samples`. Full docs: `tools/context/model-routing.md`.
+Record outcomes: `/remember "SUCCESS/FAILURE: agent with model — reason"`. Frontmatter: `model: sonnet  # 87% success, 14 samples`. Full docs: `tools/context/model-routing.md`, `reference/task-taxonomy.md`.
+
+| Tier | Model | Agent use |
+|------|-------|-----------|
+| `tier:simple` | Haiku | Execution of prescriptive briefs with exact code blocks. 100% success when oldString/newString provided verbatim. |
+| `tier:standard` | Sonnet | Standard implementation, judgment, error recovery, multi-file coordination. Default for code tasks. |
+| `tier:thinking` | Opus | Architecture decisions, novel design, security audits, analysis that creates work for lower tiers. |
 
 | Situation | Action |
 |-----------|--------|
 | >75% success, 3+ samples | Use pattern data (overrides static rule) |
 | Insufficient data | Use routing rules, record outcomes |
 | Contradicts routing rules | Note conflict in agent docs |
+
+### Designing tier-aware output
+
+Agents that *create work* (issues, briefs, review findings) should format output so the implementing worker can be dispatched at `tier:simple`:
+
+- **Provide verbatim code**: `Current` / `Proposed` blocks should be exact oldString/newString, not paraphrased descriptions. Research: Haiku achieves 100% success with exact code, 0% with "change X to Y" descriptions.
+- **Include file paths with line ranges**: `path/to/file.ts:45-60`, not "the auth module".
+- **One finding = one edit**: Don't bundle multiple changes into a single narrative finding. Each discrete edit should be a separate, mechanically executable step.
+- **Add verification**: A bash one-liner the worker runs after applying the edit.
+
+This applies to: code-simplifier findings, quality-feedback issues, review-feedback issues, and any agent that creates `auto-dispatch` work items.
 
 ## Quality Checking
 

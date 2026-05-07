@@ -1,18 +1,25 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cloudflare Workers
 
-Expert guidance for building, deploying, and optimizing Cloudflare Workers applications.
+Cloudflare Workers run request-driven code on a global V8 isolate runtime. Prefer web platform APIs (`fetch`, `URL`, `Headers`, `Request`, `Response`) for portability.
 
-## Overview
+## Best Fit
 
-Cloudflare Workers run on V8 isolates (NOT containers/VMs):
-- Extremely fast cold starts (< 1ms)
+- Edge APIs, proxies, routing logic, and request/response transforms
+- Authentication, authorization, rate limiting, and security layers
+- Static asset optimization, feature flags, and A/B testing
+- WebSocket applications and event-driven handlers
+
+## Why Use Them
+
+- V8 isolates instead of containers or VMs
+- Cold starts under 1 ms
 - Global deployment across 300+ locations
-- Web standards compliant (fetch, URL, Headers, Request, Response)
-- Support JS/TS, Python, Rust, and WebAssembly
+- JS/TS, Python, Rust, and WebAssembly support
 
-**Key principle**: Workers use web platform APIs wherever possible for portability.
-
-## Module Worker Pattern (Recommended)
+## Recommended Module Worker
 
 ```typescript
 export default {
@@ -22,73 +29,38 @@ export default {
 };
 ```
 
-**Handler parameters**:
-- `request`: Incoming HTTP request (standard Request object)
-- `env`: Environment bindings (KV, D1, R2, secrets, vars)
-- `ctx`: Execution context (`waitUntil`, `passThroughOnException`)
+- `request`: incoming `Request`
+- `env`: bindings for KV, D1, R2, secrets, and vars
+- `ctx`: `waitUntil()` and `passThroughOnException()`
 
-## Essential Commands
+## Handler Surfaces
+
+```typescript
+async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>
+async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void>
+async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext): Promise<void>
+async tail(events: TraceItem[], env: Env, ctx: ExecutionContext): Promise<void>
+```
+
+## Wrangler Essentials
 
 ```bash
+npm create cloudflare@latest my-worker -- --type hello-world
+cd my-worker
 npx wrangler dev                    # Local dev
-npx wrangler dev --remote           # Remote dev (actual resources)
+npx wrangler dev --remote           # Remote dev with actual resources
 npx wrangler deploy                 # Production
 npx wrangler deploy --env staging   # Specific environment
 npx wrangler tail                   # Stream logs
 npx wrangler secret put API_KEY     # Set secret
 ```
 
-## When to Use Workers
+## Read Next
 
-- API endpoints at the edge
-- Request/response transformation
-- Authentication/authorization layers
-- Static asset optimization
-- A/B testing and feature flags
-- Rate limiting and security
-- Proxy/routing logic
-- WebSocket applications
-
-## Quick Start
-
-```bash
-npm create cloudflare@latest my-worker -- --type hello-world
-cd my-worker
-npx wrangler dev
-```
-
-## Handler Signatures
-
-```typescript
-// HTTP requests
-async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>
-
-// Cron triggers
-async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void>
-
-// Queue consumer
-async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext): Promise<void>
-
-// Tail consumer
-async tail(events: TraceItem[], env: Env, ctx: ExecutionContext): Promise<void>
-```
-
-## Resources
-
-**Docs**: https://developers.cloudflare.com/workers/  
-**Examples**: https://developers.cloudflare.com/workers/examples/  
-**Runtime APIs**: https://developers.cloudflare.com/workers/runtime-apis/
-
-## In This Reference
-
-- [Patterns](./patterns.md) - Common workflows, testing, optimization
-- [Gotchas](./gotchas.md) - Common issues, limits, troubleshooting
-
-## See Also
-
-- [KV](../kv/README.md) - Key-value storage
-- [D1](../d1/README.md) - SQL database
-- [R2](../r2/README.md) - Object storage
-- [Durable Objects](../durable-objects/README.md) - Stateful coordination
-- [Queues](../queues/README.md) - Message queues
-- [Wrangler](../wrangler/README.md) - CLI tool reference
+- [workers-patterns.md](./workers-patterns.md) - Workflows, testing, and optimization
+- [workers-gotchas.md](./workers-gotchas.md) - Limits, pitfalls, and troubleshooting
+- [wrangler.md](./wrangler.md) - CLI details
+- [kv.md](./kv.md), [d1.md](./d1.md), [r2.md](./r2.md), [durable-objects.md](./durable-objects.md), [queues.md](./queues.md) - Common bindings
+- Docs: https://developers.cloudflare.com/workers/
+- Examples: https://developers.cloudflare.com/workers/examples/
+- Runtime APIs: https://developers.cloudflare.com/workers/runtime-apis/

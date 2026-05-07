@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # dispatch-dedup-helper.sh - Normalize and deduplicate worker dispatch titles (t2310)
 #
 # Prevents duplicate worker dispatch by extracting canonical dedup keys from
@@ -29,6 +31,11 @@
 #     task-id fallback) and should be skipped by pulse dispatch.
 #     Exit 0 = PR evidence exists (do NOT dispatch), exit 1 = no evidence.
 #
+#   dispatch-dedup-helper.sh check-orphan-loop <issue> <slug> <branch>
+#     Check whether repeated worker_branch_orphan outcomes for the same issue
+#     and branch should hold dispatch before launching another worker.
+#     Exit 0 = threshold reached (do NOT dispatch), exit 1 = no hold.
+#
 #   dispatch-dedup-helper.sh is-assigned <issue> <slug> [self-login]
 #     Check if issue is assigned to another runner (not self, owner, or maintainer).
 #     GH#10521: Ignores repo owner (from slug) and maintainer (from repos.json).
@@ -49,6 +56,24 @@ set -euo pipefail
 # Resolve path to dispatch-claim-helper.sh (co-located)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 CLAIM_HELPER="${SCRIPT_DIR}/dispatch-claim-helper.sh"
+
+# t2033: source shared-constants for set_issue_status helper. Include guard
+# inside shared-constants.sh makes this safe even when orchestrator already
+# sourced it.
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/shared-constants.sh"
+
+# GH#18917: cost circuit breaker extracted to keep this file below 2000 lines.
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/dispatch-dedup-cost.sh"
+
+# GH#18916: stale assignment recovery subsystem extracted.
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/dispatch-dedup-stale.sh"
+
+# GH#18916: PR evidence dedup checks extracted.
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/dispatch-dedup-pr.sh"
 
 #######################################
 # Extract canonical dedup keys from a title string.
@@ -229,6 +254,39 @@ _match_candidate_key() {
 #       $2 = path to supervisor.db
 # Returns: exit 0 if live duplicate found (prints DUPLICATE line),
 #          exit 1 if no match or stale entry (prints STALE line if stale)
+#
+# t2061 audit (2026-04-14):
+#
+# Error path classification for _check_db_entry:
+#
+#   sqlite3 DB unavailable (missing file, access error):
+#     → 2>/dev/null || true swallows the error → db_match="" → return 1
+#     → FAIL-OPEN INTENTIONAL: missing DB = no prior dispatch claim entry.
+#       The correct answer to "is this a duplicate?" when the DB is absent is
+#       "no" — genuine duplicates have DB entries; absence is evidence of absence.
+#
+#   sqlite3 query error (permission, corruption, format mismatch):
+#     → 2>/dev/null || true → db_match="" → return 1
+#     → FAIL-OPEN INTENTIONAL: same rationale. Cannot confirm a claim we
+#       cannot read; the safe assumption is no prior claim.
+#
+#   PID file read error (unreadable, missing):
+#     → cat 2>/dev/null || true → stored_pid="" → "No valid PID file" branch
+#     → stale → return 1 (safe to dispatch)
+#     → FAIL-OPEN INTENTIONAL: cannot prove liveness without the PID. The
+#       GH#5662 design intent is to recover stale entries; unreadable PID
+#       files match the stale criteria.
+#
+#   sqlite3 UPDATE error during stale cleanup:
+#     → 2>/dev/null || true → cleanup silently fails → return 1 (stale)
+#     → FAIL-OPEN INTENTIONAL: cleanup failure does not affect the dispatch
+#       decision. The dispatch is already allowed; cleanup is housekeeping.
+#
+# All fail-open paths answer "is this a duplicate?" with "no", which is the
+# safest default for this guard. A genuine duplicate has a live DB entry;
+# absence or unreadability is not evidence of a claim.
+# NOTE: this is a LOCAL-ONLY guard (this machine's supervisor DB only).
+# The cross-machine guard (is_assigned) enforces GUARD_UNCERTAIN fail-closed.
 #######################################
 _check_db_entry() {
 	local candidate_key="$1"
@@ -279,19 +337,20 @@ _check_db_entry() {
 	[[ -f "$pid_file" ]] && stored_pid=$(cat "$pid_file" 2>/dev/null || true)
 
 	if [[ -n "$stored_pid" ]] && [[ "$stored_pid" =~ ^[0-9]+$ ]]; then
-		if ! kill -0 "$stored_pid" 2>/dev/null; then
-			# Process is dead — stale DB entry; reset and allow dispatch
+		# t2421: command-aware liveness check — bare kill -0 lies on macOS PID reuse
+		if ! _is_process_alive_and_matches "$stored_pid" "${WORKER_PROCESS_PATTERN:-}"; then
+			# Process is dead or PID was reused by an unrelated process — stale DB entry
 			sqlite3 "$supervisor_db" "
 				UPDATE tasks SET status = 'failed',
-				  error = 'stale: PID ${stored_pid} not running (GH#5662)',
+				  error = 'stale: PID ${stored_pid} not running or reused (GH#5662/t2421)',
 				  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
 				WHERE id = '$(printf '%s' "$db_match" | sed "s/'/''/g")';
 			" 2>/dev/null || true
-			printf 'STALE: key=%s task %s PID %s is dead — entry reset, safe to dispatch\n' \
+			printf 'STALE: key=%s task %s PID %s is dead or reused — entry reset, safe to dispatch\n' \
 				"$candidate_key" "$db_match" "$stored_pid"
 			return 1
 		fi
-		# PID is alive — genuine duplicate
+		# PID is alive AND command matches expected worker pattern — genuine duplicate
 		printf 'DUPLICATE: key=%s already active in supervisor DB (task %s PID %s)\n' \
 			"$candidate_key" "$db_match" "$stored_pid"
 		return 0
@@ -319,6 +378,34 @@ _check_db_entry() {
 # GH#5662: When a supervisor DB match is found, the stored PID is verified
 # with kill -0 before returning exit 0. Dead PIDs cause the stale DB entry
 # to be reset to 'failed' and exit 1 is returned (safe to dispatch).
+#
+# t2061 audit (2026-04-14):
+#
+# Error path classification for is_duplicate:
+#
+#   extract_keys failure or empty output:
+#     → candidate_keys="" → [[ -z ]] branch → return 1 (allow dispatch)
+#     → FAIL-OPEN INTENTIONAL: cannot deduplicate without keys. Dispatch
+#       is allowed to avoid permanently blocking any title that can't be
+#       parsed. The cross-machine is_assigned() guard is the safety net.
+#
+#   list_running_keys failure or empty output:
+#     → running_keys="" → process-match loop not entered → proceed to DB check
+#     → FAIL-OPEN INTENTIONAL: no running keys = no running duplicates on
+#       this machine. This check is local-only; is_assigned() covers cross-machine.
+#
+#   _check_db_entry failures:
+#     → return 1 (no duplicate found) — see _check_db_entry audit above.
+#     → FAIL-OPEN INTENTIONAL: same rationale as _check_db_entry.
+#
+#   sqlite3 unavailable:
+#     → `command -v sqlite3` gate → DB check skipped entirely → return 1
+#     → FAIL-OPEN INTENTIONAL: cannot use a tool that is not installed.
+#
+# is_duplicate is a LOCAL-ONLY guard (running processes + supervisor DB on
+# this machine only). It complements but does not replace is_assigned().
+# Fail-open is appropriate because is_assigned() is the definitive
+# cross-machine guard with GUARD_UNCERTAIN fail-closed semantics (t2046).
 #######################################
 is_duplicate() {
 	local title="$1"
@@ -361,6 +448,22 @@ is_duplicate() {
 }
 
 #######################################
+# Get the repo owner from the slug.
+# Args: $1 = repo slug (owner/repo)
+# Returns: owner login on stdout (empty if invalid)
+#######################################
+_get_repo_owner() {
+	local repo_slug="$1"
+
+	if [[ -z "$repo_slug" || "$repo_slug" != */* ]]; then
+		return 0
+	fi
+
+	printf '%s' "${repo_slug%%/*}"
+	return 0
+}
+
+#######################################
 # Look up the repo maintainer from repos.json.
 # The maintainer is the repo owner/admin — not a runner account.
 # Args: $1 = repo slug (owner/repo)
@@ -383,6 +486,51 @@ _get_repo_maintainer() {
 	return 0
 }
 
+# Stale assignment recovery functions are in dispatch-dedup-stale.sh (GH#18916).
+
+#######################################
+# Return "true" if the issue metadata represents an active claim that
+# should override the owner/maintainer passive-assignee exemption in
+# is_assigned(). An issue is actively claimed when EITHER:
+#   - a lifecycle status label is set: status:queued, status:in-progress,
+#     status:in-review, or status:claimed, OR
+#   - the origin:interactive label is present without auto-dispatch (a live
+#     human session is driving the work regardless of status label state), OR
+#   - the consolidation-in-progress label is present (t2151 — a cross-
+#     runner advisory lock held by a pulse runner that is mid-way through
+#     creating a consolidation-task child issue; treat as an active claim
+#     so unrelated dispatch paths can't sneak past during the write window)
+#
+# Extracted from is_assigned() to keep that function under the 100-line
+# complexity cap after GH#18352 expanded the active-claim signal set
+# (see t1961). Adding new active-state labels is a one-line change here.
+#
+# Canonical dedup rule (t1996):
+#   The dispatch dedup signal is (active status label) AND (non-self assignee).
+#   Both are required; neither alone is sufficient:
+#   - Label without assignee = degraded state (safe to reclaim after stale recovery)
+#   - Assignee without active label = passive backlog bookkeeping (owner/maintainer
+#     passive exemption applies; non-owner/maintainer still blocks)
+#   - Label WITH non-self assignee = active claim (always blocks)
+#   This function evaluates only the label half. is_assigned() enforces the
+#   combined check by calling this only after an assignee is confirmed present.
+#
+# Args:
+#   $1 = issue metadata JSON from `gh issue view --json labels` (at minimum
+#        must contain a .labels array of {name: ...} objects)
+# Stdout: "true" or "false"
+#######################################
+_has_active_claim() {
+	local issue_meta_json="$1"
+	local result
+	result=$(printf '%s' "$issue_meta_json" | jq -r '
+		.labels? // [] | map(.name) | (any(.[]; . == "status:queued" or . == "status:in-progress" or . == "status:in-review" or . == "status:claimed" or . == "consolidation-in-progress") or ((index("origin:interactive") != null) and (index("auto-dispatch") == null)))
+	' 2>/dev/null) || result="false"
+	[[ "$result" == "true" || "$result" == "false" ]] || result="false"
+	printf '%s' "$result"
+	return 0
+}
+
 #######################################
 # Check if a GitHub issue is already assigned to another runner.
 #
@@ -391,22 +539,533 @@ _get_repo_maintainer() {
 # they miss workers running on other machines. The GitHub assignee is
 # the single source of truth visible to all runners.
 #
-# GH#11141: Only self_login is excluded from the dedup check. The repo
-# owner and maintainer are NOT excluded — they may also be runners, and
-# excluding them caused double-dispatch when the owner's pulse assigned
-# an issue and another runner's pulse ignored the assignment (the
-# GH#10521 exclusion). The pulse already handles owner-assigned-but-
-# not-dispatched issues via status labels and staleness checks.
+# Owner/maintainer assignment carries two different meanings:
+#   1. passive backlog ownership / maintainer review bookkeeping
+#   2. active worker claim (when paired with status:queued/in-progress)
+#
+# Treating all owner/maintainer assignees as active claims created a queue
+# starvation bug: the pulse discovers unassigned issues by default, while
+# several tooling pipelines auto-assigned newly created debt issues to the
+# maintainer. The result was hundreds of open issues that looked "claimed"
+# to the deterministic guard but had no worker, no queued state, and no PR.
+#
+# Canonical dedup rule (t1996):
+#   The dispatch dedup signal is (active status label) AND (non-self assignee).
+#   Both are required; neither alone is sufficient.
+#   See _has_active_claim() for the label-half definition.
+#   This function enforces the combined check: it first checks whether an
+#   assignee is present; if so, it calls _has_active_claim() to determine
+#   if the passive exemption for owner/maintainer should be bypassed.
+#
+# Systemic rule:
+# - self_login never blocks
+# - owner/maintainer assignees are passive unless EITHER:
+#     (a) the issue has an active claim status label — status:queued,
+#         status:in-progress, status:in-review, or status:claimed
+#         (full active lifecycle, not just the worker-set states), OR
+#     (b) the issue has the origin:interactive label without auto-dispatch —
+#         a human session is actively driving the work regardless of status
+#         label state
+#         (GH#18352 — closes the race where an interactive claim used
+#         status:claimed, which was not recognised as an active state,
+#         so the pulse dispatched a duplicate worker mid-flight)
+# - auto-dispatch is an explicit handoff signal: origin:interactive remains
+#   provenance but no longer bypasses owner/maintainer passive assignment.
+# - any other assignee blocks dispatch — UNLESS the assignment is stale
+#   (no active worker, dispatch claim >1h old, no recent progress).
+#   Stale assignments are auto-recovered (GH#15060).
+#
+# Every dispatch decision site that emits a worker assignment MUST route
+# through this function (or apply an equivalent inline combined check)
+# before claiming. Any code path that checks only labels or only assignees
+# is not safe in multi-operator conditions. (t1996 — audit confirmed that
+# dispatch_with_dedup, apply_dispatch_max, and all implementation
+# dispatch paths correctly route through check_dispatch_dedup which calls
+# this function at Layer 6; normalize_active_issue_assignments was hardened
+# in the same fix to also call this before self-assigning orphaned issues.)
+#
+# This preserves GH#10521 (maintainer assignment alone must not starve the
+# queue) while still protecting GH#11141 (owner-assigned queued work must
+# block other runners once a real claim is active) and GH#18352 (interactive
+# sessions working on owner-assigned issues must not be raced by the pulse).
 #
 # Args:
 #   $1 = issue number
 #   $2 = repo slug (owner/repo)
 #   $3 = (optional) current runner login — if assigned to self, not a dup
 # Returns:
-#   exit 0 if assigned to another login (do NOT dispatch)
+#   exit 0 if assigned to another login (do NOT dispatch), parent-task labeled,
+#          no-auto-dispatch labeled, cost-budget exceeded, or guard cannot
+#          determine safety (GUARD_UNCERTAIN)
 #   exit 1 if unassigned or assigned only to self (safe to dispatch)
-# Outputs: assignee info on stdout if assigned to another login
+# Outputs: one of the following signals on stdout when blocking:
+#   PARENT_TASK_BLOCKED (label=<name>)      — unconditional parent-task / meta block
+#   NO_AUTO_DISPATCH_BLOCKED (label=...)    — unconditional no-auto-dispatch block (t2832)
+#   COST_BUDGET_EXCEEDED (...)              — token spend circuit breaker
+#   GUARD_UNCERTAIN (reason=...)            — internal error, cannot determine safety
+#   <assignee info>                         — active claim by another runner
+#
+# FAIL-CLOSED CONTRACT (t2046):
+#   When the guard cannot determine whether dispatch is safe due to an internal
+#   error (gh API failure, jq error, helper failure), the function MUST block
+#   dispatch and emit GUARD_UNCERTAIN. This is intentionally conservative:
+#   a transient block clears in the next pulse cycle at zero cost; a wasted
+#   worker dispatch burns ~20K tokens for zero output (GH#18458 incident).
+#   The previous default (fail-open) allowed three workers to be dispatched
+#   to a parent-task issue because a jq null-handling bug silently fell through
+#   to the "allow dispatch" code path (see plan in todo/plans/parent-task-incident-hardening.md).
 #######################################
+#######################################
+# is_assigned helper: check the parent-task / meta unconditional block.
+#
+# t1986: parent-task / meta label is an unconditional dispatch block.
+# Any issue tagged as parent-only is plan-only work and must never
+# receive a dispatched worker, regardless of assignees or status
+# labels. Closes the dispatch loop observed on GH#18356 during
+# t1962 Phase 3 (parent task dispatched twice with opus-4-6,
+# burning ~20K tokens for zero productive output) and the
+# same race reproduced on GH#18399 / GH#18400 while filing the
+# follow-up issues for this very fix.
+#
+# Emits PARENT_TASK_BLOCKED on stdout for caller pattern matching
+# (mirrors the STALE_RECOVERED token used by stale-recovery path).
+#
+# t2061: explicit jq failure capture — fail-closed. A jq failure here
+# (type error, compile error, malformed labels field) would previously
+# fall through to "no parent-task label found" via the || true pattern,
+# silently skipping the unconditional dispatch block. Now emits
+# GUARD_UNCERTAIN on any internal jq failure.
+#
+# Args:
+#   $1 = issue metadata JSON (from `gh issue view --json ...,labels`)
+#   $2 = (optional) issue number — included in GUARD_UNCERTAIN output
+#   $3 = (optional) repo slug — included in GUARD_UNCERTAIN output
+# Returns: exit 0 if parent-task label found or jq fails (prints signal),
+#          exit 1 if no parent-task label and jq succeeds
+#######################################
+_is_assigned_check_parent_task() {
+	local meta_json="$1"
+	local issue_number="${2:-unknown}"
+	local repo_slug="${3:-unknown}"
+	# t2061: explicit rc capture — fail-closed on jq failure.
+	local _jq_rc=0
+	local parent_task_hit
+	parent_task_hit=$(printf '%s' "$meta_json" |
+		jq -r '(.labels // [])[].name | select(. == "parent-task" or . == "meta")' 2>/dev/null | head -n 1) || _jq_rc=$?
+	if [[ "$_jq_rc" -ne 0 ]]; then
+		printf 'GUARD_UNCERTAIN (reason=jq-failure call=parent-task-check issue=%s repo=%s)\n' \
+			"$issue_number" "$repo_slug"
+		return 0
+	fi
+	if [[ -n "$parent_task_hit" ]]; then
+		printf 'PARENT_TASK_BLOCKED (label=%s)\n' "$parent_task_hit"
+		return 0
+	fi
+	return 1
+}
+
+#######################################
+# is_assigned helper: check the no-auto-dispatch unconditional block (t2832).
+#
+# t2832: no-auto-dispatch label is an unconditional dispatch block. The label
+# was previously honoured by enrichment, decomposition, and backfill paths but
+# NOT by the dispatch path itself — workers got dispatched to issues carrying
+# the label, contradicting maintainer intent and the documented behaviour.
+# Closes the dispatch hole observed on GH#20827 (t2821 policy issue): six
+# worker dispatches over two hours despite the label being applied at issue
+# creation, all failing in the dispatch-path tautology, ~30-50K opus tokens
+# burned. The label now carries the same hard-block semantics as parent-task.
+#
+# Use cases this enables (post-fix):
+#   - Maintainer-applied "do not auto-dispatch" hold without needing #parent
+#     (which forces decomposition lifecycle on focused fixes that don't decompose)
+#   - interactive-session-helper.sh lockdown — already applies this label;
+#     the label now actually blocks dispatch end-to-end as documented
+#   - Policy-level dispatch-path tasks (t2821) — sufficient as a focused-fix
+#     blocker without combining with #parent
+#
+# Emits NO_AUTO_DISPATCH_BLOCKED on stdout for caller pattern matching
+# (mirrors the PARENT_TASK_BLOCKED token used by parent-task check).
+#
+# Mirrors _is_assigned_check_parent_task structure:
+#   - Same jq-failure fail-closed contract (t2061): GUARD_UNCERTAIN on jq error
+#   - Same return-code contract: 0 = block (with signal printed), 1 = allow
+#   - Same args shape for traceable error output
+#
+# Args:
+#   $1 = issue metadata JSON (from `gh issue view --json ...,labels`)
+#   $2 = (optional) issue number — included in GUARD_UNCERTAIN output
+#   $3 = (optional) repo slug — included in GUARD_UNCERTAIN output
+# Returns: exit 0 if no-auto-dispatch label found or jq fails (prints signal),
+#          exit 1 if label absent and jq succeeds
+#######################################
+_is_assigned_check_no_auto_dispatch() {
+	local meta_json="$1"
+	local issue_number="${2:-unknown}"
+	local repo_slug="${3:-unknown}"
+	# t2061: explicit rc capture — fail-closed on jq failure.
+	local _jq_rc=0
+	local nad_hit
+	nad_hit=$(printf '%s' "$meta_json" |
+		jq -r '(.labels // [])[].name | select(. == "no-auto-dispatch")' 2>/dev/null | head -n 1) || _jq_rc=$?
+	if [[ "$_jq_rc" -ne 0 ]]; then
+		printf 'GUARD_UNCERTAIN (reason=jq-failure call=no-auto-dispatch-check issue=%s repo=%s)\n' \
+			"$issue_number" "$repo_slug"
+		return 0
+	fi
+	if [[ -n "$nad_hit" ]]; then
+		printf 'NO_AUTO_DISPATCH_BLOCKED (label=%s)\n' "$nad_hit"
+		return 0
+	fi
+	return 1
+}
+
+#######################################
+# t3197: is_assigned helper — per-issue dispatch cooldown after launch failure.
+#
+# When `recover_failed_launch_state` records a `no_worker_process` failure,
+# `_post_launch_cooldown_marker` (in pulse-cleanup.sh) writes an audit
+# comment containing the marker:
+#   <!-- dispatch-cooldown-until:<ISO8601-UTC> reason=no_worker_process runner=<login> -->
+#
+# This check fetches the issue's comments, finds the latest unexpired
+# cooldown marker, and short-circuits dispatch with `DISPATCH_COOLDOWN_ACTIVE`.
+# Closes the rapid-retry loop where a broken runtime burns ~5 worker
+# spawns over 3-4 hours per issue with 95-99s lifespans each, repeating
+# across many issues simultaneously when one runner is unhealthy.
+#
+# Complementary to:
+#   - t2769 (per-issue 3-stack circuit breaker → NMR escalation)
+#   - t2897 (per-runner health breaker, 10 events / 6h → runner pause)
+# This guard is per-issue and short (default 30 min), so it absorbs
+# transient runner failures before the longer-horizon breakers fire.
+#
+# Gating:
+#   - Skipped entirely when DISPATCH_COOLDOWN_AFTER_LAUNCH_FAILURE_SECONDS=0
+#     (saves one gh API call per dispatch decision when the feature is off).
+#   - Fail-open on gh API or jq error — cooldown is an optimization, not a
+#     security gate, so a flaky API call should not permanently block
+#     dispatch the way GUARD_UNCERTAIN does for label/assignee checks.
+#
+# Args: $1 = issue number, $2 = repo slug
+# Returns: exit 0 if active cooldown found (prints DISPATCH_COOLDOWN_ACTIVE),
+#          exit 1 if no cooldown / expired / fetch failure / parse failure
+#######################################
+_is_assigned_check_dispatch_cooldown() {
+	local issue_number="$1"
+	local repo_slug="$2"
+
+	# Feature gate. 0 disables; any other non-numeric falls back to default.
+	local cooldown_s="${DISPATCH_COOLDOWN_AFTER_LAUNCH_FAILURE_SECONDS:-1800}"
+	[[ "$cooldown_s" =~ ^[0-9]+$ ]] || cooldown_s=1800
+	[[ "$cooldown_s" -gt 0 ]] || return 1
+
+	# Fetch comments across every page. GitHub's issue comments endpoint returns
+	# oldest-first and ignores sort/direction parameters, so select the last
+	# matching marker after pagination to use the newest cooldown. Fail-open on API
+	# error — cooldown is an optimisation, not a guarantee.
+	local comments_endpoint
+	comments_endpoint=$(printf 'repos/%s/issues/%s/comments?per_page=100' "$repo_slug" "$issue_number")
+	local comments_json
+	comments_json=$(gh api --paginate --slurp "$comments_endpoint" 2>/dev/null) || return 1
+	[[ -n "$comments_json" ]] || return 1
+
+	# Extract the latest cooldown marker timestamp.
+	# `(.body // "")` guards against null bodies; `match` with "g" emits zero
+	# results on no-match (no error), so empty bodies and unrelated comments
+	# fall through cleanly. Fail-open on jq error.
+	local _jq_rc=0
+	local marker_iso
+	marker_iso=$(printf '%s' "$comments_json" |
+		jq -r '[.[][] | (.body // "") | match("<!-- dispatch-cooldown-until:([^ ]+) reason=no_worker_process"; "g") | .captures[0].string] | last // ""') || _jq_rc=$?
+	if [[ "$_jq_rc" -ne 0 ]]; then
+		return 1
+	fi
+	[[ -n "$marker_iso" ]] || return 1
+
+	# Parse ISO8601 → epoch. GNU date first, BSD date fallback for macOS dev.
+	local until_epoch=""
+	until_epoch=$(date -u -d "$marker_iso" +%s 2>/dev/null) ||
+		until_epoch=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$marker_iso" +%s 2>/dev/null) ||
+		return 1
+	[[ "$until_epoch" =~ ^[0-9]+$ ]] || return 1
+
+	local now_epoch
+	now_epoch=$(date -u +%s 2>/dev/null) || return 1
+
+	if [[ "$until_epoch" -gt "$now_epoch" ]]; then
+		printf 'DISPATCH_COOLDOWN_ACTIVE (until=%s reason=no_worker_process)\n' "$marker_iso"
+		return 0
+	fi
+	return 1
+}
+
+#######################################
+# Check repeated worker_branch_orphan outcomes for a single issue+branch.
+#
+# This is a surgical dispatch-loop fuse for the branch-orphan class. The
+# headless runtime posts structured WORKER_BRANCH_ORPHAN comments containing
+# branch, session, and timestamp. When the same branch hits the threshold within
+# the configured window, the dispatch path holds that branch before spawning yet
+# another worker and posts one mentor-quality diagnostic comment for triage.
+#
+# Gating:
+#   WORKER_BRANCH_ORPHAN_LOOP_THRESHOLD  default 3, 0 disables
+#   WORKER_BRANCH_ORPHAN_LOOP_WINDOW_S   default 7200 seconds
+#
+# Fail-open on missing branch, gh/jq/date errors, or malformed comments. This is
+# a blast-radius limiter, not a security gate; unrelated dispatch should not be
+# starved by telemetry read failures.
+#
+# Args: $1 = issue number, $2 = repo slug, $3 = branch name
+# Returns: exit 0 if loop threshold reached (prints ORPHAN_LOOP_BLOCKED),
+#          exit 1 otherwise.
+#######################################
+check_worker_branch_orphan_loop() {
+	local issue_number="$1"
+	local repo_slug="$2"
+	local branch_name="$3"
+
+	[[ -n "$issue_number" && -n "$repo_slug" && -n "$branch_name" ]] || return 1
+	[[ "$issue_number" =~ ^[0-9]+$ ]] || return 1
+	[[ "$branch_name" != "HEAD" ]] || return 1
+
+	local threshold="${WORKER_BRANCH_ORPHAN_LOOP_THRESHOLD:-3}"
+	local window_s="${WORKER_BRANCH_ORPHAN_LOOP_WINDOW_S:-7200}"
+	[[ "$threshold" =~ ^[0-9]+$ ]] || threshold=3
+	[[ "$window_s" =~ ^[0-9]+$ ]] || window_s=7200
+	[[ "$threshold" -gt 0 && "$window_s" -gt 0 ]] || return 1
+
+	# Fetch all comment pages. The issue-comments endpoint is oldest-first and may
+	# hold orphan markers beyond the first 30/100 results on noisy issues. Keep the
+	# POST endpoint separate because --paginate --slurp returns page arrays for jq.
+	local comments_post_endpoint="repos/${repo_slug}/issues/${issue_number}/comments"
+	local comments_endpoint="${comments_post_endpoint}?per_page=100"
+	local comments_json
+	comments_json=$(gh api --paginate --slurp "$comments_endpoint" 2>/dev/null) || return 1
+	[[ -n "$comments_json" ]] || return 1
+
+	local now_epoch
+	now_epoch=$(date -u +%s 2>/dev/null) || return 1
+
+	local count=0
+	local latest_iso=""
+	local marker_iso=""
+	while IFS= read -r marker_iso; do
+		[[ -n "$marker_iso" ]] || continue
+		local marker_epoch=""
+		marker_epoch=$(date -u -d "$marker_iso" +%s 2>/dev/null) ||
+			marker_epoch=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$marker_iso" +%s 2>/dev/null) ||
+			continue
+		[[ "$marker_epoch" =~ ^[0-9]+$ ]] || continue
+		if [[ $((now_epoch - marker_epoch)) -le "$window_s" ]]; then
+			count=$((count + 1))
+			latest_iso="$marker_iso"
+		fi
+	done < <(printf '%s' "$comments_json" |
+		jq -r --arg branch "$branch_name" '
+			.[][]
+			| (.body // "")
+			| select(contains("WORKER_BRANCH_ORPHAN branch=" + $branch + " "))
+			| (capture("WORKER_BRANCH_ORPHAN branch=[^ ]+ session=[^ ]+ ts=(?<ts>[^\\n ]+)")? // {})
+			| .ts // empty
+		' 2>/dev/null) || return 1
+
+	[[ "$count" -ge "$threshold" ]] || return 1
+
+	local existing_block=""
+	existing_block=$(printf '%s' "$comments_json" |
+		jq -r --arg branch "$branch_name" '
+			[.[][] | (.body // "") | select(contains("worker-branch-orphan-loop:blocked branch=" + $branch + " "))] | length
+		' 2>/dev/null) || existing_block="0"
+	[[ "$existing_block" =~ ^[0-9]+$ ]] || existing_block=0
+
+	local pr_hint="none found"
+	local pr_line=""
+	pr_line=$(gh pr list --repo "$repo_slug" --head "$branch_name" --state all \
+		--json number,state,url --jq '.[0] | select(.number != null) | "#\(.number) (\(.state)) \(.url)"' 2>/dev/null || true)
+	[[ -n "$pr_line" ]] && pr_hint="$pr_line"
+
+	if [[ "$existing_block" -eq 0 ]]; then
+		local diag
+		# shellcheck disable=SC2016 # Backticks are literal Markdown in this printf template.
+		diag=$(printf '<!-- ops:start -->\n<!-- worker-branch-orphan-loop:blocked branch=%s issue=%s count=%s window_s=%s -->\n## Dispatch held: repeated worker_branch_orphan\n\nThe dispatch path has seen `%s` `WORKER_BRANCH_ORPHAN` outcomes for issue #%s on branch `%s` within the last %s seconds. Dispatch is held for this same branch to avoid burning more worker attempts while preserving evidence.\n\n- Branch: `%s`\n- Latest orphan marker: `%s`\n- PR for branch: %s\n- Next verification: `gh pr list --repo %s --head %s --state all --json number,state,url`\n\nIf the branch already has the intended PR, link or merge that PR. If the branch is stale or corrupt, remove/reset that worktree/branch so a fresh branch can dispatch.\n<!-- ops:end -->' \
+			"$branch_name" "$issue_number" "$count" "$window_s" \
+			"$count" "$issue_number" "$branch_name" "$window_s" \
+			"$branch_name" "${latest_iso:-unknown}" "$pr_hint" "$repo_slug" "$branch_name")
+		gh api "$comments_post_endpoint" \
+			--method POST \
+			--field body="$diag" \
+			>/dev/null 2>&1 || true
+	fi
+
+	printf 'WORKER_BRANCH_ORPHAN_LOOP_BLOCKED (issue=%s repo=%s branch=%s count=%s threshold=%s window_s=%s latest=%s pr=%s)\n' \
+		"$issue_number" "$repo_slug" "$branch_name" "$count" "$threshold" "$window_s" "${latest_iso:-unknown}" "$pr_hint"
+	return 0
+}
+
+#######################################
+# is_assigned helper: cost-per-issue circuit breaker (t2007).
+#
+# Aggregate token spend across all worker attempts; if the cumulative total
+# exceeds the tier-appropriate budget, apply needs-maintainer-review and
+# block dispatch. Fail-open on aggregation errors so unrelated GitHub API
+# hiccups don't starve the queue. Closes the cost-runaway hole that t1986
+# (parent-task guard) and t2008 (stale-recovery escalation) leave open: an
+# issue with a correct tier assignment that workers can never finish
+# (loop, hidden blocker, scope).
+#
+# Args: $1 = issue number, $2 = repo slug, $3 = issue metadata JSON
+# Returns: exit 0 if budget tripped (prints signal), exit 1 if under budget
+#######################################
+_is_assigned_check_cost_budget() {
+	local issue_number="$1"
+	local repo_slug="$2"
+	local meta_json="$3"
+
+	local _t2007_tier
+	_t2007_tier=$(printf '%s' "$meta_json" |
+		jq -r '[(.labels // [])[].name] | map(select(. != null and startswith("tier:"))) | .[0] // "tier:standard"' 2>/dev/null)
+	[[ -z "$_t2007_tier" || "$_t2007_tier" == "null" ]] && _t2007_tier="tier:standard"
+
+	local _t2007_signal _t2007_rc=0
+	_t2007_signal=$(_check_cost_budget "$issue_number" "$repo_slug" "$_t2007_tier" "$meta_json") || _t2007_rc=$?
+	if [[ "$_t2007_rc" -eq 0 ]]; then
+		printf '%s\n' "$_t2007_signal"
+		return 0
+	fi
+	return 1
+}
+
+#######################################
+# t2436: is_assigned helper — hydration window grace period (Approach B).
+#
+# Labels applied by the asynchronous issue-sync workflow (issue-sync.yml)
+# may not yet be present on an issue that was just created. The window
+# between issue creation and the subsequent TODO.md push + workflow run
+# is adversarial in multi-runner fleets: a peer runner can see an issue
+# missing parent-task (not yet synced) and dispatch a worker on it.
+#
+# This check adds a configurable grace period (default 30s) during which
+# newly created issues are skipped. It is a secondary safety net — the
+# primary fix is applying labels synchronously at creation time (see
+# _scan_todo_labels_for_task in claim-task-id.sh and
+# _gh_wrapper_derive_todo_labels in shared-gh-wrappers.sh).
+#
+# Fail-open:
+#   - If DISPATCH_HYDRATION_WINDOW_S=0, the check is disabled.
+#   - If createdAt is absent from meta_json (pre-fetched JSON may lack it),
+#     the check returns 1 (allow dispatch to continue).
+#   - If date parsing fails on either platform, fail-open.
+#
+# Env:
+#   DISPATCH_HYDRATION_WINDOW_S  grace period in seconds (default 30, 0=off)
+#
+# Args: $1 = issue metadata JSON (must include createdAt field)
+#        $2 = issue number (for log output)
+#        $3 = repo slug (for log output)
+# Returns: exit 0 (block) if issue is within grace period + prints signal,
+#          exit 1 (allow) if old enough or data unavailable
+#######################################
+_is_assigned_check_hydration_window() {
+	local meta_json="$1"
+	local issue_number="${2:-unknown}"
+	local repo_slug="${3:-unknown}"
+
+	local window="${DISPATCH_HYDRATION_WINDOW_S:-30}"
+	[[ "$window" -le 0 ]] && return 1  # disabled
+
+	local created_at _jq_rc=0
+	created_at=$(printf '%s' "$meta_json" | jq -r '.createdAt // ""' 2>/dev/null) || _jq_rc=$?
+	# Fail-open: missing or unparseable JSON → allow dispatch
+	[[ "$_jq_rc" -ne 0 || -z "$created_at" ]] && return 1
+
+	local now_epoch=0 created_epoch=0
+	now_epoch=$(date -u '+%s' 2>/dev/null || echo "0")
+	# Support both GNU date (-d) and BSD date (-j -f)
+	created_epoch=$(date -u -d "$created_at" '+%s' 2>/dev/null ||
+		TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$created_at" '+%s' 2>/dev/null || echo "0")
+
+	# Fail-open: cannot parse timestamps
+	[[ "$now_epoch" -eq 0 || "$created_epoch" -eq 0 ]] && return 1
+
+	local age_s=$(( now_epoch - created_epoch ))
+	if [[ "$age_s" -lt "$window" ]]; then
+		printf 'HYDRATION_WINDOW (issue=%s repo=%s age=%ss window=%ss — labels may not be synced yet)\n' \
+			"$issue_number" "$repo_slug" "$age_s" "$window"
+		return 0  # block dispatch
+	fi
+	return 1  # old enough — allow normal dispatch checks to continue
+}
+
+#######################################
+# is_assigned helper: compute the blocking assignees set.
+#
+# Walks the assignees list and filters out:
+#   - self_login when there is NO active claim (passive bookkeeping)
+#   - owner/maintainer if no active claim state (GH#18352 / t1961)
+#
+# Owner/maintainer is passive UNLESS _has_active_claim returned "true".
+# See _has_active_claim() for the full rule set.
+#
+# The self_login exemption is intentionally bypassed when active_claim
+# is "true". In a single-user setup the interactive user and the pulse
+# runner share the same GitHub login. Without this exception the pulse
+# skips the assignee (it looks like self) and ignores origin:interactive,
+# dispatching a duplicate worker. The exemption exists to prevent a runner
+# from blocking its own re-dispatch on a passively-bookmarked issue — that
+# use-case has no active claim label, so the guard is still satisfied.
+# (GH#18956 incident root cause — fixed in t2091.)
+#
+# Args:
+#   $1 = assignees (comma-separated login list)
+#   $2 = repo_owner
+#   $3 = repo_maintainer (may be empty)
+#   $4 = active_claim ("true" or other)
+#   $5 = self_login (may be empty)
+# Output: comma-separated list of blocking assignees on stdout (may be empty)
+#######################################
+_is_assigned_compute_blocking() {
+	local assignees="$1"
+	local repo_owner="$2"
+	local repo_maintainer="$3"
+	local active_claim="$4"
+	local self_login="$5"
+
+	local -a assignee_array=()
+	local saved_ifs="${IFS:-}"
+	IFS=',' read -ra assignee_array <<<"$assignees"
+	IFS="$saved_ifs"
+
+	local blocking_assignees=""
+	local assignee
+	for assignee in "${assignee_array[@]}"; do
+		# Self-login is passive UNLESS an active claim exists. When active_claim
+		# is "true" (status label OR origin:interactive), the assignment is
+		# intentional — skip the self-login exemption so the issue blocks
+		# re-dispatch even in single-user setups. (t2091)
+		if [[ -n "$self_login" && "$assignee" == "$self_login" && "$active_claim" != "true" ]]; then
+			continue
+		fi
+
+		if [[ "$assignee" == "$repo_owner" || (-n "$repo_maintainer" && "$assignee" == "$repo_maintainer") ]]; then
+			# Owner/maintainer is passive UNLESS _has_active_claim returned
+			# "true" (GH#18352 / t1961).
+			if [[ "$active_claim" != "true" ]]; then
+				continue
+			fi
+		fi
+
+		if [[ -n "$blocking_assignees" ]]; then
+			blocking_assignees="${blocking_assignees},${assignee}"
+		else
+			blocking_assignees="$assignee"
+		fi
+	done
+	printf '%s' "$blocking_assignees"
+	return 0
+}
+
 is_assigned() {
 	local issue_number="$1"
 	local repo_slug="$2"
@@ -422,190 +1081,693 @@ is_assigned() {
 		return 1
 	fi
 
-	# Query GitHub for current assignees
+	# GH#19922: accept pre-fetched JSON via ISSUE_META_JSON env var to avoid
+	# a redundant gh issue view call when the caller already has the metadata
+	# (e.g. the enrich path in issue-sync-helper.sh which fetches state in
+	# _enrich_process_task and forwards it through _enrich_check_active_claim).
+	# The pre-fetched JSON must contain at least assignees and labels fields.
+	local issue_meta_json gh_rc=0
+	if [[ -n "${ISSUE_META_JSON:-}" ]] \
+		&& printf '%s' "$ISSUE_META_JSON" | jq -e '.assignees and .labels' >/dev/null 2>&1; then
+		issue_meta_json="$ISSUE_META_JSON"
+	else
+		# t2436: include createdAt for the hydration window check (Approach B safety net).
+		# Existing callers that pass ISSUE_META_JSON without createdAt will skip that
+		# check (fail-open), which is correct — the primary fix is label sync at creation.
+		issue_meta_json=$(gh_issue_view "$issue_number" --repo "$repo_slug" \
+			--json state,assignees,labels,createdAt 2>/dev/null) || gh_rc=$?
+	fi
+
+	# t2046: fail-closed on gh API failure. When we cannot fetch issue metadata
+	# (network error, auth failure, rate limit, issue not found), we cannot
+	# determine whether dispatch is safe. Block and emit GUARD_UNCERTAIN so the
+	# pulse skips this cycle rather than dispatching blindly.
+	if [[ "$gh_rc" -ne 0 || -z "$issue_meta_json" ]]; then
+		printf 'GUARD_UNCERTAIN (reason=gh-api-failure issue=%s repo=%s rc=%s)\n' \
+			"$issue_number" "$repo_slug" "$gh_rc"
+		return 0
+	fi
+
+	# t1986: parent-task / meta is an unconditional dispatch block.
+	# t2061: pass issue_number + repo_slug so GUARD_UNCERTAIN output is traceable.
+	if _is_assigned_check_parent_task "$issue_meta_json" "$issue_number" "$repo_slug"; then
+		return 0
+	fi
+
+	# t2832: no-auto-dispatch is an unconditional dispatch block. Mirrors
+	# parent-task semantics; closes the enforcement gap observed on GH#20827
+	# where the label was honoured by enrichment/decomposition but not the
+	# dispatch path. Placed immediately after parent-task so both unconditional
+	# blocks short-circuit before the cost-budget and assignee checks.
+	if _is_assigned_check_no_auto_dispatch "$issue_meta_json" "$issue_number" "$repo_slug"; then
+		return 0
+	fi
+
+	# t3197: per-issue dispatch cooldown after no_worker_process launch failures.
+	# Short-circuits with DISPATCH_COOLDOWN_ACTIVE while the marker is unexpired.
+	# Fail-open: feature-gated by DISPATCH_COOLDOWN_AFTER_LAUNCH_FAILURE_SECONDS,
+	# returns 1 (allow) on API/jq/date error so it never permanently blocks.
+	if _is_assigned_check_dispatch_cooldown "$issue_number" "$repo_slug"; then
+		return 0
+	fi
+
+	# t2007: cost-per-issue circuit breaker.
+	if _is_assigned_check_cost_budget "$issue_number" "$repo_slug" "$issue_meta_json"; then
+		return 0
+	fi
+
+	# t2436: Hydration window — skip dispatch for recently-created issues.
+	# Secondary safety net for the label-sync race window. Primary fix is
+	# synchronous label application at creation (claim-task-id.sh / gh_create_issue).
+	# Env: DISPATCH_HYDRATION_WINDOW_S (default 30, 0=disabled).
+	if _is_assigned_check_hydration_window "$issue_meta_json" "$issue_number" "$repo_slug"; then
+		return 0
+	fi
+
+	# Query GitHub for current assignees.
+	# t2061: explicit jq rc capture — fail-closed.
+	# A jq failure here (e.g. assignees field has unexpected type) would previously
+	# set assignees="" → "No assignees — safe to dispatch", bypassing the assignee
+	# guard entirely. GUARD_UNCERTAIN instead.
+	local _jq_assignees_rc=0
 	local assignees
-	assignees=$(gh issue view "$issue_number" --repo "$repo_slug" \
-		--json assignees --jq '[.assignees[].login] | join(",")' 2>/dev/null) || assignees=""
+	assignees=$(printf '%s' "$issue_meta_json" | jq -r '[.assignees[].login] | join(",")' 2>/dev/null) || _jq_assignees_rc=$?
+	if [[ "$_jq_assignees_rc" -ne 0 ]]; then
+		printf 'GUARD_UNCERTAIN (reason=jq-failure call=assignees-extract issue=%s repo=%s)\n' \
+			"$issue_number" "$repo_slug"
+		return 0
+	fi
 
 	if [[ -z "$assignees" ]]; then
 		# No assignees — safe to dispatch
 		return 1
 	fi
 
-	# Only exclude self_login. Any other assignee — including repo owner
-	# and maintainer — means the issue is claimed. This prevents double-
-	# dispatch when the owner is also a runner (GH#11141).
-	local -a assignee_array=()
-	local saved_ifs="${IFS:-}"
-	IFS=',' read -ra assignee_array <<<"$assignees"
-	IFS="$saved_ifs"
-
-	local other_assignees=""
-	local assignee
-	for assignee in "${assignee_array[@]}"; do
-		if [[ -n "$self_login" && "$assignee" == "$self_login" ]]; then
-			continue
+	# t2930: Honor dispatch-override.conf "ignore" entries at the ASSIGNEE level.
+	# t3194: Also honor "peer-quarantine-until=<ISO>" entries (auto-managed by
+	# pulse-peer-quarantine-helper.sh). When a peer has been quarantined for
+	# emitting too many launch_recovery:no_worker_process events, treat its
+	# claim as if it were on the legacy `ignore` list — strip from blocking
+	# set so this runner can take over instead of backing off behind a known-
+	# broken peer.
+	#
+	# The dispatch-claim-helper filters claim COMMENTS by override config, but
+	# ignored peers can still raw-assign themselves via gh issue edit
+	# --add-assignee — and is_assigned previously honored that unconditionally,
+	# creating a permanent dispatch block. With this filter, an "ignore"-listed
+	# or quarantined peer is treated as if not assigned, allowing competitive
+	# dispatch (winner's PR closes the issue; loser wastes tokens but doesn't
+	# block throughput). Self-runner and parent-task / no-auto-dispatch / cost
+	# circuit-breaker / hydration window guards above remain in effect.
+	local override_conf="${HOME}/.config/aidevops/dispatch-override.conf"
+	if [[ -f "$override_conf" ]]; then
+		local _filtered_assignees=""
+		local _saved_ifs="${IFS:-}"
+		local -a _override_array=()
+		IFS=',' read -ra _override_array <<<"$assignees"
+		IFS="$_saved_ifs"
+		local _a _upper _override_val _now_epoch _q_until _q_until_epoch
+		_now_epoch=$(date -u '+%s')
+		for _a in "${_override_array[@]}"; do
+			# Overrides and quarantine are peer-only. The current runner's own
+			# assignment remains authoritative so a worker never ignores its own
+			# in-flight claim state because its login appears in local override
+			# config.
+			if [[ -n "$self_login" && "$_a" == "$self_login" ]]; then
+				if [[ -n "$_filtered_assignees" ]]; then
+					_filtered_assignees="${_filtered_assignees},${_a}"
+				else
+					_filtered_assignees="$_a"
+				fi
+				continue
+			fi
+			# Slug normalisation matches pulse-peer-quarantine-helper.sh's
+			# _pq_login_to_var: dash/dot/@ → underscore, uppercase.
+			_upper="$(printf '%s' "$_a" | tr 'a-z\-.@' 'A-Z___')"
+			_override_val=$(grep -E "^DISPATCH_OVERRIDE_${_upper}=" "$override_conf" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+			# Legacy: t2930 unconditional ignore.
+			if [[ "$_override_val" == "ignore" ]]; then
+				continue
+			fi
+			# t3194: peer-quarantine-until=<ISO>. Honour as ignore while
+			# the timestamp is in the future; auto-expire silently after.
+			if [[ "$_override_val" == peer-quarantine-until=* ]]; then
+				_q_until="${_override_val#peer-quarantine-until=}"
+				# BSD date (macOS) first, then GNU date (Linux). Both
+				# variants succeed; one returns empty, the OR keeps going.
+				_q_until_epoch=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$_q_until" '+%s' 2>/dev/null || true)
+				[[ -z "$_q_until_epoch" ]] && _q_until_epoch=$(date -u -d "$_q_until" '+%s' 2>/dev/null || true)
+				[[ -z "$_q_until_epoch" ]] && _q_until_epoch=0
+				if [[ "$_q_until_epoch" -gt "$_now_epoch" ]]; then
+					continue
+				fi
+			fi
+			if [[ -n "$_filtered_assignees" ]]; then
+				_filtered_assignees="${_filtered_assignees},${_a}"
+			else
+				_filtered_assignees="$_a"
+			fi
+		done
+		assignees="$_filtered_assignees"
+		if [[ -z "$assignees" ]]; then
+			return 1
 		fi
-		if [[ -n "$other_assignees" ]]; then
-			other_assignees="${other_assignees},${assignee}"
-		else
-			other_assignees="$assignee"
-		fi
-	done
+	fi
 
-	if [[ -z "$other_assignees" ]]; then
-		# Only assignee is self (or no assignees) — safe to dispatch
+	local repo_owner repo_maintainer
+	repo_owner=$(_get_repo_owner "$repo_slug")
+	repo_maintainer=$(_get_repo_maintainer "$repo_slug")
+	# GH#18352 / t1961: owner/maintainer assignees are passive unless
+	# _has_active_claim() reports an active lifecycle label (queued,
+	# in-progress, in-review, claimed) or origin:interactive is present.
+	# See _has_active_claim() above for the full rule set.
+	# t2061: explicit helper rc capture — fail-closed.
+	# _has_active_claim normalises output to "true"/"false" and always exits 0,
+	# but explicit capture documents the contract and protects against future changes.
+	local _hac_rc=0
+	local active_claim
+	active_claim=$(_has_active_claim "$issue_meta_json") || _hac_rc=$?
+	if [[ "$_hac_rc" -ne 0 ]]; then
+		printf 'GUARD_UNCERTAIN (reason=helper-failure call=_has_active_claim issue=%s repo=%s)\n' \
+			"$issue_number" "$repo_slug"
+		return 0
+	fi
+
+	local blocking_assignees
+	blocking_assignees=$(_is_assigned_compute_blocking \
+		"$assignees" "$repo_owner" "$repo_maintainer" "$active_claim" "$self_login")
+
+	if [[ -z "$blocking_assignees" ]]; then
+		# Only passive assignees remain (self and/or owner/maintainer without
+		# active claim state) — safe to dispatch.
 		return 1
 	fi
 
-	printf 'ASSIGNED: issue #%s in %s is assigned to %s\n' "$issue_number" "$repo_slug" "$other_assignees"
+	# Stale assignment recovery (GH#15060): if the blocking assignee has no
+	# active worker process AND the most recent dispatch/claim comment is >1h
+	# old AND there's been no progress (no new comments) in the last hour,
+	# treat the assignment as abandoned. Unassign the stale user, remove
+	# queued/in-progress labels, and allow re-dispatch.
+	#
+	# Root cause: when a runner goes offline or a worker crashes without
+	# cleanup, the issue stays assigned to that runner forever. The dedup
+	# guard blocks all other runners from dispatching for it, creating a
+	# permanent deadlock where 0 workers run despite available slots and
+	# open issues. This was observed in production with 370 issues and 0
+	# active workers — 100% dispatch failure rate.
+	if _is_stale_assignment "$issue_number" "$repo_slug" "$blocking_assignees"; then
+		return 1
+	fi
+
+	printf 'ASSIGNED: issue #%s in %s is assigned to %s\n' "$issue_number" "$repo_slug" "$blocking_assignees"
 	return 0
 }
 
 #######################################
-# Check whether an issue already has merged PR evidence.
+# enumerate_blockers — report ALL structural dispatch blockers for an issue.
 #
-# Historical note: command name is `has-open-pr` to match pulse-wrapper
-# dispatch dedup call sites from review feedback, but the underlying behavior
-# checks merged PR evidence to avoid redispatching already-completed issues.
+# Unlike is_assigned() which short-circuits on the first match, this function
+# runs every unconditional structural check (parent-task, no-auto-dispatch)
+# and emits ALL matching signals as newline-separated tokens on stdout.
+#
+# Intentionally excludes cost-budget, hydration window, and assignee checks —
+# those have nuanced interactive UX that the caller handles separately.
+# GUARD_UNCERTAIN is emitted when the gh API call fails (fail-closed).
 #
 # Args:
-#   $1 = issue number
-#   $2 = repo slug (owner/repo)
-#   $3 = issue title (optional; used for task-id fallback)
+#   $1 = issue_number
+#   $2 = repo_slug
+#   $3 = self_login (optional, reserved for future extension)
+#
+# Stdout: newline-separated blocker tokens; empty when no structural blockers.
 # Returns:
-#   exit 0 if merged PR evidence exists (do NOT dispatch)
-#   exit 1 if no merged PR evidence (safe to dispatch)
-# Outputs:
-#   single-line reason when evidence is found
+#   0 — at least one blocker token was emitted
+#   1 — no structural blockers found (safe to dispatch for label-based checks)
+#
+# t2894: used by _check_linked_issue_gate in full-loop-helper.sh to surface
+# ALL label-based blockers in a single pass rather than stopping at the first.
 #######################################
-has_open_pr() {
+enumerate_blockers() {
 	local issue_number="$1"
 	local repo_slug="$2"
-	local issue_title="${3:-}"
+	# self_login reserved for future extension — not used by structural checks
+	# local self_login="${3:-}"
 
-	if [[ ! "$issue_number" =~ ^[0-9]+$ ]] || [[ -z "$repo_slug" ]]; then
+	if [[ -z "$issue_number" || -z "$repo_slug" ]]; then
 		return 1
 	fi
 
-	local query pr_json pr_count pr_number
-	for keyword in close closes closed fix fixes fixed resolve resolves resolved; do
-		query="${keyword} #${issue_number} in:body"
-		pr_json=$(gh pr list --repo "$repo_slug" --state merged --search "$query" --limit 1 --json number 2>/dev/null) || pr_json="[]"
-		pr_count=$(printf '%s' "$pr_json" | jq 'length' 2>/dev/null) || pr_count=0
-		[[ "$pr_count" =~ ^[0-9]+$ ]] || pr_count=0
-		if [[ "$pr_count" -gt 0 ]]; then
-			pr_number=$(printf '%s' "$pr_json" | jq -r '.[0].number // empty' 2>/dev/null)
-			if [[ -n "$pr_number" ]]; then
-				printf 'merged PR #%s references issue #%s via "%s" keyword\n' "$pr_number" "$issue_number" "$keyword"
-			else
-				printf 'merged PR references issue #%s via "%s" keyword\n' "$issue_number" "$keyword"
-			fi
-			return 0
-		fi
-	done
-
-	local task_id
-	task_id=$(printf '%s' "$issue_title" | grep -oE 't[0-9]+(\.[0-9]+)*' | head -1 || true)
-	if [[ -z "$task_id" ]]; then
+	if [[ ! "$issue_number" =~ ^[0-9]+$ ]]; then
 		return 1
 	fi
 
-	query="${task_id} in:title"
-	pr_json=$(gh pr list --repo "$repo_slug" --state merged --search "$query" --limit 1 --json number 2>/dev/null) || pr_json="[]"
-	pr_count=$(printf '%s' "$pr_json" | jq 'length' 2>/dev/null) || pr_count=0
-	[[ "$pr_count" =~ ^[0-9]+$ ]] || pr_count=0
-	if [[ "$pr_count" -gt 0 ]]; then
-		pr_number=$(printf '%s' "$pr_json" | jq -r '.[0].number // empty' 2>/dev/null)
-		if [[ -n "$pr_number" ]]; then
-			printf 'merged PR #%s found by task id %s in title\n' "$pr_number" "$task_id"
-		else
-			printf 'merged PR found by task id %s in title\n' "$task_id"
-		fi
+	# Re-use pre-fetched JSON when the caller has already loaded issue metadata.
+	local issue_meta_json gh_rc=0
+	if [[ -n "${ISSUE_META_JSON:-}" ]] \
+		&& printf '%s' "$ISSUE_META_JSON" | jq -e '.assignees and .labels' >/dev/null 2>&1; then
+		issue_meta_json="$ISSUE_META_JSON"
+	else
+		issue_meta_json=$(gh_issue_view "$issue_number" --repo "$repo_slug" \
+			--json state,assignees,labels,createdAt 2>/dev/null) || gh_rc=$?
+	fi
+
+	if [[ "$gh_rc" -ne 0 || -z "$issue_meta_json" ]]; then
+		printf 'GUARD_UNCERTAIN (reason=gh-api-failure issue=%s repo=%s rc=%s)\n' \
+			"$issue_number" "$repo_slug" "$gh_rc"
+		return 0
+	fi
+
+	local _found=false
+	local _blocker_out
+
+	# Check 1: parent-task / meta unconditional block (t1986).
+	_blocker_out=$(_is_assigned_check_parent_task "$issue_meta_json" "$issue_number" "$repo_slug" 2>/dev/null) || true
+	if [[ -n "$_blocker_out" ]]; then
+		printf '%s\n' "$_blocker_out"
+		_found=true
+	fi
+
+	# Check 2: no-auto-dispatch unconditional block (t2832).
+	_blocker_out=$(_is_assigned_check_no_auto_dispatch "$issue_meta_json" "$issue_number" "$repo_slug" 2>/dev/null) || true
+	if [[ -n "$_blocker_out" ]]; then
+		printf '%s\n' "$_blocker_out"
+		_found=true
+	fi
+
+	# Check 3: t3197 dispatch cooldown after no_worker_process launch failure.
+	_blocker_out=$(_is_assigned_check_dispatch_cooldown "$issue_number" "$repo_slug" 2>/dev/null) || true
+	if [[ -n "$_blocker_out" ]]; then
+		printf '%s\n' "$_blocker_out"
+		_found=true
+	fi
+
+	if [[ "$_found" == "true" ]]; then
+		return 0
+	fi
+	return 1
+}
+
+# PR evidence dedup check functions are in dispatch-dedup-pr.sh (GH#18916).
+
+#######################################
+# Check whether a local process currently covers an issue.
+#######################################
+_dd_has_local_worker_for_issue() {
+	local issue_number="$1"
+	local running_keys=""
+	running_keys=$(list_running_keys 2>/dev/null || true)
+	if printf '%s\n' "$running_keys" | grep -Eq "\|(issue|ref)-${issue_number}$"; then
 		return 0
 	fi
 	return 1
 }
 
 #######################################
-# Check whether an issue has a recent "Dispatching worker" comment
-# from another runner (GH#11141).
+# Check whether a single dispatch comment is still active.
 #
-# The pulse agent posts a "Dispatching worker." comment on every issue
+# GH#16626: Process liveness check — if the comment is within TTL but no
+# worker process is running for this issue locally, the worker completed or
+# crashed without cleanup. Treat as stale and allow re-dispatch.
+# Grace period: comments <5 min old skip the liveness check to avoid racing
+# with worker startup (process may not be visible yet).
+#
+# Args:
+#   $1 = comment created_at (ISO 8601)
+#   $2 = comment author login
+#   $3 = issue number (for process search)
+#   $4 = now_epoch (seconds since epoch)
+#   $5 = max_age (seconds)
+#   $6 = self login (optional, for local stale-worker reconciliation)
+# Returns: exit 0 if comment is active (blocks dispatch), exit 1 if stale/expired
+# Outputs: reason string on stdout when active
+#
+# t2061 audit (2026-04-14):
+#
+# Error path classification for _is_dispatch_comment_active:
+#
+#   empty created_at ($1):
+#     → [[ -z "$created_at" ]] → return 1 (allow dispatch)
+#     → FAIL-OPEN INTENTIONAL: no timestamp = no comment to evaluate.
+#
+#   date parsing failure (both GNU and macOS date variants fail):
+#     → comment_epoch set to "0" (printf '0' fallback in the || chain)
+#     → age = now_epoch - 0 = very large number → age >= max_age → return 1
+#     → FAIL-OPEN INTENTIONAL: unreadable timestamp cannot prove recency.
+#       Defaulting to "expired" avoids permanently blocking dispatch on
+#       malformed or unrecognised timestamp formats. The TTL design
+#       (default 10 min) means blocks are always temporary; unreadable
+#       timestamps should not create permanent blocks.
+#
+#   No jq calls in this function. jq is used in the calling function
+#   has_dispatch_comment() which handles its own jq failures with || fallbacks.
+#   See has_dispatch_comment() for its error handling.
+#
+# Summary: this function is a pure TTL-comparison check on a single comment.
+# Fail-open on timestamp parse failures is appropriate because: (a) TTLs are
+# already conservative (10 min), (b) permanent blocks from bad timestamps
+# cause deadlock, and (c) this is a secondary guard — is_assigned() is the
+# primary cross-machine dedup guard with GUARD_UNCERTAIN fail-closed behavior.
+# ALREADY CONFIRMED FAIL-OPEN BY DESIGN — no hardening needed (t2061).
+#######################################
+_is_dispatch_comment_active() {
+	local created_at="$1"
+	local author="$2"
+	local issue_number="$3"
+	local now_epoch="$4"
+	local max_age="$5"
+	local self_login="${6:-}"
+	local active_worker_max_age="${DISPATCH_ACTIVE_WORKER_MAX_AGE:-7200}"
+	[[ "$active_worker_max_age" =~ ^[0-9]+$ ]] || active_worker_max_age=7200
+
+	[[ -z "$created_at" ]] && return 1
+
+	local comment_epoch
+	comment_epoch=$(date -u -d "$created_at" '+%s' 2>/dev/null ||
+		TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$created_at" '+%s' 2>/dev/null ||
+		printf '%s' "0")
+	local age=$((now_epoch - comment_epoch))
+
+	# GH#22356: the soft dispatch-comment TTL is only the normal claim window.
+	# A deterministic dispatch comment with no later terminal marker still means
+	# a worker may be live on another runner. Keep blocking until the extended
+	# non-terminal worker window expires; after that, a later claim path can emit
+	# an explicit stale-worker takeover reason instead of a bare DISPATCH_CLAIM.
+	if [[ "$age" -ge "$max_age" ]]; then
+		if [[ -n "$self_login" && "$author" == "$self_login" ]]; then
+			if ! _dd_has_local_worker_for_issue "$issue_number"; then
+				return 1
+			fi
+		fi
+		if [[ "$age" -lt "$active_worker_max_age" ]]; then
+			printf 'non-terminal dispatch comment by %s posted %ds ago on issue #%s (soft TTL expired; active-worker window: %ds remaining)\n' \
+				"$author" "$age" "$issue_number" "$((active_worker_max_age - age))"
+			return 0
+		fi
+		return 1
+	fi
+
+	printf 'dispatch comment by %s posted %ds ago on issue #%s (TTL: %ds remaining)\n' \
+		"$author" "$age" "$issue_number" "$((max_age - age))"
+	return 0
+}
+
+#######################################
+# Check whether an issue has a recent "Dispatching worker" comment (GH#11141).
+#
+# The pulse agent posts a "Dispatching worker" comment on every issue
 # it dispatches. This is a persistent, cross-machine signal that a
 # worker is in-flight — unlike the dispatch ledger (local-only) or
 # the claim lock (8-second window). Checking for this comment catches
 # the gap between dispatch and PR creation across machines.
 #
-# A comment is considered active if it was posted within the last
-# DISPATCH_COMMENT_MAX_AGE seconds (default 4 hours — generous to
-# cover long-running workers). Only comments from other logins are
-# considered; self-posted comments are ignored.
+# GH#17503: This is now the PRIMARY dedup guard. Dispatch comments are
+# never deleted (audit trail). A dispatch comment blocks re-dispatch for
+# DISPATCH_COMMENT_MAX_AGE seconds (default 600 = 10 min). After that,
+# the comment stays for audit but no longer blocks — allowing a fresh
+# dispatch attempt.
+#
+# A completion or failure comment posted AFTER the dispatch comment
+# cancels the lock early — the worker is done, re-dispatch is safe.
+# Recognised completion signals: "TASK_COMPLETE", "FULL_LOOP_COMPLETE",
+# "Worker failed", "Worker Watchdog Kill", "BLOCKED",
+# "Stale assignment recovered", "Kill signal sent", "gh pr merge",
+# "Closes #", "MERGE_SUMMARY", "CLAIM_RELEASED".
+#
+# No active-claim-state gate (removed GH#17503) — the dispatch comment
+# itself IS the claim. Labels and assignees are secondary signals.
 #
 # Args:
 #   $1 = issue number
 #   $2 = repo slug (owner/repo)
-#   $3 = self login (optional; comments from self are ignored)
+#   $3 = self login (unused; kept for backward compatibility — GH#15317)
 # Returns:
-#   exit 0 if a recent dispatch comment from another runner exists (do NOT dispatch)
-#   exit 1 if no recent dispatch comment (safe to dispatch)
+#   exit 0 if a recent dispatch comment exists (do NOT dispatch)
+#   exit 1 if no recent dispatch comment or superseded by completion (safe to dispatch)
 # Outputs:
 #   single-line reason when evidence is found
 #######################################
+
+#######################################
+# t3194: Opportunistic peer-quarantine event detection. Pipes already-
+# fetched comments JSON to pulse-peer-quarantine-helper.sh's scan-comments
+# subcommand to record any
+# `CLAIM_RELEASED reason=launch_recovery:no_worker_process runner=<peer>`
+# events from peers (not self). Zero new API calls; non-fatal on any
+# failure. Extracted from has_dispatch_comment to keep that function below
+# the function-complexity gate.
+# Args:
+#   $1 = comments JSON (already fetched in caller)
+#   $2 = repo slug (owner/repo)
+#   $3 = issue number
+#   $4 = self login (optional; used to skip self events)
+#######################################
+_dd_opportunistic_peer_scan() {
+	local comments_json="$1"
+	local repo_slug="$2"
+	local issue_number="$3"
+	local self_login="${4:-}"
+	local pq_helper=""
+	pq_helper="${PEER_QUARANTINE_HELPER_OVERRIDE:-${HELPER_DIR:-${SCRIPT_DIR:-$(dirname "${BASH_SOURCE[0]}")}}/pulse-peer-quarantine-helper.sh}"
+	[[ -x "$pq_helper" ]] || return 0
+	if [[ -n "$self_login" ]]; then
+		printf '%s' "$comments_json" | "$pq_helper" scan-comments \
+			--self-login "$self_login" \
+			--issue-ref "${repo_slug}#${issue_number}" \
+			>/dev/null 2>&1 || true
+	else
+		printf '%s' "$comments_json" | "$pq_helper" scan-comments \
+			--issue-ref "${repo_slug}#${issue_number}" \
+			>/dev/null 2>&1 || true
+	fi
+	return 0
+}
+
 has_dispatch_comment() {
 	local issue_number="$1"
 	local repo_slug="$2"
-	local self_login="${3:-}"
+	# $3 = self_login — unused since GH#15317 (all dispatch comments checked regardless of author)
 
 	if [[ ! "$issue_number" =~ ^[0-9]+$ ]] || [[ -z "$repo_slug" ]]; then
 		return 1
 	fi
 
-	local max_age="${DISPATCH_COMMENT_MAX_AGE:-14400}" # 4 hours
+	# GH#17503: No active-claim-state gate — dispatch comment IS the claim.
+	# Active-claim pre-gate was removed: it required OPEN + assigned +
+	# status:queued/in-progress, but stale recovery could destroy that state and
+	# bypass this check entirely.
 
+	local max_age="${DISPATCH_COMMENT_MAX_AGE:-600}" # 10 min (was 30 min/1800s — reduced to match worker lifecycle; crash recovery was wasting 28 min per crash)
 	local now_epoch
 	now_epoch=$(date -u '+%s')
 
-	# Fetch recent comments and look for "Dispatching worker" from non-self authors
+	# Fetch ALL comments — we need both dispatch and completion signals.
+	# Extract type, author, and timestamp for each relevant comment.
 	local comments_json
 	comments_json=$(gh api "repos/${repo_slug}/issues/${issue_number}/comments" \
-		--jq '[.[] | select(.body | startswith("Dispatching worker")) | {author: .user.login, created_at: .created_at}]' \
+		--jq '[.[] | {
+			body_start: (.body[:300]),
+			author: .user.login,
+			created_at: .created_at
+		}]' \
 		2>/dev/null) || comments_json="[]"
 
 	if [[ -z "$comments_json" || "$comments_json" == "null" || "$comments_json" == "[]" ]]; then
 		return 1
 	fi
 
-	# Check each dispatch comment
-	local count
-	count=$(printf '%s' "$comments_json" | jq 'length' 2>/dev/null) || count=0
+	# t3194: Opportunistic peer-quarantine event detection — extracted to
+	# _dd_opportunistic_peer_scan to keep this function below the
+	# function-complexity gate. Zero new API calls; non-fatal.
+	_dd_opportunistic_peer_scan "$comments_json" "$repo_slug" "$issue_number" "${3:-}" || true
 
-	local i
-	for i in $(seq 0 $((count - 1))); do
-		local author created_at
-		author=$(printf '%s' "$comments_json" | jq -r ".[$i].author // \"\"" 2>/dev/null) || author=""
-		created_at=$(printf '%s' "$comments_json" | jq -r ".[$i].created_at // \"\"" 2>/dev/null) || created_at=""
+	# Find the most recent dispatch comment (newest first)
+	local last_dispatch_json
+	last_dispatch_json=$(printf '%s' "$comments_json" | jq -c '
+		[.[] | select((.body_start // "") | test("(^|\\n)Dispatching worker"))]
+		| sort_by(.created_at) | reverse | first // empty
+	' 2>/dev/null) || last_dispatch_json=""
 
-		# Skip self-posted comments
-		if [[ -n "$self_login" && "$author" == "$self_login" ]]; then
-			continue
-		fi
+	if [[ -z "$last_dispatch_json" || "$last_dispatch_json" == "null" ]]; then
+		return 1
+	fi
 
-		# Check age
-		if [[ -n "$created_at" ]]; then
-			local comment_epoch
-			comment_epoch=$(date -u -d "$created_at" '+%s' 2>/dev/null ||
-				TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$created_at" '+%s' 2>/dev/null ||
-				printf '%s' "0")
-			local age=$((now_epoch - comment_epoch))
-			if [[ "$age" -lt "$max_age" ]]; then
-				printf 'dispatch comment by %s posted %ds ago on issue #%s\n' "$author" "$age" "$issue_number"
-				return 0
-			fi
-		fi
-	done
+	local dispatch_created_at dispatch_author
+	dispatch_created_at=$(printf '%s' "$last_dispatch_json" | jq -r '.created_at // ""' 2>/dev/null) || dispatch_created_at=""
+	dispatch_author=$(printf '%s' "$last_dispatch_json" | jq -r '.author // ""' 2>/dev/null) || dispatch_author=""
 
+	# Check if the dispatch comment is within TTL
+	if ! _is_dispatch_comment_active "$dispatch_created_at" "$dispatch_author" "$issue_number" "$now_epoch" "$max_age" "${3:-}"; then
+		return 1
+	fi
+
+	# GH#17503: Check for completion/failure comments posted AFTER the dispatch.
+	# If found, the worker is done — the dispatch comment no longer blocks.
+	local has_completion
+	has_completion=$(printf '%s' "$comments_json" | jq -r --arg dispatch_ts "$dispatch_created_at" '
+		[.[] | select(
+			.created_at > $dispatch_ts and (
+				(.body_start | test("TASK_COMPLETE"; "i")) or
+				(.body_start | test("FULL_LOOP_COMPLETE"; "i")) or
+				(.body_start | test("Worker failed"; "i")) or
+				(.body_start | test("Worker Watchdog Kill"; "i")) or
+				(.body_start | test("BLOCKED"; "i")) or
+				(.body_start | test("Kill signal sent"; "i")) or
+				(.body_start | test("Closes #"; "i")) or
+				(.body_start | test("gh pr merge"; "i")) or
+				(.body_start | test("MERGE_SUMMARY"; "i")) or
+				(.body_start | test("Stale assignment recovered"; "i")) or
+			(.body_start | test("CLAIM_RELEASED"; "i"))
+			)
+		)] | length
+	' 2>/dev/null) || has_completion=0
+
+	if [[ "$has_completion" -gt 0 ]]; then
+		# Worker completed or failed — dispatch comment superseded, safe to re-dispatch
+		return 1
+	fi
+
+	# Dispatch comment is active and not superseded — block re-dispatch
+	return 0
+}
+
+#######################################
+# Validate subcommand arg count. Used by main() to collapse the repeated
+# "[[ $# -lt N ]] && { echo Error; return 1; }" pattern into a single call.
+# Args:
+#   $1 = subcommand name (for error message)
+#   $2 = required arg count
+#   $3 = provided arg count (typically "$#")
+#   $4 = usage hint (e.g., "<issue-number> <repo-slug>")
+# Returns: 0 if enough args, 1 otherwise (and prints error to stderr)
+#######################################
+_require_args() {
+	local cmd="$1"
+	local required="$2"
+	local provided="$3"
+	local usage="$4"
+	if [[ "$provided" -lt "$required" ]]; then
+		echo "Error: ${cmd} requires ${usage}" >&2
+		return 1
+	fi
+	return 0
+}
+
+#######################################
+# t3077 — has_fix_the_fixer_label
+#
+# Read-only check: does the issue carry the `fix-the-fixer` label
+# (applied by pulse-fix-the-fixer-detector.sh)? Used by the dispatch
+# path (headless-runtime-helper.sh) to enable extra observability for
+# tasks that touch the worker dispatch system itself.
+#
+# Args:
+#   $1 - issue number
+#   $2 - repo slug (owner/repo)
+# Output (stdout): "labeled" or "unlabeled" (always one of these)
+# Returns: 0 if labeled, 1 if unlabeled OR on API failure (fail-conservative)
+#######################################
+has_fix_the_fixer_label() {
+	local issue_number="$1"
+	local repo_slug="$2"
+
+	if [[ -z "$issue_number" || -z "$repo_slug" ]]; then
+		printf 'unlabeled\n'
+		return 1
+	fi
+	if [[ ! "$issue_number" =~ ^[0-9]+$ ]]; then
+		printf 'unlabeled\n'
+		return 1
+	fi
+
+	local meta_json
+	meta_json=$(gh_issue_view "$issue_number" --repo "$repo_slug" \
+		--json labels 2>/dev/null) || meta_json=""
+	if [[ -z "$meta_json" ]]; then
+		printf 'unlabeled\n'
+		return 1
+	fi
+
+	# Use numeric match-count rather than a boolean string token —
+	# the codebase ratchet flags repeated boolean-token literals.
+	local match_count
+	match_count=$(printf '%s' "$meta_json" | \
+		jq -r '[.labels[] | select(.name == "fix-the-fixer")] | length' 2>/dev/null) || match_count="0"
+	[[ "$match_count" =~ ^[0-9]+$ ]] || match_count="0"
+
+	if [[ "$match_count" -gt 0 ]]; then
+		printf 'labeled\n'
+		return 0
+	fi
+	printf 'unlabeled\n'
 	return 1
+}
+
+#######################################
+# Classify a dispatch dedup/pre-launch blocker into a stable low-cardinality
+# metric reason.
+#
+# Args:
+#   $1 = blocker signal text emitted by dispatch-dedup-helper or pulse logs
+# Output: one of the dispatch_candidate_failed reason tokens
+#######################################
+classify_dispatch_blocker_reason() {
+	local signal="$1"
+	local lower_signal
+	lower_signal=$(printf '%s' "$signal" | tr '[:upper:]' '[:lower:]')
+
+	case "$lower_signal" in
+		*cost_budget_exceeded*)
+			printf 'cost_budget_exceeded\n'
+			return 0
+			;;
+		*dispatch_cooldown_active* | *reason=no_worker_process* | *no_worker_process*)
+			printf 'cooldown_no_worker_process\n'
+			return 0
+			;;
+		*graphql*circuit* | *circuit_broken* | *graphql*budget*below*)
+			printf 'graphql_circuit_breaker\n'
+			return 0
+			;;
+		*runner-health*circuit* | *runner_health*circuit*)
+			printf 'runner_health_circuit_breaker\n'
+			return 0
+			;;
+		*ever-nmr* | *requires*cryptographic*approval*)
+			printf 'ever_nmr_without_approval\n'
+			return 0
+			;;
+		*canary*failed*)
+			printf 'canary_failed\n'
+			return 0
+			;;
+		*launch*error* | *launch*validation*failed* | *per-candidate*timeout*)
+			printf 'launch_error\n'
+			return 0
+			;;
+		*missing*worker*context* | *needs-brief* | *missing*implementation*context*)
+			printf 'missing_worker_context\n'
+			return 0
+			;;
+		*worktree*cap* | *max*worktree* | *disk*space* | *large*file*)
+			printf 'local_capacity_gate\n'
+			return 0
+			;;
+		*no-auto-dispatch* | *external*author*gate* | *nmr*gate* | *approval*required*)
+			printf 'policy_gate\n'
+			return 0
+			;;
+		*assigned* | *claim* | *ledger* | *has-open-pr* | *pr*evidence* | *duplicate* | *stale_recovered*)
+			printf 'dedup_active_claim\n'
+			return 0
+			;;
+		"")
+			printf 'no_recent_log_evidence\n'
+			return 0
+			;;
+	esac
+
+	printf 'unclassified_signal\n'
+	return 0
 }
 
 #######################################
@@ -624,6 +1786,23 @@ Usage:
                                                      Check for recent "Dispatching worker" comment (exit 0=found, 1=none)
   dispatch-dedup-helper.sh is-assigned <issue> <slug> [self-login]
                                                        Check if assigned to another login (exit 0=blocked, 1=free)
+  dispatch-dedup-helper.sh enumerate-blockers <issue> <slug> [runner]
+                                                       Report ALL structural label blockers (exit 0=blocked, 1=none)
+                                                       Emits newline-separated tokens: PARENT_TASK_BLOCKED,
+                                                       NO_AUTO_DISPATCH_BLOCKED, GUARD_UNCERTAIN. Unlike is-assigned,
+                                                       does not short-circuit on first match. t2894.
+  dispatch-dedup-helper.sh classify-blocker <signal>
+                                                       Classify a blocker signal into a stable metric reason.
+  dispatch-dedup-helper.sh check-cost-budget <issue> <slug> [tier]
+                                                       t2007: cost circuit breaker (exit 0=tripped, 1=under budget)
+  dispatch-dedup-helper.sh sum-issue-token-spend <issue> <slug>
+                                                       t2007: aggregate token spend (returns "spent|attempts")
+  dispatch-dedup-helper.sh check-orphan-loop <issue> <slug> <branch>
+                                                       Hold repeated worker_branch_orphan loops for same branch
+  dispatch-dedup-helper.sh has-fix-the-fixer-label <issue> <slug>
+                                                       t3077: detect the fix-the-fixer label (exit 0=labeled, 1=unlabeled).
+                                                       Used by headless-runtime-helper.sh to enable verbose lifecycle,
+                                                       tighter watchdog, and a preflight sentinel for dispatch-path workers.
   dispatch-dedup-helper.sh claim <issue> <slug> [runner-login]
                                                      Cross-machine claim lock (exit 0=won, 1=lost, 2=error)
   dispatch-dedup-helper.sh list-running-keys        List keys for all running workers
@@ -665,6 +1844,18 @@ Examples:
     echo "No merged PR evidence — safe to dispatch"
   fi
 
+  # Check before launching a worker on a reused branch-orphan worktree
+  if dispatch-dedup-helper.sh check-orphan-loop 2300 owner/repo feature/auto-20260501-000000-gh2300; then
+    echo "Repeated worker_branch_orphan on this branch — hold dispatch"
+  else
+    echo "No branch-orphan loop — safe to dispatch"
+  fi
+
+  # Report ALL structural label blockers in one pass (t2894)
+  while IFS= read -r blocker; do
+    echo "Blocker: $blocker"
+  done < <(dispatch-dedup-helper.sh enumerate-blockers 2300 owner/repo)
+
   # Cross-machine claim lock (t1686)
   if dispatch-dedup-helper.sh claim 2300 owner/repo mylogin; then
     echo "Claim won — safe to dispatch"
@@ -686,60 +1877,91 @@ main() {
 
 	case "$command" in
 	extract-keys)
-		[[ $# -lt 1 ]] && {
-			echo "Error: extract-keys requires a title argument" >&2
-			return 1
-		}
+		_require_args extract-keys 1 "$#" "a title argument" || return 1
 		extract_keys "$1"
 		;;
 	is-duplicate)
-		[[ $# -lt 1 ]] && {
-			echo "Error: is-duplicate requires a title argument" >&2
-			return 1
-		}
+		_require_args is-duplicate 1 "$#" "a title argument" || return 1
 		is_duplicate "$1"
 		;;
 	is-assigned)
-		[[ $# -lt 2 ]] && {
-			echo "Error: is-assigned requires <issue-number> <repo-slug> [self-login]" >&2
-			return 1
-		}
+		_require_args is-assigned 2 "$#" "<issue-number> <repo-slug> [self-login]" || return 1
 		is_assigned "$1" "$2" "${3:-}"
 		;;
+	enumerate-blockers)
+		# t2894: report ALL structural label blockers in a single pass.
+		# local capture avoids positional-param ratchet violation in main().
+		_require_args enumerate-blockers 2 "$#" "<issue-number> <repo-slug> [runner]" || return 1
+		local _eb_issue="$1" _eb_repo="$2" _eb_runner="${3:-}"
+		enumerate_blockers "$_eb_issue" "$_eb_repo" "$_eb_runner"
+		;;
+	classify-blocker)
+		_require_args classify-blocker 1 "$#" "a blocker signal" || return 1
+		classify_dispatch_blocker_reason "$1"
+		;;
+	check-cost-budget)
+		# t2007: cost-per-issue circuit breaker. Direct entry point for tests
+		# and ad-hoc inspection. The same check fires inline from is-assigned.
+		_require_args check-cost-budget 2 "$#" "<issue-number> <repo-slug> [tier]" || return 1
+		_check_cost_budget "$1" "$2" "${3:-standard}"
+		;;
+	sum-issue-token-spend)
+		# t2007: read-only aggregator (no side effects). Useful for calibration.
+		_require_args sum-issue-token-spend 2 "$#" "<issue-number> <repo-slug>" || return 1
+		_sum_issue_token_spend "$1" "$2"
+		;;
 	has-dispatch-comment)
-		[[ $# -lt 2 ]] && {
-			echo "Error: has-dispatch-comment requires <issue-number> <repo-slug> [self-login]" >&2
-			return 1
-		}
+		_require_args has-dispatch-comment 2 "$#" "<issue-number> <repo-slug> [self-login]" || return 1
 		has_dispatch_comment "$1" "$2" "${3:-}"
 		;;
 	has-open-pr)
-		[[ $# -lt 2 ]] && {
-			echo "Error: has-open-pr requires <issue-number> <repo-slug> [issue-title]" >&2
-			return 1
-		}
+		_require_args has-open-pr 2 "$#" "<issue-number> <repo-slug> [issue-title]" || return 1
 		has_open_pr "$1" "$2" "${3:-}"
 		;;
+	check-orphan-loop)
+		_require_args check-orphan-loop 3 "$#" "<issue-number> <repo-slug> <branch>" || return 1
+		local _ol_issue="$1" _ol_repo="$2" _ol_branch="$3"
+		check_worker_branch_orphan_loop "$_ol_issue" "$_ol_repo" "$_ol_branch"
+		;;
 	claim)
-		[[ $# -lt 2 ]] && {
-			echo "Error: claim requires <issue-number> <repo-slug> [runner-login]" >&2
-			return 1
-		}
+		_require_args claim 2 "$#" "<issue-number> <repo-slug> [runner-login]" || return 1
 		if [[ ! -x "$CLAIM_HELPER" ]]; then
 			echo "Error: dispatch-claim-helper.sh not found at ${CLAIM_HELPER}" >&2
 			return 2
 		fi
 		"$CLAIM_HELPER" claim "$1" "$2" "${3:-}"
 		;;
+	check-claim)
+		# GH#17590: Pre-check for active claims (read-only, no comment posted).
+		_require_args check-claim 2 "$#" "<issue-number> <repo-slug>" || return 1
+		if [[ ! -x "$CLAIM_HELPER" ]]; then
+			echo "Error: dispatch-claim-helper.sh not found at ${CLAIM_HELPER}" >&2
+			return 2
+		fi
+		"$CLAIM_HELPER" check "$1" "$2"
+		;;
 	list-running-keys)
 		list_running_keys
 		;;
 	normalize)
-		[[ $# -lt 1 ]] && {
-			echo "Error: normalize requires a title argument" >&2
-			return 1
-		}
+		_require_args normalize 1 "$#" "a title argument" || return 1
 		normalize_title "$1"
+		;;
+	test-recover)
+		# Test shim for t2008: expose _recover_stale_assignment for test harness.
+		# Usage: dispatch-dedup-helper.sh test-recover <issue> <repo> <assignees> <reason>
+		# Not for production use — test files only.
+		_require_args test-recover 4 "$#" "<issue> <repo> <assignees> <reason>" || return 1
+		_recover_stale_assignment "$1" "$2" "$3" "$4"
+		;;
+	has-fix-the-fixer-label)
+		# t3077: read-only check used by headless-runtime-helper.sh to
+		# decide whether to enable verbose lifecycle, tighter watchdog,
+		# and the preflight sentinel write for this worker.
+		_require_args has-fix-the-fixer-label 2 "$#" "<issue> <slug>" || return 1
+		local _hftf_issue="$1"
+		local _hftf_repo="$2"
+		has_fix_the_fixer_label "$_hftf_issue" "$_hftf_repo"
 		;;
 	help | --help | -h)
 		show_help

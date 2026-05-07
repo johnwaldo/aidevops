@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC2129
 set -euo pipefail
 
@@ -588,11 +590,13 @@ scrape_url() {
 	print_info "Using API: ${WATERCRAWL_API_URL:-}"
 
 	# Create Node.js script for scraping
-	local temp_script
-	temp_script=$(mktemp /tmp/watercrawl_scrape_XXXXXX.mjs)
+	# t2997: node ESM requires exact .mjs extension; mktemp -d + fixed filename.
+	local temp_dir temp_script
+	temp_dir=$(mktemp -d /tmp/watercrawl_scrape_XXXXXX)
+	temp_script="$temp_dir/script.mjs"
 	_save_cleanup_scope
 	trap '_run_cleanups' RETURN
-	push_cleanup "rm -f '${temp_script}'"
+	push_cleanup "rm -rf '${temp_dir}'"
 
 	cat >"$temp_script" <<'SCRIPT'
 import { WaterCrawlAPIClient } from '@watercrawl/nodejs';
@@ -639,11 +643,77 @@ SCRIPT
 		print_success "Scrape completed"
 	else
 		print_error "Scrape failed: $result"
-		rm -f "$temp_script"
+		rm -rf "$temp_dir"
 		return 1
 	fi
 
-	rm -f "$temp_script"
+	rm -rf "$temp_dir"
+	return 0
+}
+
+# Write the Node.js crawl script to a temp file
+_crawl_write_script() {
+	local temp_script="$1"
+	cat >"$temp_script" <<'SCRIPT'
+import { WaterCrawlAPIClient } from '@watercrawl/nodejs';
+
+const apiKey = process.env.WATERCRAWL_API_KEY;
+const apiUrl = process.env.WATERCRAWL_API_URL;
+const url = process.argv[2];
+const maxDepth = parseInt(process.argv[3]) || 2;
+const pageLimit = parseInt(process.argv[4]) || 50;
+
+if (!apiKey) {
+    console.error('Error: WATERCRAWL_API_KEY not set');
+    process.exit(1);
+}
+
+if (!url) {
+    console.error('Error: URL required');
+    process.exit(1);
+}
+
+const client = new WaterCrawlAPIClient(apiKey, apiUrl);
+
+try {
+    console.error(`Creating crawl request (depth: ${maxDepth}, limit: ${pageLimit})...`);
+    const crawlRequest = await client.createCrawlRequest(
+        url,
+        { max_depth: maxDepth, page_limit: pageLimit },
+        { only_main_content: true, include_links: true, wait_time: 2000 }
+    );
+    console.error(`Crawl started: ${crawlRequest.uuid}`);
+    console.error('Monitoring progress...');
+    const results = [];
+    for await (const event of client.monitorCrawlRequest(crawlRequest.uuid)) {
+        if (event.type === 'state') {
+            console.error(`Status: ${event.data.status}, Pages: ${event.data.number_of_documents}`);
+        } else if (event.type === 'result') {
+            results.push({ url: event.data.url, title: event.data.title, content: event.data.result });
+            console.error(`Crawled: ${event.data.url}`);
+        }
+    }
+    console.log(JSON.stringify({ crawl_id: crawlRequest.uuid, total_pages: results.length, results: results }, null, 2));
+} catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+}
+SCRIPT
+	return 0
+}
+
+# Handle crawl output: filter progress lines and write to file or stdout
+_crawl_handle_output() {
+	local result="$1"
+	local output_file="$2"
+	local filtered
+	filtered=$(printf '%s\n' "$result" | grep -v "^\(Status:\|Crawled:\|Creating\|Crawl started\|Monitoring\)")
+	if [[ -n "$output_file" ]]; then
+		printf '%s\n' "$filtered" >"$output_file"
+		print_success "Results saved to: $output_file"
+	else
+		printf '%s\n' "$filtered"
+	fi
 	return 0
 }
 
@@ -670,96 +740,28 @@ crawl_website() {
 	print_info "Using API: ${WATERCRAWL_API_URL:-}"
 	print_info "Max depth: $max_depth, Page limit: $page_limit"
 
-	# Create Node.js script for crawling
-	local temp_script
-	temp_script=$(mktemp /tmp/watercrawl_crawl_XXXXXX.mjs)
+	# t2997: node ESM requires exact .mjs extension; mktemp -d + fixed filename.
+	local temp_dir temp_script
+	temp_dir=$(mktemp -d /tmp/watercrawl_crawl_XXXXXX)
+	temp_script="$temp_dir/script.mjs"
 	_save_cleanup_scope
 	trap '_run_cleanups' RETURN
-	push_cleanup "rm -f '${temp_script}'"
+	push_cleanup "rm -rf '${temp_dir}'"
 
-	cat >"$temp_script" <<'SCRIPT'
-import { WaterCrawlAPIClient } from '@watercrawl/nodejs';
-
-const apiKey = process.env.WATERCRAWL_API_KEY;
-const apiUrl = process.env.WATERCRAWL_API_URL;
-const url = process.argv[2];
-const maxDepth = parseInt(process.argv[3]) || 2;
-const pageLimit = parseInt(process.argv[4]) || 50;
-
-if (!apiKey) {
-    console.error('Error: WATERCRAWL_API_KEY not set');
-    process.exit(1);
-}
-
-if (!url) {
-    console.error('Error: URL required');
-    process.exit(1);
-}
-
-const client = new WaterCrawlAPIClient(apiKey, apiUrl);
-
-try {
-    console.error(`Creating crawl request (depth: ${maxDepth}, limit: ${pageLimit})...`);
-    
-    const crawlRequest = await client.createCrawlRequest(
-        url,
-        {
-            max_depth: maxDepth,
-            page_limit: pageLimit
-        },
-        {
-            only_main_content: true,
-            include_links: true,
-            wait_time: 2000
-        }
-    );
-    
-    console.error(`Crawl started: ${crawlRequest.uuid}`);
-    console.error('Monitoring progress...');
-    
-    const results = [];
-    for await (const event of client.monitorCrawlRequest(crawlRequest.uuid)) {
-        if (event.type === 'state') {
-            console.error(`Status: ${event.data.status}, Pages: ${event.data.number_of_documents}`);
-        } else if (event.type === 'result') {
-            results.push({
-                url: event.data.url,
-                title: event.data.title,
-                content: event.data.result
-            });
-            console.error(`Crawled: ${event.data.url}`);
-        }
-    }
-    
-    console.log(JSON.stringify({
-        crawl_id: crawlRequest.uuid,
-        total_pages: results.length,
-        results: results
-    }, null, 2));
-    
-} catch (error) {
-    console.error('Error:', error.message);
-    process.exit(1);
-}
-SCRIPT
+	_crawl_write_script "$temp_script"
 
 	local result
 	if result=$(WATERCRAWL_API_KEY="${WATERCRAWL_API_KEY:-}" WATERCRAWL_API_URL="${WATERCRAWL_API_URL:-}" node "$temp_script" "$url" "$max_depth" "$page_limit" 2>&1); then
-		if [[ -n "$output_file" ]]; then
-			echo "$result" | grep -v "^\(Status:\|Crawled:\|Creating\|Crawl started\|Monitoring\)" >"$output_file"
-			print_success "Results saved to: $output_file"
-		else
-			echo "$result" | grep -v "^\(Status:\|Crawled:\|Creating\|Crawl started\|Monitoring\)"
-		fi
+		_crawl_handle_output "$result" "$output_file"
 		print_success "Crawl completed"
 	else
 		print_error "Crawl failed"
-		echo "$result" >&2
-		rm -f "$temp_script"
+		printf '%s\n' "$result" >&2
+		rm -rf "$temp_dir"
 		return 1
 	fi
 
-	rm -f "$temp_script"
+	rm -rf "$temp_dir"
 	return 0
 }
 
@@ -786,11 +788,13 @@ search_web() {
 	print_info "Result limit: $limit"
 
 	# Create Node.js script for searching
-	local temp_script
-	temp_script=$(mktemp /tmp/watercrawl_search_XXXXXX.mjs)
+	# t2997: node ESM requires exact .mjs extension; mktemp -d + fixed filename.
+	local temp_dir temp_script
+	temp_dir=$(mktemp -d /tmp/watercrawl_search_XXXXXX)
+	temp_script="$temp_dir/script.mjs"
 	_save_cleanup_scope
 	trap '_run_cleanups' RETURN
-	push_cleanup "rm -f '${temp_script}'"
+	push_cleanup "rm -rf '${temp_dir}'"
 
 	cat >"$temp_script" <<'SCRIPT'
 import { WaterCrawlAPIClient } from '@watercrawl/nodejs';
@@ -846,11 +850,77 @@ SCRIPT
 	else
 		print_error "Search failed"
 		echo "$result" >&2
-		rm -f "$temp_script"
+		rm -rf "$temp_dir"
 		return 1
 	fi
 
-	rm -f "$temp_script"
+	rm -rf "$temp_dir"
+	return 0
+}
+
+# Write the Node.js sitemap script to a temp file
+_sitemap_write_script() {
+	local temp_script="$1"
+	cat >"$temp_script" <<'SCRIPT'
+import { WaterCrawlAPIClient } from '@watercrawl/nodejs';
+
+const apiKey = process.env.WATERCRAWL_API_KEY;
+const apiUrl = process.env.WATERCRAWL_API_URL;
+const url = process.argv[2];
+const format = process.argv[3] || 'json';
+
+if (!apiKey) {
+    console.error('Error: WATERCRAWL_API_KEY not set');
+    process.exit(1);
+}
+
+if (!url) {
+    console.error('Error: URL required');
+    process.exit(1);
+}
+
+const client = new WaterCrawlAPIClient(apiKey, apiUrl);
+
+try {
+    console.error(`Creating sitemap request for: ${url}...`);
+    const sitemapRequest = await client.createSitemapRequest(
+        url,
+        { include_subdomains: true, ignore_sitemap_xml: false, include_paths: [], exclude_paths: [] },
+        true,  // sync
+        true   // download
+    );
+    if (Array.isArray(sitemapRequest)) {
+        console.log(JSON.stringify(sitemapRequest, null, 2));
+    } else if (typeof sitemapRequest === 'string') {
+        console.log(sitemapRequest);
+    } else {
+        const results = await client.getSitemapResults(sitemapRequest.uuid, format);
+        if (typeof results === 'string') {
+            console.log(results);
+        } else {
+            console.log(JSON.stringify(results, null, 2));
+        }
+    }
+} catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+}
+SCRIPT
+	return 0
+}
+
+# Handle sitemap output: filter progress lines and write to file or stdout
+_sitemap_handle_output() {
+	local result="$1"
+	local output_file="$2"
+	local filtered
+	filtered=$(printf '%s\n' "$result" | grep -v "^Creating sitemap")
+	if [[ -n "$output_file" ]]; then
+		printf '%s\n' "$filtered" >"$output_file"
+		print_success "Sitemap saved to: $output_file"
+	else
+		printf '%s\n' "$filtered"
+	fi
 	return 0
 }
 
@@ -876,86 +946,28 @@ generate_sitemap() {
 	print_info "Using API: ${WATERCRAWL_API_URL:-}"
 	print_info "Format: $format"
 
-	# Create Node.js script for sitemap
-	local temp_script
-	temp_script=$(mktemp /tmp/watercrawl_sitemap_XXXXXX.mjs)
+	# t2997: node ESM requires exact .mjs extension; mktemp -d + fixed filename.
+	local temp_dir temp_script
+	temp_dir=$(mktemp -d /tmp/watercrawl_sitemap_XXXXXX)
+	temp_script="$temp_dir/script.mjs"
 	_save_cleanup_scope
 	trap '_run_cleanups' RETURN
-	push_cleanup "rm -f '${temp_script}'"
+	push_cleanup "rm -rf '${temp_dir}'"
 
-	cat >"$temp_script" <<'SCRIPT'
-import { WaterCrawlAPIClient } from '@watercrawl/nodejs';
-
-const apiKey = process.env.WATERCRAWL_API_KEY;
-const apiUrl = process.env.WATERCRAWL_API_URL;
-const url = process.argv[2];
-const format = process.argv[3] || 'json';
-
-if (!apiKey) {
-    console.error('Error: WATERCRAWL_API_KEY not set');
-    process.exit(1);
-}
-
-if (!url) {
-    console.error('Error: URL required');
-    process.exit(1);
-}
-
-const client = new WaterCrawlAPIClient(apiKey, apiUrl);
-
-try {
-    console.error(`Creating sitemap request for: ${url}...`);
-    
-    const sitemapRequest = await client.createSitemapRequest(
-        url,
-        {
-            include_subdomains: true,
-            ignore_sitemap_xml: false,
-            include_paths: [],
-            exclude_paths: []
-        },
-        true,  // sync
-        true   // download
-    );
-    
-    // If sync returned the results directly
-    if (Array.isArray(sitemapRequest)) {
-        console.log(JSON.stringify(sitemapRequest, null, 2));
-    } else if (typeof sitemapRequest === 'string') {
-        console.log(sitemapRequest);
-    } else {
-        // Need to get results separately
-        const results = await client.getSitemapResults(sitemapRequest.uuid, format);
-        if (typeof results === 'string') {
-            console.log(results);
-        } else {
-            console.log(JSON.stringify(results, null, 2));
-        }
-    }
-    
-} catch (error) {
-    console.error('Error:', error.message);
-    process.exit(1);
-}
-SCRIPT
+	_sitemap_write_script "$temp_script"
 
 	local result
 	if result=$(WATERCRAWL_API_KEY="${WATERCRAWL_API_KEY:-}" WATERCRAWL_API_URL="${WATERCRAWL_API_URL:-}" node "$temp_script" "$url" "$format" 2>&1); then
-		if [[ -n "$output_file" ]]; then
-			echo "$result" | grep -v "^Creating sitemap" >"$output_file"
-			print_success "Sitemap saved to: $output_file"
-		else
-			echo "$result" | grep -v "^Creating sitemap"
-		fi
+		_sitemap_handle_output "$result" "$output_file"
 		print_success "Sitemap generated"
 	else
 		print_error "Sitemap generation failed"
-		echo "$result" >&2
-		rm -f "$temp_script"
+		printf '%s\n' "$result" >&2
+		rm -rf "$temp_dir"
 		return 1
 	fi
 
-	rm -f "$temp_script"
+	rm -rf "$temp_dir"
 	return 0
 }
 

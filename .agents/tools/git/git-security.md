@@ -3,14 +3,13 @@ description: Git security practices and secret scanning
 mode: subagent
 tools:
   read: true
-  write: false
-  edit: false
   bash: true
-  glob: true
   grep: true
-  webfetch: false
   task: true
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Git Security Practices
 
@@ -18,27 +17,25 @@ tools:
 
 ## Quick Reference
 
-- **Token storage**: `~/.config/aidevops/credentials.sh` (600 perms) or gopass
-- **Never commit**: API keys, tokens, passwords, secrets
-- **Branch protection**: Required on `main` — PRs, status checks, signed commits
-- **Secret scanning**: `secretlint-helper.sh scan` before every push
-- **Incident**: Rotate first, remove from history second
+- **Store secrets**: `~/.config/aidevops/credentials.sh` (600 perms) or gopass
+- **Never commit**: API keys, tokens, passwords, private keys, other secrets
+- **Protect `main`**: PRs, required status checks, stale-review dismissal, admin enforcement
+- **Scan before push**: `secretlint-helper.sh scan`; use `trufflehog` for history
+- **Incident order**: rotate first, remove from history second
 
 <!-- AI-CONTEXT-END -->
 
-## Authentication
+## Preventive Controls
 
-Use CLI auth — stores tokens in system keyring, not env vars:
+**Auth:** CLI auth (tokens in system keyring, not repo files). Fallback: `~/.config/aidevops/credentials.sh` (600 perms). Rotate every 6-12 months or on exposure. Prefer short-lived CI/CD credentials. See `git/authentication.md`.
 
 ```bash
 gh auth login -s workflow   # -s workflow for CI PR support
-glab auth login
-tea login add
 ```
 
-Token storage: `~/.config/aidevops/credentials.sh` (600 perms). Rotate every 6–12 months; immediately if exposed. Use short-lived tokens for CI/CD.
+### Branch Protection
 
-## Branch Protection
+Require PR reviews, dismiss stale approvals, enforce admins, require CI checks, CODEOWNERS where available. Signed commits recommended.
 
 ```bash
 gh api repos/{owner}/{repo}/branches/main/protection -X PUT \
@@ -47,9 +44,7 @@ gh api repos/{owner}/{repo}/branches/main/protection -X PUT \
   -f required_pull_request_reviews='{"required_approving_review_count":1}'
 ```
 
-Require: PR reviews (dismiss stale), CI status checks, code owner review. Signed commits recommended.
-
-## Commit Signing
+### Commit Signing
 
 ```bash
 gpg --full-generate-key
@@ -58,49 +53,47 @@ git config --global user.signingkey KEY_ID
 git config --global commit.gpgsign true
 ```
 
-## Pre-commit Hook
+### Secret Detection
+
+Primary: `secretlint-helper.sh scan`. History: `trufflehog git file://. --only-verified`.
+
+Pre-commit hook (pattern-based, supplementary to secretlint):
 
 ```bash
 # .git/hooks/pre-commit
 #!/bin/bash
 if git diff --cached | grep -iE "(api_key|token|password|secret|private_key)" > /dev/null; then
-    echo "ERROR: Possible secret detected — review before committing."
-    exit 1
+    echo "ERROR: Possible secret detected — review before committing."; exit 1
 fi
 ```
 
-## Secret Detection
-
-```bash
-./.agents/scripts/secretlint-helper.sh scan   # current state
-trufflehog git file://. --only-verified        # git history
-```
-
-Tools: `secretlint-helper.sh` (primary), `git-secrets` (AWS), `trufflehog` (history).
-
 ## Access Control
 
-Principle of least privilege: grant minimum necessary, review quarterly, remove inactive collaborators. Use teams for group permissions.
+Least privilege. Quarterly review. Remove inactive collaborators. Prefer teams over direct grants.
 
 | Role | Permissions |
 |------|-------------|
-| Read | View code, issues |
+| Read | View code/issues |
 | Triage | Manage issues, no push |
 | Write | Push to non-protected branches |
-| Maintain | Push to protected, manage settings |
+| Maintain | Settings + protected-branch workflows |
 | Admin | Full access |
 
 ## Incident Response
 
-**Token exposed:**
-1. Revoke immediately
-2. Generate replacement
-3. Update all consumers
-4. Audit for unauthorized access
+**Token exposed:** revoke → replace → update consumers → audit for unauthorized use.
 
 **Secret committed:**
-1. **Rotate the secret first** — assume it's compromised
-2. Remove from history:
+
+1. **Rotate first** — assume compromise.
+2. Remove from history (`git-filter-repo` preferred):
+
+   ```bash
+   git filter-repo --invert-paths --path path/to/secret
+   git push origin --force --all
+   ```
+
+   Fallback (`git filter-branch`, legacy):
 
    ```bash
    git filter-branch --force --index-filter \
@@ -109,7 +102,7 @@ Principle of least privilege: grant minimum necessary, review quarterly, remove 
    git push origin --force --all
    ```
 
-3. Notify affected parties
+3. Notify affected parties.
 
 ## Related
 

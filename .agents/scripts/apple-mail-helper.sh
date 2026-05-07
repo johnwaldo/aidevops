@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034
 set -euo pipefail
 
@@ -564,8 +566,10 @@ APPLESCRIPT
 
 	# Use defaults write for the persistent preference
 	if [[ "$size" = "original" ]]; then
+		# shell-portability: ignore next — apple-mail-helper is macOS-only
 		defaults write com.apple.mail ImageSizePreference -int 0
 	else
+		# shell-portability: ignore next — apple-mail-helper is macOS-only
 		defaults write com.apple.mail ImageSizePreference -int 3
 	fi
 

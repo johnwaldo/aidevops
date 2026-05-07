@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034
 # verify-run-helper.sh - Execute verification checks and log proof
 # Part of aidevops framework: https://aidevops.sh
@@ -430,7 +432,7 @@ cmd_log() {
 		awk "/^## ${filter_vid} /{found=1} found && /^## v[0-9]/ && !/^## ${filter_vid} /{exit} found{print}" "$log_file"
 	elif [[ $last_n -gt 0 ]]; then
 		local total_runs
-		total_runs=$(grep -c "^## v[0-9]" "$log_file" || echo "0")
+		total_runs=$(safe_grep_count "^## v[0-9]" "$log_file")
 		echo "Total runs: ${total_runs}"
 		echo ""
 		local start_pattern

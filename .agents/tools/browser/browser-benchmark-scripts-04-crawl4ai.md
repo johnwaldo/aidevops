@@ -1,6 +1,9 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Crawl4AI Benchmark Scripts
 
-Only supports navigate and extract (no form interaction or multi-step navigation).
+Crawl4AI benchmark scripts. Target: `https://the-internet.herokuapp.com`. Tests: `navigate`, `extract` only (no form/multi-step) — 3 runs each. See [`browser-benchmark-scripts.md`](browser-benchmark-scripts.md) for the full suite index.
 
 ## Sequential benchmark
 
@@ -37,7 +40,7 @@ async def run():
 asyncio.run(run())
 ```
 
-## Parallel benchmark — sequential vs parallel
+## Parallel benchmark
 
 ```python
 import asyncio, time

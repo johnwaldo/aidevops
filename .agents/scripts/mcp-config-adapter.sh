@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # MCP Config Adapter — Universal MCP Definition → Per-Runtime Config
 #
@@ -52,6 +54,100 @@ source "${SCRIPT_DIR}/shared-constants.sh"
 # Source JSON helpers from ai-cli-config.sh (json_set_nested, json_append_to_array)
 # shellcheck source=ai-cli-config.sh
 source "${SCRIPT_DIR}/ai-cli-config.sh"
+
+_mcp_adapter_run_with_timeout() {
+	local timeout_seconds="$1"
+	shift
+	local kill_after_seconds="${AIDEVOPS_MCP_TIMEOUT_KILL_AFTER_SECONDS:-2}"
+
+	if command -v timeout >/dev/null 2>&1; then
+		if _mcp_adapter_timeout_supports_kill_after timeout; then
+			timeout -k "${kill_after_seconds}s" "${timeout_seconds}s" "$@"
+		else
+			timeout "${timeout_seconds}s" "$@"
+		fi
+		return $?
+	fi
+
+	if command -v gtimeout >/dev/null 2>&1; then
+		if _mcp_adapter_timeout_supports_kill_after gtimeout; then
+			gtimeout -k "${kill_after_seconds}s" "${timeout_seconds}s" "$@"
+		else
+			gtimeout "${timeout_seconds}s" "$@"
+		fi
+		return $?
+	fi
+
+	if command -v perl >/dev/null 2>&1; then
+		perl -e 'alarm shift @ARGV; exec @ARGV' "$timeout_seconds" "$@"
+		return $?
+	fi
+
+	"$@"
+	return $?
+}
+
+_mcp_adapter_timeout_supports_kill_after() {
+	local timeout_cmd="$1"
+
+	"$timeout_cmd" --help 2>&1 | grep -q -- '-k'
+	return $?
+}
+
+_MCP_ADAPTER_CLAUDE_EXISTING_CACHE=""
+_MCP_ADAPTER_CLAUDE_LIST_STATUS_CACHE=""
+_MCP_ADAPTER_CLAUDE_LIST_READY=false
+
+_mcp_adapter_reset_claude_registration_cache() {
+	_MCP_ADAPTER_CLAUDE_EXISTING_CACHE=""
+	_MCP_ADAPTER_CLAUDE_LIST_STATUS_CACHE=""
+	_MCP_ADAPTER_CLAUDE_LIST_READY=false
+	return 0
+}
+
+_mcp_adapter_prepare_claude_registration() {
+	local claude_timeout_seconds="$1"
+	local existing=""
+	local list_status=0
+
+	if [[ "${_MCP_ADAPTER_CLAUDE_LIST_READY:-false}" == true ]]; then
+		return 0
+	fi
+
+	existing=$(_mcp_adapter_run_with_timeout "$claude_timeout_seconds" claude mcp list 2>/dev/null) || list_status=$?
+	_MCP_ADAPTER_CLAUDE_EXISTING_CACHE="$existing"
+	_MCP_ADAPTER_CLAUDE_LIST_STATUS_CACHE="$list_status"
+	_MCP_ADAPTER_CLAUDE_LIST_READY=true
+
+	if [[ "$list_status" -ne 0 ]]; then
+		print_warning "Claude Code MCP list timed out or failed — skipping Claude MCP registration pass"
+	fi
+	return 0
+}
+
+_mcp_adapter_claude_existing_contains() {
+	local mcp_name="$1"
+	local existing="$2"
+	local line
+
+	while IFS= read -r line; do
+		if [[ "${line%%:*}" == "$mcp_name" ]]; then
+			return 0
+		fi
+	done <<<"$existing"
+	return 1
+}
+
+_mcp_adapter_claude_cache_mark_registered() {
+	local mcp_name="$1"
+
+	if [[ -z "${_MCP_ADAPTER_CLAUDE_EXISTING_CACHE:-}" ]]; then
+		_MCP_ADAPTER_CLAUDE_EXISTING_CACHE="${mcp_name}:"
+	else
+		_MCP_ADAPTER_CLAUDE_EXISTING_CACHE+=$'\n'"${mcp_name}:"
+	fi
+	return 0
+}
 
 # =============================================================================
 # Runtime Detection Stub (t1665.1 — will be replaced by runtime-registry.sh)
@@ -233,6 +329,7 @@ _register_mcp_opencode() {
 _register_mcp_claude() {
 	local mcp_name="$1"
 	local mcp_json="$2"
+	local claude_timeout_seconds="${AIDEVOPS_MCP_CLAUDE_TIMEOUT_SECONDS:-20}"
 
 	if ! command -v claude >/dev/null 2>&1; then
 		print_info "Claude Code CLI not found — skipping"
@@ -244,11 +341,13 @@ _register_mcp_claude() {
 		return 0
 	fi
 
-	# Check if already registered
-	# claude mcp list output format: "name: command - status"
-	local existing
-	existing=$(claude mcp list 2>/dev/null || echo "")
-	if echo "$existing" | grep -q "^${mcp_name}:" 2>/dev/null; then
+	# Check if already registered. The list call can trigger MCP health checks, so
+	# cache it once per registration pass instead of once per server.
+	_mcp_adapter_prepare_claude_registration "$claude_timeout_seconds"
+	if [[ "${_MCP_ADAPTER_CLAUDE_LIST_STATUS_CACHE:-1}" -ne 0 ]]; then
+		return 0
+	fi
+	if _mcp_adapter_claude_existing_contains "$mcp_name" "${_MCP_ADAPTER_CLAUDE_EXISTING_CACHE:-}"; then
 		print_info "$mcp_name already registered in Claude Code — skipping"
 		return 0
 	fi
@@ -274,10 +373,11 @@ _register_mcp_claude() {
         }')
 	fi
 
-	if claude mcp add-json "$mcp_name" --scope user "$claude_entry" 2>/dev/null; then
+	if _mcp_adapter_run_with_timeout "$claude_timeout_seconds" claude mcp add-json "$mcp_name" --scope user "$claude_entry" 2>/dev/null; then
+		_mcp_adapter_claude_cache_mark_registered "$mcp_name"
 		print_success "Registered $mcp_name in Claude Code"
 	else
-		print_warning "Failed to register $mcp_name in Claude Code"
+		print_warning "Failed or timed out registering $mcp_name in Claude Code"
 	fi
 	return 0
 }

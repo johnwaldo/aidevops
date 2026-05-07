@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 """
 email_imap_adapter.py - IMAP adapter for mailbox operations.
 
@@ -27,25 +29,29 @@ Output: JSON to stdout. Errors to stderr.
 
 import argparse
 import email
-import email.header
 import email.policy
-import email.utils
 import imaplib
 import json
 import os
-import re
-import sqlite3
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
+from contextlib import contextmanager
+
+from _email_imap_index import (
+    incremental_fetch_range,
+    init_index_db,
+    sync_messages_to_db,
+    upsert_messages_to_index,
+)
+from _email_imap_parser import (
+    extract_message_bodies,
+    parse_envelope_from_fetch,
+    parse_folder_entry,
+)
 
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-INDEX_DIR = Path.home() / ".aidevops" / ".agent-workspace" / "email-mailbox"
-INDEX_DB = INDEX_DIR / "index.db"
 
 # Custom flag taxonomy mapping (from email-mailbox.md)
 FLAG_TAXONOMY = {
@@ -57,85 +63,9 @@ FLAG_TAXONOMY = {
     "Add-to-Contacts": "$AddContact",
 }
 
-# IMAP date format for SEARCH commands
-IMAP_DATE_FMT = "%d-%b-%Y"
 
-
-# ---------------------------------------------------------------------------
-# SQLite metadata index
-# ---------------------------------------------------------------------------
-
-def _init_index_db(db_path=None):
-    """Initialise the SQLite metadata index. Never stores message bodies."""
-    if db_path is None:
-        db_path = INDEX_DB
-    db_path = Path(db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            account     TEXT NOT NULL,
-            folder      TEXT NOT NULL,
-            uid         INTEGER NOT NULL,
-            message_id  TEXT,
-            date        TEXT,
-            from_addr   TEXT,
-            to_addr     TEXT,
-            subject     TEXT,
-            flags       TEXT,
-            size        INTEGER DEFAULT 0,
-            indexed_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-            PRIMARY KEY (account, folder, uid)
-        )
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_messages_date
-        ON messages (account, date DESC)
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_messages_from
-        ON messages (account, from_addr)
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_messages_subject
-        ON messages (account, subject)
-    """)
-    conn.commit()
-    # Secure permissions on the database file
-    try:
-        os.chmod(str(db_path), 0o600)
-    except OSError:
-        pass
-    return conn
-
-
-def _upsert_message(conn, account, folder, uid, headers):
-    """Insert or update a message in the metadata index."""
-    conn.execute("""
-        INSERT INTO messages (account, folder, uid, message_id, date,
-                              from_addr, to_addr, subject, flags, size)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (account, folder, uid) DO UPDATE SET
-            message_id = excluded.message_id,
-            date       = excluded.date,
-            from_addr  = excluded.from_addr,
-            to_addr    = excluded.to_addr,
-            subject    = excluded.subject,
-            flags      = excluded.flags,
-            size       = excluded.size,
-            indexed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-    """, (
-        account, folder, uid,
-        headers.get("message_id", ""),
-        headers.get("date", ""),
-        headers.get("from", ""),
-        headers.get("to", ""),
-        headers.get("subject", ""),
-        headers.get("flags", ""),
-        headers.get("size", 0),
-    ))
+class IMAPError(Exception):
+    """IMAP operation failed (folder select, fetch, etc.)."""
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +106,8 @@ def connect(host, port, user, security="TLS"):
 
         conn.login(user, password)
         return conn
-    except imaplib.IMAP4.error as exc:
-        print(f"ERROR: IMAP connection failed: {exc}", file=sys.stderr)
-        sys.exit(1)
     except Exception as exc:
-        print(f"ERROR: Connection error: {exc}", file=sys.stderr)
+        print(f"ERROR: IMAP connection failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -206,74 +133,25 @@ def _get_folder_mapping(provider_config):
     return provider_config.get("default_folders", {})
 
 
-# ---------------------------------------------------------------------------
-# Header parsing
-# ---------------------------------------------------------------------------
-
-def _decode_header_value(raw):
-    """Decode an RFC 2047 encoded header value."""
-    if raw is None:
-        return ""
-    parts = email.header.decode_header(raw)
-    decoded = []
-    for part_bytes, charset in parts:
-        if isinstance(part_bytes, bytes):
-            decoded.append(part_bytes.decode(charset or "utf-8", errors="replace"))
-        else:
-            decoded.append(str(part_bytes))
-    return " ".join(decoded)
+@contextmanager
+def _imap_connection(args):
+    """Context manager for IMAP connection with auto-logout."""
+    conn = connect(args.host, args.port, args.user, args.security)
+    try:
+        yield conn
+    finally:
+        conn.logout()
 
 
-def _parse_envelope_from_fetch(fetch_data):
-    """Parse headers from an IMAP FETCH response.
+def _select_folder_or_fail(conn, folder, readonly=True):
+    """Select an IMAP folder, raising IMAPError on failure.
 
-    Uses BODY.PEEK[HEADER.FIELDS (...)] to avoid marking as read.
+    Returns the total message count in the folder.
     """
-    results = []
-    # fetch_data is a list of (response_line, data) tuples
-    idx = 0
-    while idx < len(fetch_data):
-        item = fetch_data[idx]
-        if isinstance(item, tuple) and len(item) == 2:
-            response_line = item[0]
-            header_bytes = item[1]
-
-            # Extract UID from response line
-            uid_match = re.search(rb"UID (\d+)", response_line)
-            uid = int(uid_match.group(1)) if uid_match else 0
-
-            # Extract FLAGS from response line
-            flags_match = re.search(rb"FLAGS \(([^)]*)\)", response_line)
-            flags_str = flags_match.group(1).decode("utf-8", errors="replace") if flags_match else ""
-
-            # Extract RFC822.SIZE from response line
-            size_match = re.search(rb"RFC822\.SIZE (\d+)", response_line)
-            size = int(size_match.group(1)) if size_match else 0
-
-            # Parse headers
-            if isinstance(header_bytes, bytes):
-                msg = email.message_from_bytes(header_bytes, policy=email.policy.default)
-                date_str = ""
-                date_header = msg.get("Date", "")
-                if date_header:
-                    try:
-                        dt = email.utils.parsedate_to_datetime(str(date_header))
-                        date_str = dt.strftime("%Y-%m-%dT%H:%M:%S%z")
-                    except (ValueError, TypeError):
-                        date_str = str(date_header)
-
-                results.append({
-                    "uid": uid,
-                    "message_id": str(msg.get("Message-ID", "")),
-                    "date": date_str,
-                    "from": str(msg.get("From", "")),
-                    "to": str(msg.get("To", "")),
-                    "subject": str(msg.get("Subject", "")),
-                    "flags": flags_str,
-                    "size": size,
-                })
-        idx += 1
-    return results
+    status, count_data = conn.select(f'"{folder}"', readonly=readonly)
+    if status != "OK":
+        raise IMAPError(f"Cannot select folder '{folder}'")
+    return int(count_data[0] or b"0")
 
 
 # ---------------------------------------------------------------------------
@@ -282,470 +160,313 @@ def _parse_envelope_from_fetch(fetch_data):
 
 def cmd_connect(args):
     """Test IMAP connectivity and report server capabilities."""
-    conn = connect(args.host, args.port, args.user, args.security)
-    # Get capabilities
-    caps = conn.capabilities
-    cap_list = [c.decode("utf-8") if isinstance(c, bytes) else str(c) for c in caps]
+    with _imap_connection(args) as conn:
+        caps = conn.capabilities
+        cap_list = [c.decode("utf-8") if isinstance(c, bytes) else str(c) for c in caps]
 
-    result = {
-        "status": "connected",
-        "host": args.host,
-        "port": args.port,
-        "user": args.user,
-        "capabilities": cap_list,
-    }
-    conn.logout()
-    print(json.dumps(result, indent=2))
-    return 0
+        result = {
+            "status": "connected",
+            "host": args.host,
+            "port": args.port,
+            "user": args.user,
+            "capabilities": cap_list,
+        }
+        print(json.dumps(result, indent=2))
+        return 0
 
 
 def cmd_fetch_headers(args):
     """Fetch message headers from a folder using BODY.PEEK (no read marking)."""
-    conn = connect(args.host, args.port, args.user, args.security)
     folder = args.folder or "INBOX"
     limit = args.limit or 50
     offset = args.offset or 0
 
-    status, count_data = conn.select(f'"{folder}"', readonly=True)
-    if status != "OK":
-        print(f"ERROR: Cannot select folder '{folder}': {count_data}", file=sys.stderr)
-        conn.logout()
-        return 1
+    with _imap_connection(args) as conn:
+        total = _select_folder_or_fail(conn, folder, readonly=True)
+        if total == 0:
+            print(json.dumps({"folder": folder, "total": 0, "messages": []}))
+            return 0
 
-    total = int(count_data[0] or b"0")
-    if total == 0:
-        print(json.dumps({"folder": folder, "total": 0, "messages": []}))
-        conn.logout()
+        end = max(1, total - offset)
+        start = max(1, end - limit + 1)
+        fetch_range = f"{start}:{end}"
+
+        status, data = conn.fetch(
+            fetch_range,
+            "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS "
+            "(Date From To Subject Message-ID In-Reply-To References)])"
+        )
+        if status != "OK":
+            raise IMAPError(f"FETCH failed: {data}")
+
+        messages = parse_envelope_from_fetch(data)
+        messages.sort(key=lambda m: m["uid"], reverse=True)
+
+        upsert_messages_to_index(f"{args.user}@{args.host}", folder, messages)
+
+        result = {
+            "folder": folder,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "returned": len(messages),
+            "messages": messages,
+        }
+        print(json.dumps(result, indent=2))
         return 0
-
-    # Calculate range (most recent first)
-    end = max(1, total - offset)
-    start = max(1, end - limit + 1)
-
-    # Use UID FETCH with BODY.PEEK to avoid marking as read
-    fetch_range = f"{start}:{end}"
-    status, data = conn.fetch(
-        fetch_range,
-        "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS "
-        "(Date From To Subject Message-ID In-Reply-To References)])"
-    )
-
-    if status != "OK":
-        print(f"ERROR: FETCH failed: {data}", file=sys.stderr)
-        conn.logout()
-        return 1
-
-    messages = _parse_envelope_from_fetch(data)
-    # Sort by UID descending (most recent first)
-    messages.sort(key=lambda m: m["uid"], reverse=True)
-
-    # Update SQLite index
-    account_key = f"{args.user}@{args.host}"
-    db_conn = _init_index_db()
-    for msg in messages:
-        _upsert_message(db_conn, account_key, folder, msg["uid"], msg)
-    db_conn.commit()
-    db_conn.close()
-
-    result = {
-        "folder": folder,
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "returned": len(messages),
-        "messages": messages,
-    }
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
 
 
 def cmd_fetch_body(args):
     """Fetch a single message body by UID using BODY.PEEK."""
-    conn = connect(args.host, args.port, args.user, args.security)
     folder = args.folder or "INBOX"
 
-    status, _ = conn.select(f'"{folder}"', readonly=True)
-    if status != "OK":
-        print(f"ERROR: Cannot select folder '{folder}'", file=sys.stderr)
-        conn.logout()
-        return 1
+    with _imap_connection(args) as conn:
+        _select_folder_or_fail(conn, folder, readonly=True)
 
-    # Fetch full message using BODY.PEEK (doesn't mark as read)
-    status, data = conn.uid("FETCH", str(args.uid), "(BODY.PEEK[])")
-    if status != "OK" or not data or data[0] is None:
-        print(f"ERROR: Message UID {args.uid} not found", file=sys.stderr)
-        conn.logout()
-        return 1
+        # Fetch full message using BODY.PEEK (doesn't mark as read)
+        status, data = conn.uid("FETCH", str(args.uid), "(BODY.PEEK[])")
+        if status != "OK" or not data or data[0] is None:
+            raise IMAPError(f"Message UID {args.uid} not found")
 
-    raw_email = data[0][1] if isinstance(data[0], tuple) else b""
-    msg = email.message_from_bytes(raw_email, policy=email.policy.default)
+        raw_email = data[0][1] if isinstance(data[0], tuple) else b""
+        msg = email.message_from_bytes(raw_email, policy=email.policy.default)
 
-    # Extract text parts
-    text_body = ""
-    html_body = ""
-    attachments = []
+        text_body, html_body, attachments = extract_message_bodies(msg)
 
-    if msg.is_multipart():
-        for part in msg.walk():
-            content_type = part.get_content_type()
-            disposition = str(part.get("Content-Disposition", ""))
-
-            if "attachment" in disposition:
-                attachments.append({
-                    "filename": part.get_filename() or "unnamed",
-                    "content_type": content_type,
-                    "size": len(part.get_payload(decode=True) or b""),
-                })
-            elif content_type == "text/plain" and not text_body:
-                raw_payload = part.get_payload(decode=True)
-                if isinstance(raw_payload, bytes):
-                    charset = part.get_content_charset() or "utf-8"
-                    text_body = raw_payload.decode(charset, errors="replace")
-            elif content_type == "text/html" and not html_body:
-                raw_payload = part.get_payload(decode=True)
-                if isinstance(raw_payload, bytes):
-                    charset = part.get_content_charset() or "utf-8"
-                    html_body = raw_payload.decode(charset, errors="replace")
-    else:
-        content_type = msg.get_content_type()
-        raw_payload = msg.get_payload(decode=True)
-        if isinstance(raw_payload, bytes):
-            charset = msg.get_content_charset() or "utf-8"
-            decoded = raw_payload.decode(charset, errors="replace")
-            if content_type == "text/plain":
-                text_body = decoded
-            elif content_type == "text/html":
-                html_body = decoded
-
-    result = {
-        "uid": args.uid,
-        "folder": folder,
-        "message_id": str(msg.get("Message-ID", "")),
-        "date": str(msg.get("Date", "")),
-        "from": str(msg.get("From", "")),
-        "to": str(msg.get("To", "")),
-        "cc": str(msg.get("Cc", "")),
-        "subject": str(msg.get("Subject", "")),
-        "in_reply_to": str(msg.get("In-Reply-To", "")),
-        "references": str(msg.get("References", "")),
-        "text_body": text_body,
-        "html_body_length": len(html_body),
-        "attachments": attachments,
-    }
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
+        result = {
+            "uid": args.uid,
+            "folder": folder,
+            "message_id": str(msg.get("Message-ID", "")),
+            "date": str(msg.get("Date", "")),
+            "from": str(msg.get("From", "")),
+            "to": str(msg.get("To", "")),
+            "cc": str(msg.get("Cc", "")),
+            "subject": str(msg.get("Subject", "")),
+            "in_reply_to": str(msg.get("In-Reply-To", "")),
+            "references": str(msg.get("References", "")),
+            "text_body": text_body,
+            "html_body_length": len(html_body),
+            "attachments": attachments,
+        }
+        print(json.dumps(result, indent=2))
+        return 0
 
 
 def cmd_search(args):
     """Search messages using IMAP SEARCH criteria."""
-    conn = connect(args.host, args.port, args.user, args.security)
     folder = args.folder or "INBOX"
-
-    status, _ = conn.select(f'"{folder}"', readonly=True)
-    if status != "OK":
-        print(f"ERROR: Cannot select folder '{folder}'", file=sys.stderr)
-        conn.logout()
-        return 1
-
-    # Build IMAP search criteria
     criteria = args.query
     if not criteria:
         print("ERROR: --query is required for search", file=sys.stderr)
-        conn.logout()
         return 1
 
-    status, data = conn.uid("SEARCH", "CHARSET", "UTF-8", criteria)
-    if status != "OK":
-        print(f"ERROR: SEARCH failed: {data}", file=sys.stderr)
-        conn.logout()
-        return 1
+    with _imap_connection(args) as conn:
+        _select_folder_or_fail(conn, folder, readonly=True)
 
-    uid_list = data[0].split() if data[0] else []
-    # Limit results
-    limit = args.limit or 50
-    uid_list = uid_list[-limit:]  # Most recent UIDs
+        status, data = conn.uid("SEARCH", "CHARSET", "UTF-8", criteria)
+        if status != "OK":
+            raise IMAPError(f"SEARCH failed: {data}")
 
-    messages = []
-    if uid_list:
-        uid_str = b",".join(uid_list).decode("utf-8")
-        status, fetch_data = conn.uid(
-            "FETCH", uid_str,
-            "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS "
-            "(Date From To Subject Message-ID)])"
-        )
-        if status == "OK":
-            messages = _parse_envelope_from_fetch(fetch_data)
-            messages.sort(key=lambda m: m["uid"], reverse=True)
+        uid_list = data[0].split() if data[0] else []
+        limit = args.limit or 50
+        uid_list = uid_list[-limit:]  # Most recent UIDs
 
-    result = {
-        "folder": folder,
-        "query": criteria,
-        "total_matches": len(uid_list),
-        "returned": len(messages),
-        "messages": messages,
-    }
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
+        messages = []
+        if uid_list:
+            uid_str = b",".join(uid_list).decode("utf-8")
+            status, fetch_data = conn.uid(
+                "FETCH", uid_str,
+                "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS "
+                "(Date From To Subject Message-ID)])"
+            )
+            if status == "OK":
+                messages = parse_envelope_from_fetch(fetch_data)
+                messages.sort(key=lambda m: m["uid"], reverse=True)
+
+        result = {
+            "folder": folder,
+            "query": criteria,
+            "total_matches": len(uid_list),
+            "returned": len(messages),
+            "messages": messages,
+        }
+        print(json.dumps(result, indent=2))
+        return 0
 
 
 def cmd_list_folders(args):
     """List all IMAP folders with provider-aware name mapping."""
-    conn = connect(args.host, args.port, args.user, args.security)
+    with _imap_connection(args) as conn:
+        status, folder_data = conn.list()
+        if status != "OK":
+            raise IMAPError("LIST failed")
 
-    status, folder_data = conn.list()
-    if status != "OK":
-        print("ERROR: LIST failed", file=sys.stderr)
-        conn.logout()
-        return 1
+        provider_config = _parse_provider_config(args.provider_config)
+        folder_mapping = _get_folder_mapping(provider_config)
+        reverse_mapping = {v: k for k, v in folder_mapping.items()}
 
-    provider_config = _parse_provider_config(args.provider_config)
-    folder_mapping = _get_folder_mapping(provider_config)
-    # Invert mapping for display: imap_name -> logical_name
-    reverse_mapping = {v: k for k, v in folder_mapping.items()}
+        folders = [
+            entry for item in folder_data
+            if (entry := parse_folder_entry(item, reverse_mapping)) is not None
+        ]
 
-    folders = []
-    for item in folder_data:
-        if item is None:
-            continue
-        decoded = item.decode("utf-8", errors="replace") if isinstance(item, bytes) else str(item)
-        # Parse IMAP LIST response: (flags) delimiter name
-        match = re.match(r'\(([^)]*)\)\s+"([^"]+)"\s+"?([^"]*)"?', decoded)
-        if match:
-            flags_str = match.group(1)
-            delimiter = match.group(2)
-            name = match.group(3).strip('"')
-            logical_name = reverse_mapping.get(name, "")
-            folders.append({
-                "name": name,
-                "logical_name": logical_name,
-                "flags": flags_str,
-                "delimiter": delimiter,
-            })
-
-    result = {
-        "total": len(folders),
-        "folder_mapping": folder_mapping,
-        "folders": folders,
-    }
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
+        result = {
+            "total": len(folders),
+            "folder_mapping": folder_mapping,
+            "folders": folders,
+        }
+        print(json.dumps(result, indent=2))
+        return 0
 
 
 def cmd_create_folder(args):
     """Create an IMAP folder (mailbox)."""
-    conn = connect(args.host, args.port, args.user, args.security)
     folder = args.folder
     if not folder:
         print("ERROR: --folder is required", file=sys.stderr)
-        conn.logout()
         return 1
 
-    status, data = conn.create(f'"{folder}"')
-    if status != "OK":
-        print(f"ERROR: CREATE failed: {data}", file=sys.stderr)
-        conn.logout()
-        return 1
+    with _imap_connection(args) as conn:
+        status, data = conn.create(f'"{folder}"')
+        if status != "OK":
+            raise IMAPError(f"CREATE failed: {data}")
 
-    # Subscribe to the new folder
-    conn.subscribe(f'"{folder}"')
+        conn.subscribe(f'"{folder}"')
 
-    result = {"status": "created", "folder": folder}
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
+        result = {"status": "created", "folder": folder}
+        print(json.dumps(result, indent=2))
+        return 0
+
+
+def _copy_and_delete(conn, uid, dest):
+    """Copy a message to dest and mark the original as deleted."""
+    status, data = conn.uid("COPY", uid, f'"{dest}"')
+    if status == "OK":
+        conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+        conn.expunge()
+    return status, data
+
+
+def _imap_move(conn, uid, dest):
+    """Move a message using MOVE extension or COPY+DELETE fallback.
+
+    Returns (status, data) from the final operation.
+    """
+    has_move = b"MOVE" in conn.capabilities or b"move" in conn.capabilities
+    if has_move:
+        try:
+            return conn.uid("MOVE", uid, f'"{dest}"')
+        except imaplib.IMAP4.error:
+            pass  # MOVE not supported despite capability; fall through
+    return _copy_and_delete(conn, uid, dest)
 
 
 def cmd_move_message(args):
     """Move a message to a destination folder by UID."""
-    conn = connect(args.host, args.port, args.user, args.security)
     folder = args.folder or "INBOX"
     dest = args.dest
     uid = str(args.uid)
 
     if not dest:
         print("ERROR: --dest is required", file=sys.stderr)
-        conn.logout()
         return 1
 
-    status, _ = conn.select(f'"{folder}"')
-    if status != "OK":
-        print(f"ERROR: Cannot select folder '{folder}'", file=sys.stderr)
-        conn.logout()
+    with _imap_connection(args) as conn:
+        _select_folder_or_fail(conn, folder, readonly=False)
+
+        status, _data = _imap_move(conn, uid, dest)
+        if status != "OK":
+            raise IMAPError(f"MOVE failed for UID {args.uid}")
+
+        result = {
+            "status": "moved",
+            "uid": args.uid,
+            "from_folder": folder,
+            "to_folder": dest,
+        }
+        print(json.dumps(result, indent=2))
+        return 0
+
+
+def _cmd_modify_flag(args, add=True):
+    """Set or clear a flag (keyword) on a message by UID.
+
+    Args:
+        args: Parsed CLI arguments (uid, flag, folder, connection params).
+        add: True to add the flag (+FLAGS), False to remove (-FLAGS).
+    """
+    folder = args.folder or "INBOX"
+    uid = str(args.uid)
+    flag = args.flag
+
+    if not flag:
+        print("ERROR: --flag is required", file=sys.stderr)
         return 1
 
-    # Try MOVE extension first (RFC 6851), fall back to COPY+DELETE
-    try:
-        # Check if server supports MOVE
-        if b"MOVE" in conn.capabilities or b"move" in conn.capabilities:
-            status, data = conn.uid("MOVE", uid, f'"{dest}"')
-        else:
-            # Copy then mark deleted
-            status, data = conn.uid("COPY", uid, f'"{dest}"')
-            if status == "OK":
-                conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
-                conn.expunge()
-    except imaplib.IMAP4.error as exc:
-        # Fallback: COPY + DELETE
-        status, data = conn.uid("COPY", uid, f'"{dest}"')
-        if status == "OK":
-            conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
-            conn.expunge()
-        else:
-            print(f"ERROR: MOVE/COPY failed: {exc}", file=sys.stderr)
-            conn.logout()
-            return 1
+    imap_flag = FLAG_TAXONOMY.get(flag, flag)
+    operation = "+FLAGS" if add else "-FLAGS"
 
-    result = {
-        "status": "moved",
-        "uid": args.uid,
-        "from_folder": folder,
-        "to_folder": dest,
-    }
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
+    with _imap_connection(args) as conn:
+        _select_folder_or_fail(conn, folder, readonly=False)
+
+        status, data = conn.uid("STORE", uid, operation, f"({imap_flag})")
+        if status != "OK":
+            raise IMAPError(f"STORE {operation} failed: {data}")
+
+        result = {
+            "status": "flag_set" if add else "flag_cleared",
+            "uid": args.uid,
+            "folder": folder,
+            "flag": imap_flag,
+            "taxonomy_name": flag if flag in FLAG_TAXONOMY else "",
+        }
+        print(json.dumps(result, indent=2))
+        return 0
 
 
 def cmd_set_flag(args):
     """Set a flag (keyword) on a message by UID."""
-    conn = connect(args.host, args.port, args.user, args.security)
-    folder = args.folder or "INBOX"
-    uid = str(args.uid)
-    flag = args.flag
-
-    if not flag:
-        print("ERROR: --flag is required", file=sys.stderr)
-        conn.logout()
-        return 1
-
-    # Map taxonomy name to IMAP keyword if needed
-    imap_flag = FLAG_TAXONOMY.get(flag, flag)
-
-    status, _ = conn.select(f'"{folder}"')
-    if status != "OK":
-        print(f"ERROR: Cannot select folder '{folder}'", file=sys.stderr)
-        conn.logout()
-        return 1
-
-    status, data = conn.uid("STORE", uid, "+FLAGS", f"({imap_flag})")
-    if status != "OK":
-        print(f"ERROR: STORE +FLAGS failed: {data}", file=sys.stderr)
-        conn.logout()
-        return 1
-
-    result = {
-        "status": "flag_set",
-        "uid": args.uid,
-        "folder": folder,
-        "flag": imap_flag,
-        "taxonomy_name": flag if flag in FLAG_TAXONOMY else "",
-    }
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
+    return _cmd_modify_flag(args, add=True)
 
 
 def cmd_clear_flag(args):
     """Clear a flag (keyword) from a message by UID."""
-    conn = connect(args.host, args.port, args.user, args.security)
-    folder = args.folder or "INBOX"
-    uid = str(args.uid)
-    flag = args.flag
-
-    if not flag:
-        print("ERROR: --flag is required", file=sys.stderr)
-        conn.logout()
-        return 1
-
-    imap_flag = FLAG_TAXONOMY.get(flag, flag)
-
-    status, _ = conn.select(f'"{folder}"')
-    if status != "OK":
-        print(f"ERROR: Cannot select folder '{folder}'", file=sys.stderr)
-        conn.logout()
-        return 1
-
-    status, data = conn.uid("STORE", uid, "-FLAGS", f"({imap_flag})")
-    if status != "OK":
-        print(f"ERROR: STORE -FLAGS failed: {data}", file=sys.stderr)
-        conn.logout()
-        return 1
-
-    result = {
-        "status": "flag_cleared",
-        "uid": args.uid,
-        "folder": folder,
-        "flag": imap_flag,
-    }
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
+    return _cmd_modify_flag(args, add=False)
 
 
 def cmd_index_sync(args):
     """Sync folder headers to the local SQLite metadata index."""
-    conn = connect(args.host, args.port, args.user, args.security)
     folder = args.folder or "INBOX"
     account_key = f"{args.user}@{args.host}"
 
-    status, count_data = conn.select(f'"{folder}"', readonly=True)
-    if status != "OK":
-        print(f"ERROR: Cannot select folder '{folder}'", file=sys.stderr)
-        conn.logout()
-        return 1
+    with _imap_connection(args) as conn:
+        total = _select_folder_or_fail(conn, folder, readonly=True)
+        if total == 0:
+            print(json.dumps({"folder": folder, "synced": 0, "total": 0}))
+            return 0
 
-    total = int(count_data[0] or b"0")
-    if total == 0:
-        print(json.dumps({"folder": folder, "synced": 0, "total": 0}))
-        conn.logout()
+        db_conn = init_index_db()
+        fetch_range = "1:*" if args.full else incremental_fetch_range(db_conn, account_key, folder)
+
+        status, data = conn.uid(
+            "FETCH", fetch_range,
+            "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS "
+            "(Date From To Subject Message-ID)])"
+        )
+
+        synced = sync_messages_to_db(
+            db_conn, account_key, folder, data, parse_envelope_from_fetch
+        ) if (status == "OK" and data) else 0
+        db_conn.close()
+
+        result = {
+            "folder": folder,
+            "total": total,
+            "synced": synced,
+            "mode": "full" if args.full else "incremental",
+        }
+        print(json.dumps(result, indent=2))
         return 0
-
-    db_conn = _init_index_db()
-
-    if args.full:
-        # Full sync: fetch all headers
-        fetch_range = "1:*"
-    else:
-        # Incremental: find highest UID in index, fetch newer
-        row = db_conn.execute(
-            "SELECT MAX(uid) FROM messages WHERE account = ? AND folder = ?",
-            (account_key, folder)
-        ).fetchone()
-        last_uid = row[0] if row and row[0] else 0
-        if last_uid > 0:
-            fetch_range = f"{last_uid + 1}:*"
-        else:
-            fetch_range = "1:*"
-
-    status, data = conn.uid(
-        "FETCH", fetch_range,
-        "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS "
-        "(Date From To Subject Message-ID)])"
-    )
-
-    synced = 0
-    if status == "OK" and data:
-        messages = _parse_envelope_from_fetch(data)
-        for msg in messages:
-            _upsert_message(db_conn, account_key, folder, msg["uid"], msg)
-            synced += 1
-        db_conn.commit()
-
-    db_conn.close()
-
-    result = {
-        "folder": folder,
-        "total": total,
-        "synced": synced,
-        "mode": "full" if args.full else "incremental",
-    }
-    print(json.dumps(result, indent=2))
-    conn.logout()
-    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -851,11 +572,15 @@ def main():
     }
 
     handler = commands.get(args.command)
-    if handler:
-        return handler(args)
+    if not handler:
+        parser.print_help()
+        return 1
 
-    parser.print_help()
-    return 1
+    try:
+        return handler(args)
+    except IMAPError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

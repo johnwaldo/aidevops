@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # Humanise Update Helper
 # Checks for updates to the upstream humanizer skill and reports differences
 #
@@ -26,7 +28,7 @@ readonly CACHE_FILE="${CACHE_DIR}/humanizer-upstream.md"
 readonly CACHE_VERSION_FILE="${CACHE_DIR}/humanizer-version.txt"
 readonly CACHE_TTL=86400 # 24 hours in seconds
 
-readonly BOLD='\033[1m'
+[[ -z "${BOLD+x}" ]] && BOLD='\033[1m'
 
 # Get local version from subagent frontmatter
 get_local_version() {
@@ -61,7 +63,7 @@ fetch_upstream() {
 	# Check cache freshness
 	if [[ -f "$CACHE_FILE" && -f "$CACHE_VERSION_FILE" ]]; then
 		local cache_age
-		cache_age=$(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || stat -f %m "$CACHE_FILE" 2>/dev/null || echo 0)))
+		cache_age=$(($(date +%s) - $(_file_mtime_epoch "$CACHE_FILE")))
 		if [[ $cache_age -lt $CACHE_TTL ]]; then
 			echo "Using cached upstream ($((cache_age / 60)) minutes old)"
 			return 0

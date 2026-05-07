@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # screen-time-helper.sh — Query screen time and maintain persistent history
 #
 # Cross-platform: macOS and Linux
 #
 # macOS data source: Knowledge DB (~/Library/Application Support/Knowledge/knowledgeC.db)
-#   - /display/isBacklit events (screen on=1, off=0)
+#   - /display/isBacklit events (screen on=1, off=0) — primary
+#   - /app/usage events (per-app active time) — fallback for macOS 26.3+ where
+#     /display/isBacklit was deprecated (March 2026)
 #   - Retains ~28 days of data
 #
 # Linux data source: systemd-logind session events via journalctl
@@ -24,10 +28,10 @@ set -euo pipefail
 
 HISTORY_DIR="${HOME}/.aidevops/.agent-workspace/observability"
 HISTORY_FILE="${HISTORY_DIR}/screen-time.jsonl"
-OS_TYPE="$(uname -s)"
+OS_TYPE="${AIDEVOPS_SCREEN_TIME_OS_TYPE:-$(uname -s)}"
 
 # macOS-specific paths
-KNOWLEDGE_DB="${HOME}/Library/Application Support/Knowledge/knowledgeC.db"
+KNOWLEDGE_DB="${AIDEVOPS_KNOWLEDGE_DB:-${HOME}/Library/Application Support/Knowledge/knowledgeC.db}"
 
 # ============================================================
 # macOS: Knowledge DB queries
@@ -48,29 +52,136 @@ _macos_query_screen_hours() {
 		return 0
 	fi
 
+	# Check if /display/isBacklit is still active (deprecated in macOS 26.3+, March 2026).
+	# If the most recent event is older than 3 days, treat the stream as stale and use
+	# /app/usage exclusively to avoid mixing stale isBacklit with missing recent data.
+	local is_backlit_stale=false
+	local latest_backlit_age
+	latest_backlit_age=$(sqlite3 "$KNOWLEDGE_DB" "
+		SELECT CAST((strftime('%s', 'now') - 978307200 - MAX(ZCREATIONDATE)) / 86400.0 AS INTEGER)
+		FROM ZOBJECT WHERE ZSTREAMNAME = '/display/isBacklit';" 2>/dev/null || echo "999")
+	if [[ "$latest_backlit_age" -gt 3 ]]; then
+		is_backlit_stale=true
+	fi
+
 	local hours
-	hours=$(sqlite3 "$KNOWLEDGE_DB" "
-	WITH events AS (
-		SELECT
-			ZCREATIONDATE + 978307200 as ts,
-			ZVALUEINTEGER as state
-		FROM ZOBJECT
-		WHERE ZSTREAMNAME = '/display/isBacklit'
-			AND ZCREATIONDATE > (strftime('%s', 'now') - 978307200 - 86400*${days})
-	),
-	pairs AS (
-		SELECT
-			e1.ts as on_time,
-			MIN(e2.ts) as off_time
-		FROM events e1
-		JOIN events e2 ON e2.ts > e1.ts AND e2.state = 0
-		WHERE e1.state = 1
-		GROUP BY e1.ts
-	)
-	SELECT COALESCE(ROUND(SUM(off_time - on_time) / 3600.0, 1), 0) FROM pairs;" 2>/dev/null || echo "0")
+	if [[ "$is_backlit_stale" == "true" ]]; then
+		# Stream is stale — use /app/usage exclusively
+		hours=$(_macos_query_screen_hours_from_app_usage "$days")
+	else
+		# Primary: /display/isBacklit (accurate on/off pair matching)
+		hours=$(sqlite3 "$KNOWLEDGE_DB" "
+		WITH events AS (
+			SELECT
+				ZCREATIONDATE + 978307200 as ts,
+				ZVALUEINTEGER as state
+			FROM ZOBJECT
+			WHERE ZSTREAMNAME = '/display/isBacklit'
+				AND ZCREATIONDATE > (strftime('%s', 'now') - 978307200 - 86400*${days})
+		),
+		pairs AS (
+			SELECT
+				e1.ts as on_time,
+				MIN(e2.ts) as off_time
+			FROM events e1
+			JOIN events e2 ON e2.ts > e1.ts AND e2.state = 0
+			WHERE e1.state = 1
+			GROUP BY e1.ts
+		)
+		SELECT COALESCE(ROUND(SUM(off_time - on_time) / 3600.0, 1), 0) FROM pairs;" 2>/dev/null || echo "0")
+
+		# Fallback: /app/usage when isBacklit returns 0 or has sparse coverage.
+		# macOS can keep emitting occasional /display/isBacklit events after the stream
+		# stops covering every active day. Treat sparse multi-day windows as incomplete
+		# so a single recent backlit day does not undercount 7d/28d profile totals.
+		if [[ "$hours" == "0" || "$hours" == "0.0" ]] || _macos_should_use_app_usage_for_window "$days" "$hours"; then
+			hours=$(_macos_query_screen_hours_from_app_usage "$days")
+		fi
+	fi
 
 	echo "$hours"
 	return 0
+}
+
+#######################################
+# [macOS] Count distinct local dates with events in a Knowledge DB stream window
+# Arguments:
+#   $1 - stream name
+#   $2 - timestamp column name
+#   $3 - number of days to look back
+# Returns: 0
+# Outputs: integer count
+#######################################
+_macos_count_stream_days() {
+	local stream_name="$1"
+	local timestamp_column="$2"
+	local days="$3"
+
+	if [[ ! -f "$KNOWLEDGE_DB" ]]; then
+		echo "0"
+		return 0
+	fi
+
+	case "$timestamp_column" in
+	ZCREATIONDATE | ZSTARTDATE) ;;
+	*)
+		echo "0"
+		return 0
+		;;
+	esac
+
+	local active_days
+	local stream_filter=""
+	if [[ "$stream_name" == "/display/isBacklit" ]]; then
+		stream_filter="AND ZVALUEINTEGER = 1"
+	fi
+	active_days=$(sqlite3 "$KNOWLEDGE_DB" "
+		SELECT COUNT(DISTINCT date(${timestamp_column} + 978307200, 'unixepoch', 'localtime'))
+		FROM ZOBJECT
+		WHERE ZSTREAMNAME = '${stream_name}'
+			AND ${timestamp_column} > (strftime('%s', 'now') - 978307200 - 86400*${days})
+			${stream_filter};" 2>/dev/null || echo "0")
+
+	[[ "$active_days" =~ ^[0-9]+$ ]] || active_days="0"
+	echo "$active_days"
+	return 0
+}
+
+#######################################
+# [macOS] Decide whether /display/isBacklit coverage is too sparse for a window
+# Arguments:
+#   $1 - number of days to look back
+#   $2 - hours computed from /display/isBacklit
+# Returns: 0 when /app/usage should be used, 1 otherwise
+#######################################
+_macos_should_use_app_usage_for_window() {
+	local days="$1"
+	local backlit_hours="$2"
+
+	if [[ "$days" -le 1 ]]; then
+		return 1
+	fi
+
+	local backlit_days
+	local app_days
+	backlit_days=$(_macos_count_stream_days "/display/isBacklit" "ZCREATIONDATE" "$days")
+	app_days=$(_macos_count_stream_days "/app/usage" "ZSTARTDATE" "$days")
+
+	# A multi-day app/usage window with only one backlit event day is the regression
+	# that makes 24h and 7d totals collapse to the same value.
+	if [[ "$backlit_days" -le 1 && "$app_days" -ge 2 ]]; then
+		return 0
+	fi
+
+	# More generally, when app usage covers at least two extra active days and is
+	# materially higher than backlit, prefer the richer source for the whole window.
+	local app_hours
+	app_hours=$(_macos_query_screen_hours_from_app_usage "$days")
+	if awk "BEGIN {exit !(${app_days} >= ${backlit_days} + 1 && ${app_hours} > ${backlit_hours} * 1.25)}"; then
+		return 0
+	fi
+
+	return 1
 }
 
 #######################################
@@ -96,27 +207,113 @@ _macos_query_screen_hours_for_date() {
 	local cd_start=$((start_epoch - 978307200))
 	local cd_end=$((end_epoch - 978307200))
 
+	# Check if isBacklit is stale (deprecated in macOS 26.3+)
+	local is_backlit_stale=false
+	local latest_backlit_age
+	latest_backlit_age=$(sqlite3 "$KNOWLEDGE_DB" "
+		SELECT CAST((strftime('%s', 'now') - 978307200 - MAX(ZCREATIONDATE)) / 86400.0 AS INTEGER)
+		FROM ZOBJECT WHERE ZSTREAMNAME = '/display/isBacklit';" 2>/dev/null || echo "999")
+	if [[ "$latest_backlit_age" -gt 3 ]]; then
+		is_backlit_stale=true
+	fi
+
+	local hours
+	if [[ "$is_backlit_stale" == "true" ]]; then
+		hours=$(_macos_query_screen_hours_for_date_from_app_usage "$target_date")
+	else
+		# Primary: /display/isBacklit (accurate on/off pair matching)
+		hours=$(sqlite3 "$KNOWLEDGE_DB" "
+		WITH events AS (
+			SELECT
+				ZCREATIONDATE + 978307200 as ts,
+				ZVALUEINTEGER as state
+			FROM ZOBJECT
+			WHERE ZSTREAMNAME = '/display/isBacklit'
+				AND ZCREATIONDATE >= ${cd_start}
+				AND ZCREATIONDATE < ${cd_end}
+		),
+		pairs AS (
+			SELECT
+				e1.ts as on_time,
+				MIN(e2.ts) as off_time
+			FROM events e1
+			JOIN events e2 ON e2.ts > e1.ts AND e2.state = 0
+			WHERE e1.state = 1
+			GROUP BY e1.ts
+		)
+		SELECT COALESCE(ROUND(SUM(off_time - on_time) / 3600.0, 1), 0) FROM pairs;" 2>/dev/null || echo "0")
+
+		# Fallback for individual dates where isBacklit has no data
+		if [[ "$hours" == "0" || "$hours" == "0.0" ]]; then
+			hours=$(_macos_query_screen_hours_for_date_from_app_usage "$target_date")
+		fi
+	fi
+
+	echo "$hours"
+	return 0
+}
+
+# ============================================================
+# macOS: /app/usage fallback (for macOS 26.3+ where isBacklit deprecated)
+# ============================================================
+
+#######################################
+# [macOS] Compute screen-on hours from /app/usage for a given number of past days
+# Uses per-app active time as a proxy for screen time. Slightly overcounts due to
+# concurrent app usage, but provides reasonable estimates (~10-15% above actual).
+# Arguments:
+#   $1 - number of days to look back
+# Returns: 0
+# Outputs: hours as decimal to stdout
+#######################################
+_macos_query_screen_hours_from_app_usage() {
+	local days="$1"
+
+	if [[ ! -f "$KNOWLEDGE_DB" ]]; then
+		echo "0"
+		return 0
+	fi
+
 	local hours
 	hours=$(sqlite3 "$KNOWLEDGE_DB" "
-	WITH events AS (
-		SELECT
-			ZCREATIONDATE + 978307200 as ts,
-			ZVALUEINTEGER as state
+		SELECT COALESCE(ROUND(SUM(ZOBJECT.ZENDDATE - ZOBJECT.ZSTARTDATE) / 3600.0, 1), 0)
 		FROM ZOBJECT
-		WHERE ZSTREAMNAME = '/display/isBacklit'
-			AND ZCREATIONDATE >= ${cd_start}
-			AND ZCREATIONDATE < ${cd_end}
-	),
-	pairs AS (
-		SELECT
-			e1.ts as on_time,
-			MIN(e2.ts) as off_time
-		FROM events e1
-		JOIN events e2 ON e2.ts > e1.ts AND e2.state = 0
-		WHERE e1.state = 1
-		GROUP BY e1.ts
-	)
-	SELECT COALESCE(ROUND(SUM(off_time - on_time) / 3600.0, 1), 0) FROM pairs;" 2>/dev/null || echo "0")
+		WHERE ZSTREAMNAME = '/app/usage'
+			AND ZSTARTDATE > (strftime('%s', 'now') - 978307200 - 86400*${days});" 2>/dev/null || echo "0")
+
+	echo "$hours"
+	return 0
+}
+
+#######################################
+# [macOS] Compute screen-on hours from /app/usage for a specific date (YYYY-MM-DD)
+# Arguments:
+#   $1 - date string (YYYY-MM-DD)
+# Returns: 0
+# Outputs: hours as decimal to stdout
+#######################################
+_macos_query_screen_hours_for_date_from_app_usage() {
+	local target_date="$1"
+
+	if [[ ! -f "$KNOWLEDGE_DB" ]]; then
+		echo "0"
+		return 0
+	fi
+
+	local start_epoch
+	local end_epoch
+	start_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S" "${target_date} 00:00:00" "+%s" 2>/dev/null || date -d "${target_date} 00:00:00" "+%s" 2>/dev/null)
+	end_epoch=$((start_epoch + 86400))
+	local cd_start=$((start_epoch - 978307200))
+	local cd_end=$((end_epoch - 978307200))
+
+	local hours
+	hours=$(sqlite3 "$KNOWLEDGE_DB" "
+		SELECT COALESCE(ROUND(SUM(ZOBJECT.ZENDDATE - ZOBJECT.ZSTARTDATE) / 3600.0, 1), 0)
+		FROM ZOBJECT
+		WHERE ZSTREAMNAME = '/app/usage'
+			AND ZSTARTDATE >= ${cd_start}
+			AND ZSTARTDATE < ${cd_end};" 2>/dev/null || echo "0")
 
 	echo "$hours"
 	return 0
@@ -124,6 +321,7 @@ _macos_query_screen_hours_for_date() {
 
 #######################################
 # [macOS] Get earliest date available in Knowledge DB
+# Checks /display/isBacklit first, then /app/usage as fallback
 # Returns: 0
 # Outputs: YYYY-MM-DD or empty string
 #######################################
@@ -133,9 +331,30 @@ _macos_earliest_date() {
 		return 0
 	fi
 
-	sqlite3 "$KNOWLEDGE_DB" "
+	local earliest
+	earliest=$(sqlite3 "$KNOWLEDGE_DB" "
 		SELECT date(MIN(ZCREATIONDATE + 978307200), 'unixepoch', 'localtime')
-		FROM ZOBJECT WHERE ZSTREAMNAME = '/display/isBacklit';" 2>/dev/null || echo ""
+		FROM ZOBJECT WHERE ZSTREAMNAME = '/display/isBacklit';" 2>/dev/null || echo "")
+
+	# Fallback: check /app/usage if isBacklit has no data or if app/usage has older data
+	local app_earliest
+	app_earliest=$(sqlite3 "$KNOWLEDGE_DB" "
+		SELECT date(MIN(ZSTARTDATE + 978307200), 'unixepoch', 'localtime')
+		FROM ZOBJECT WHERE ZSTREAMNAME = '/app/usage';" 2>/dev/null || echo "")
+
+	if [[ -z "$earliest" || ("$earliest" == "NULL" && -n "$app_earliest" && "$app_earliest" != "NULL") ]]; then
+		earliest="$app_earliest"
+	elif [[ -n "$app_earliest" && "$app_earliest" != "NULL" && "$app_earliest" < "$earliest" ]]; then
+		earliest="$app_earliest"
+	fi
+
+	# Handle NULL results from sqlite
+	if [[ "$earliest" == "NULL" ]]; then
+		echo ""
+		return 0
+	fi
+
+	echo "$earliest"
 	return 0
 }
 
@@ -223,23 +442,40 @@ _linux_logind_hours() {
 	current_user=$(whoami)
 
 	# Extract timestamped session events for the current user
+	# Track sessions by ID to avoid matching username in hostname (GH#17551)
 	local events_file
 	events_file=$(mktemp)
+	local tracked_sessions_file
+	tracked_sessions_file=$(mktemp)
 
 	journalctl --since "$since_date" -u systemd-logind.service --no-pager -o short-iso 2>/dev/null |
 		grep -iE "(New session|Removed session|Session .* logged out|Lid closed|Lid opened)" |
-		grep -i "$current_user" |
 		while IFS= read -r line; do
 			local ts
-			local event_type
 			ts=$(echo "$line" | awk '{print $1}')
-			if echo "$line" | grep -qi "New session\|Lid opened"; then
-				event_type="ON"
-			else
-				event_type="OFF"
+			local sid=""
+
+			# Lid events apply globally — no session ID filtering needed
+			if echo "$line" | grep -qi "Lid opened"; then
+				echo "${ts} ON"
+			elif echo "$line" | grep -qi "Lid closed"; then
+				echo "${ts} OFF"
+			# Match "New session <ID> of user <current_user>" exactly
+			elif echo "$line" | grep -qiE "New session [a-z0-9]+ of user ${current_user}([^a-zA-Z0-9]|$)"; then
+				sid=$(echo "$line" | sed -nE 's/.*[Nn]ew session ([a-zA-Z0-9]+) of user .*/\1/p')
+				[[ -n "$sid" ]] && echo "$sid" >>"$tracked_sessions_file" && echo "${ts} ON"
+			# Match "Removed session <ID>" only if ID was tracked
+			elif echo "$line" | grep -qiE "Removed session [a-z0-9]+"; then
+				sid=$(echo "$line" | sed -nE 's/.*[Rr]emoved session ([a-zA-Z0-9]+).*/\1/p')
+				[[ -n "$sid" ]] && grep -qxF "$sid" "$tracked_sessions_file" 2>/dev/null && echo "${ts} OFF"
+			# Match "Session <ID> logged out" only if ID was tracked
+			elif echo "$line" | grep -qiE "Session [a-z0-9]+ logged out"; then
+				sid=$(echo "$line" | sed -nE 's/.*[Ss]ession ([a-zA-Z0-9]+) logged out.*/\1/p')
+				[[ -n "$sid" ]] && grep -qxF "$sid" "$tracked_sessions_file" 2>/dev/null && echo "${ts} OFF"
 			fi
-			echo "${ts} ${event_type}"
 		done >"$events_file" 2>/dev/null
+
+	rm -f "$tracked_sessions_file"
 
 	local total_seconds=0
 
@@ -317,7 +553,7 @@ _linux_last_hours() {
 	# Count "still logged in" sessions
 	local still_logged
 	still_logged=$(last -s "-${days}days" "$current_user" 2>/dev/null |
-		grep -c "still logged in" || echo "0")
+		grep -c "still logged in" 2>/dev/null || true)
 	if [[ "$still_logged" -gt 0 ]]; then
 		# Estimate current session duration from loginctl
 		local current_session_secs=0
@@ -770,7 +1006,7 @@ help | *)
 	echo ""
 	echo "Platform: ${OS_TYPE}"
 	case "$OS_TYPE" in
-	Darwin) echo "  Source: macOS Knowledge DB (display backlit events)" ;;
+	Darwin) echo "  Source: macOS Knowledge DB (display backlit events, app/usage fallback)" ;;
 	Linux) echo "  Source: systemd-logind (session events) + wtmp (login sessions)" ;;
 	*) echo "  Source: unsupported (will return 0 for all queries)" ;;
 	esac

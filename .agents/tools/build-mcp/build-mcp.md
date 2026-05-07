@@ -4,6 +4,9 @@ description: MCP server development - building Model Context Protocol servers an
 mode: subagent
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Build-MCP - MCP Server Development Agent
 
 <!-- AI-CONTEXT-START -->
@@ -44,7 +47,7 @@ opencode run "Test [mcp] tools" --agent Build+
 
 See `tools/opencode/opencode.md` for CLI testing patterns.
 
-**MCPs to Enable**: context7, augment-context-engine, repomix
+**MCPs to Enable**: context7, repomix
 
 <!-- AI-CONTEXT-END -->
 

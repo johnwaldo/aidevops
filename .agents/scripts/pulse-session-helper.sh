@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # pulse-session-helper.sh - Pulse consent and session control
 #
 # Controls the supervisor pulse via a layered consent model:
@@ -18,7 +20,12 @@
 
 set -euo pipefail
 
-export PATH="/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:${PATH}"
+_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/bin:/usr/bin"
+if [[ "$(uname -s 2>/dev/null || true)" != "Darwin" && -d "/home/linuxbrew/.linuxbrew/bin" ]]; then
+	_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/bin:/usr/bin"
+fi
+export PATH="${_aidevops_path_prefix}:${PATH}"
+unset _aidevops_path_prefix
 
 # Source config-helper for _jsonc_get (shared JSONC config reader)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,7 +91,7 @@ is_session_active() {
 #######################################
 count_workers() {
 	local count
-	count=$(ps axo command | grep '[/]full-loop' | grep -c '\.opencode') || count=0
+	count=$(ps axwwo command | grep '[/]full-loop' | grep -c '\.opencode') || count=0
 	echo "$count"
 	return 0
 }
@@ -149,14 +156,22 @@ get_pulse_repo_count() {
 
 #######################################
 # Get OS-appropriate scheduler name
-# Returns: "launchd" on macOS, "cron" on Linux
+# Returns: "launchd" on macOS, "systemd" or "cron" on Linux
 #######################################
 get_scheduler_name() {
 	local os_type
 	os_type=$(uname -s)
 	case "$os_type" in
 	Darwin) echo "launchd" ;;
-	*) echo "cron" ;;
+	*)
+		# Detect systemd user services (GH#17369)
+		if command -v systemctl >/dev/null 2>&1 &&
+			systemctl --user status >/dev/null 2>&1; then
+			echo "systemd"
+		else
+			echo "cron"
+		fi
+		;;
 	esac
 	return 0
 }
@@ -182,7 +197,12 @@ is_scheduler_installed() {
 		return 1
 		;;
 	*)
-		# Check for cron entry
+		# Check for systemd user timer first (GH#17369)
+		if command -v systemctl >/dev/null 2>&1 &&
+			systemctl --user is-enabled aidevops-supervisor-pulse.timer >/dev/null 2>&1; then
+			return 0
+		fi
+		# Fall back to cron entry check
 		if crontab -l 2>/dev/null | grep -qF "aidevops-supervisor-pulse"; then
 			return 0
 		fi
@@ -196,16 +216,12 @@ is_scheduler_installed() {
 # Returns: the appropriate install command string
 #######################################
 get_scheduler_install_cmd() {
-	local os_type
-	os_type=$(uname -s)
-	case "$os_type" in
-	Darwin)
-		echo "supervisor-helper.sh cron install"
-		;;
-	*)
-		echo "supervisor-helper.sh cron install"
-		;;
-	esac
+	local setup_script="${SCRIPT_DIR}/../../setup.sh"
+	if [[ -f "$setup_script" ]]; then
+		echo "$setup_script"
+	else
+		echo "aidevops update"
+	fi
 	return 0
 }
 
@@ -380,7 +396,7 @@ _stop_force_kill_workers() {
 			kill "$pid" 2>/dev/null || true
 			killed=$((killed + 1))
 		fi
-	done < <(ps axo pid,command | grep '[/]full-loop' | grep '\.opencode')
+	done < <(ps axwwo pid,command | grep '[/]full-loop' | grep '\.opencode')
 
 	if [[ "$killed" -gt 0 ]]; then
 		print_info "Sent SIGTERM to ${killed} worker(s)"
@@ -391,7 +407,7 @@ _stop_force_kill_workers() {
 		if [[ "$remaining" -gt 0 ]]; then
 			print_warning "${remaining} worker(s) still running after SIGTERM"
 			echo "  They will finish their current operation and exit."
-			echo "  Force kill with: kill -9 \$(ps axo pid,command | grep '[/]full-loop' | grep '\\.opencode' | awk '{print \$1}')"
+			echo "  Force kill with: kill -9 \$(ps axwwo pid,command | grep '[/]full-loop' | grep '\\.opencode' | awk '{print \$1}')"
 		else
 			print_success "All workers stopped"
 		fi
@@ -585,7 +601,14 @@ _status_print_process() {
 	else
 		local idle_scheduler_name
 		idle_scheduler_name=$(get_scheduler_name)
-		echo -e "  Process:     ${BLUE}idle${NC} (waiting for next ${idle_scheduler_name} cycle)"
+		if is_scheduler_installed; then
+			echo -e "  Process:     ${BLUE}idle${NC} (waiting for next ${idle_scheduler_name} cycle)"
+		else
+			echo -e "  Process:     ${RED}idle${NC} (scheduler: NOT INSTALLED)"
+			local install_cmd
+			install_cmd=$(get_scheduler_install_cmd)
+			echo -e "               Install with: ${install_cmd}"
+		fi
 	fi
 	return 0
 }
@@ -631,7 +654,7 @@ _status_print_worker_details() {
 		echo -e "${BOLD}Active Workers${NC}"
 		echo "──────────────"
 		echo ""
-		ps axo pid,etime,command | grep '[/]full-loop' | grep '\.opencode' | while IFS= read -r line; do
+		ps axwwo pid,etime,command | grep '[/]full-loop' | grep '\.opencode' | while IFS= read -r line; do
 			local w_pid w_etime w_cmd
 			read -r w_pid w_etime w_cmd <<<"$line"
 

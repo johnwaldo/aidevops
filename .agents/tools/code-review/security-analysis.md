@@ -15,6 +15,9 @@ mcp:
   - gemini-cli-security
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Security Analysis - AI-Powered Vulnerability Detection
 
 <!-- AI-CONTEXT-START -->
@@ -22,41 +25,17 @@ mcp:
 ## Quick Reference
 
 - **Helper**: `.agents/scripts/security-helper.sh`
-- **Commands**: `analyze [scope]` | `scan-deps` | `history [commits]` | `skill-scan` | `vt-scan` | `ferret` | `report`
-- **Scopes**: `diff` (default), `staged`, `branch`, `full`
+- **Commands**: `analyze [diff|staged|branch|full]` | `scan-deps [path]` | `history [commits]` | `skill-scan` | `vt-scan [status|file|url|domain|skill] [target]` | `ferret` | `report [--format=sarif]`
+- **Workflow**: pre-commit (`analyze staged`) → PR review (`analyze branch`) → weekly (`analyze full`) → post-dep-change (`scan-deps`)
 - **Output**: `.security-analysis/` — `SECURITY_REPORT.md`, `security-report.json`, `security-report.sarif`
 - **Severity**: critical > high > medium > low > info
 - **Benchmarks**: 90% precision, 93% recall (OpenSSF CVE Benchmark)
 - **Integrations**: OSV-Scanner (deps), Secretlint (secrets), Ferret (AI configs), VirusTotal (file/URL/domain), Shannon (pentesting), Snyk/SonarCloud/CodeQL (optional)
 - **MCP**: `gemini-cli-security` — `find_line_numbers`, `get_audit_scope`, `run_poc`
 
-**Vulnerability Categories**:
-
-| Category | Examples |
-|----------|----------|
-| Secrets | Hardcoded API keys, passwords, private keys, connection strings |
-| Injection | XSS, SQLi, command injection, SSRF, SSTI |
-| Crypto | Weak algorithms (DES, RC4, ECB), insufficient key length |
-| Auth | Bypass, weak session tokens, insecure password reset |
-| Data | PII violations, insecure deserialization, sensitive logging |
-| LLM Safety | Prompt injection, improper output handling, insecure tool use |
-| AI Config | Jailbreaks, backdoors, exfiltration in AI CLI configs (via Ferret) |
+**Categories**: Secrets (keys, passwords, connection strings) · Injection (XSS, SQLi, SSRF, SSTI, command) · Crypto (weak algorithms, short keys) · Auth (bypass, weak sessions) · Data (PII, insecure deserialization, sensitive logging) · LLM Safety (prompt injection, insecure tool use) · AI Config (jailbreaks, backdoors via Ferret)
 
 <!-- AI-CONTEXT-END -->
-
-## Commands
-
-```bash
-./.agents/scripts/security-helper.sh analyze [diff|staged|branch|full]
-./.agents/scripts/security-helper.sh history 50          # or abc123..def456, --since=, --author=
-./.agents/scripts/security-helper.sh scan-deps [path]
-./.agents/scripts/security-helper.sh skill-scan          # Cisco + VirusTotal advisory
-./.agents/scripts/security-helper.sh vt-scan [status|file|url|domain|skill] [target]
-./.agents/scripts/security-helper.sh ferret              # AI CLI config scan
-./.agents/scripts/security-helper.sh report [--format=sarif]
-```
-
-**Workflow**: Pre-commit (`analyze staged`) → PR review (`analyze branch`) → weekly (`analyze full`) → post-dep-change (`scan-deps`).
 
 ## Two-Pass Investigation
 
@@ -68,36 +47,24 @@ mcp:
 
 **OSV-Scanner** (deps): npm/Yarn/pnpm, pip, Go, Cargo, Composer, Maven/Gradle. [Docs](https://github.com/google/osv-scanner) | [OSV DB](https://osv.dev/)
 
-**VirusTotal**: SHA256 hash lookup against 70+ AV engines, domain/URL scanning. Rate-limited (16s/request, max 8/skill scan). Verdicts: SAFE, MALICIOUS, SUSPICIOUS, UNKNOWN. Does not block imports (Cisco Skill Scanner is the security gate). API key: `aidevops secret set VIRUSTOTAL_MARCUSQUINN` (gopass) or `~/.config/aidevops/credentials.sh`. [API v3](https://docs.virustotal.com/reference/overview)
+**VirusTotal**: SHA256 hash lookup (70+ AV engines), domain/URL scanning. Rate-limited (16s/request, max 8/skill scan). Verdicts: SAFE/MALICIOUS/SUSPICIOUS/UNKNOWN. Does not block imports (Cisco Skill Scanner is the gate). API key: `aidevops secret set VIRUSTOTAL_MARCUSQUINN`. [API v3](https://docs.virustotal.com/reference/overview)
 
-**Ferret** (AI CLI configs): Detects prompt injection, jailbreaks, credential leaks, backdoors in Claude Code, Cursor, Windsurf, Continue, Aider, Cline. 65+ rules, 9 threat categories. [Docs](https://github.com/fubak/ferret-scan) — `npm install -g ferret-scan` (or `npx ferret-scan`). Custom rules: `.ferretrc.json`. Exclude known issues: `ferret baseline create`.
+**Ferret** (AI CLI configs): Prompt injection, jailbreaks, credential leaks, backdoors in Claude Code/Cursor/Windsurf/Continue/Aider/Cline. 65+ rules, 9 threat categories. [Docs](https://github.com/fubak/ferret-scan) — `npx ferret-scan`. Custom rules: `.ferretrc.json`. Baseline: `ferret baseline create`.
 
-**Shannon** (pentesting): Taint analysis (Pro), exploit validation. **Snyk Code** / **SonarCloud** / **CodeQL**: dependency scanning, taint analysis, CI/CD integration. [CWE DB](https://cwe.mitre.org/) | [OWASP Top 10](https://owasp.org/Top10/)
+**Shannon** (pentesting): Taint analysis (Pro), exploit validation. **Snyk/SonarCloud/CodeQL**: dependency scanning, taint analysis, CI/CD. [CWE DB](https://cwe.mitre.org/) | [OWASP Top 10](https://owasp.org/Top10/)
 
-**Gemini CLI Security MCP**: `find_line_numbers`, `get_audit_scope`, `run_poc`. Config: `"gemini-cli-security": { "command": "npx", "args": ["-y", "gemini-cli-security-mcp-server"] }`, `"osv-scanner": { "command": "osv-scanner", "args": ["mcp"] }`.
+**Gemini CLI Security MCP config**: `"gemini-cli-security": { "command": "npx", "args": ["-y", "gemini-cli-security-mcp-server"] }`, `"osv-scanner": { "command": "osv-scanner", "args": ["mcp"] }`.
 
 ## Allowlisting
 
-**Vulnerability allowlist** — `.security-analysis/vuln_allowlist.txt`:
+**Allowlist file** — `.security-analysis/vuln_allowlist.txt` (format: `CWE-ID:file:line:reason`):
 
 ```text
-# Format: CWE-ID:file:line:reason
 CWE-89:src/test/fixtures/sql.ts:15:Test fixture with intentional vulnerability
 CWE-79:src/components/RawHtml.tsx:10:Sanitized by DOMPurify before render
 ```
 
-**Inline suppression**:
-
-```typescript
-// security-ignore CWE-89: Input validated by middleware
-const query = buildQuery(validatedInput);
-
-/* security-ignore-start CWE-79 */
-// Block of code with known safe HTML handling
-/* security-ignore-end */
-```
-
-Always verify before allowlisting; include reason. Prefer code fixes over suppressions.
+**Inline suppression**: `// security-ignore CWE-89: reason` (single line) or `/* security-ignore-start CWE-79 */` … `/* security-ignore-end */` (block). Always verify before allowlisting; prefer code fixes over suppressions.
 
 ## CI/CD Integration
 
@@ -114,11 +81,7 @@ Always verify before allowlisting; include reason. Prefer code fixes over suppre
 - run: grep -q '"severity": "critical"' .security-analysis/security-report.json && exit 1 || true
 ```
 
-**Pre-commit hook:**
-
-```bash
-./.agents/scripts/security-helper.sh analyze staged --severity-threshold=high || exit 1
-```
+**Pre-commit hook:** `./.agents/scripts/security-helper.sh analyze staged --severity-threshold=high || exit 1`
 
 ## Remediation SLAs
 

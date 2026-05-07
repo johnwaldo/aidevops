@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # stats-wrapper.sh - Separate process for statistics and health updates
 #
 # Runs quality sweep, health issue updates, and person-stats independently
@@ -14,7 +16,12 @@ set -euo pipefail
 #######################################
 # PATH normalisation — same as pulse-wrapper.sh
 #######################################
-export PATH="/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:${PATH}"
+_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/bin:/usr/bin"
+if [[ "$(uname -s 2>/dev/null || true)" != "Darwin" && -d "/home/linuxbrew/.linuxbrew/bin" ]]; then
+	_aidevops_path_prefix="/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:/bin:/usr/bin"
+fi
+export PATH="${_aidevops_path_prefix}:${PATH}"
+unset _aidevops_path_prefix
 
 # Use ${BASH_SOURCE[0]:-$0} for shell portability — BASH_SOURCE is undefined
 # in zsh (MCP shell environment). See GH#3931.
@@ -143,15 +150,105 @@ check_stats_dedup() {
 }
 
 #######################################
+# Exit trap handler — t2418 Phase B
+#
+# The pre-t2418 script only removed the pidfile on EXIT. Under
+# `set -euo pipefail`, any failing command produced a silent non-zero exit
+# with no operator-visible record of what broke. Dashboard staleness
+# could persist for weeks (see #20016: 11-day gap on #10944). This trap
+# emits HEALTH-DASHBOARD-FAIL with the exit code so
+# `tail ~/.aidevops/logs/stats.log` surfaces the failure immediately.
+#
+# Defined at file scope (not inside main) so main() stays under the
+# 100-line function-complexity gate and the trap can be tested directly.
+#######################################
+_stats_wrapper_on_exit() {
+	local ec=$?
+	rm -f "$STATS_PIDFILE" 2>/dev/null || true
+	if [[ "$ec" -ne 0 ]]; then
+		echo "[stats-wrapper] HEALTH-DASHBOARD-FAIL exit=${ec} at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$STATS_LOGFILE"
+	fi
+	return "$ec"
+}
+
+#######################################
 # Main
 #######################################
 main() {
+	# GH#19913: declare this process as headless BEFORE anything else runs
+	# so every child shell stage sees AIDEVOPS_HEADLESS and
+	# detect_session_origin() returns "worker". Mirrors the GH#18670 fix in
+	# pulse-wrapper.sh:1369. Without this, _sweep_review_scanner ->
+	# quality-feedback-helper.sh -> _create_new_quality_debt_issue ->
+	# gh_create_issue -> session_origin_label() defaults to
+	# "origin:interactive" and _gh_wrapper_auto_assignee assigns the
+	# runner, which trips GH#18352's dispatch-dedup guard and strands every
+	# quality-debt issue the 15-min stats sweep creates. Scoped to main()
+	# so callers sourcing stats-wrapper.sh for testing do not inherit the
+	# env var (same scoping guarantee as pulse-wrapper.sh).
+	export AIDEVOPS_HEADLESS=true
+
+	#######################################
+	# --self-check mode (t2044 Phase 0 -- plan section 5.2)
+	#
+	# Source stats-functions.sh and assert the public entry points plus a
+	# representative private helper are defined. Used in CI gates and
+	# post-merge validation. Does not create a PID file or run any stats.
+	#######################################
+	if [[ "${1:-}" == "--self-check" ]]; then
+		LOGFILE="$STATS_LOGFILE"
+		# shellcheck source=stats-functions.sh
+		source "${SCRIPT_DIR}/stats-functions.sh" || {
+			echo "stats-wrapper self-check FAILED: source failed"
+			return 1
+		}
+		local fn
+		for fn in update_health_issues run_daily_quality_sweep _validate_repo_slug \
+			_get_runner_role _persist_role_cache _scan_active_workers \
+			_ensure_quality_issue _run_sweep_tools; do
+			declare -F "$fn" >/dev/null || {
+				echo "stats-wrapper self-check FAILED: missing $fn"
+				return 1
+			}
+		done
+		echo "stats-wrapper self-check OK"
+		return 0
+	fi
+
+	#######################################
+	# --dry-run mode (t2044 Phase 0 -- plan section 5.3)
+	#
+	# Source everything and exercise the main flow with STATS_DRY_RUN=1.
+	# The two public entry points (update_health_issues, run_daily_quality_sweep)
+	# have sentinel early-returns that check this variable, so the call graph
+	# executes end-to-end without making any gh/git API calls.
+	#######################################
+	if [[ "${1:-}" == "--dry-run" ]]; then
+		export STATS_DRY_RUN=1
+		LOGFILE="$STATS_LOGFILE"
+		# shellcheck source=stats-functions.sh
+		source "${SCRIPT_DIR}/stats-functions.sh" || {
+			echo "stats-wrapper dry-run FAILED: source failed"
+			return 1
+		}
+		echo "[stats-wrapper] Dry-run: calling run_daily_quality_sweep..." >>"$STATS_LOGFILE"
+		run_daily_quality_sweep || true
+		echo "[stats-wrapper] Dry-run: calling update_health_issues..." >>"$STATS_LOGFILE"
+		update_health_issues || true
+		echo "[stats-wrapper] Dry-run: complete (no API calls made)" >>"$STATS_LOGFILE"
+		echo "stats-wrapper dry-run OK"
+		return 0
+	fi
+
 	if ! check_stats_dedup; then
 		return 0
 	fi
 
 	echo "$$ $(date +%s)" >"$STATS_PIDFILE"
-	trap 'rm -f "$STATS_PIDFILE"' EXIT
+
+	# t2418 Phase B: trap handler defined at file scope — see
+	# _stats_wrapper_on_exit above for rationale.
+	trap '_stats_wrapper_on_exit' EXIT
 
 	echo "[stats-wrapper] Starting at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$STATS_LOGFILE"
 

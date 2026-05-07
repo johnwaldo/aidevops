@@ -102,6 +102,11 @@
     // Env override: AIDEVOPS_REPO_SYNC
     "repo_sync": true,
 
+    // r914 — Daily drift keeper for repos.json. Bumps stale .aidevops.json
+    // versions and surfaces missing-folder / no-init drift for human triage.
+    // Schedule: daily @03:30. Env override: AIDEVOPS_REPO_HEALTH.
+    "repo_aidevops_health": true,
+
     // Monitor external issues/PRs for new activity needing reply.
     // Auto-seeds on first setup, then scans hourly via launchd/cron.
     // Read-only (GitHub Notifications API), no autonomous replies.
@@ -122,7 +127,26 @@
     // Maximum share of worker slots that quality-debt issues may consume.
     // Default 30 preserves current behavior.
     // Env override: AIDEVOPS_QUALITY_DEBT_CAP_PCT
-    "quality_debt_cap_pct": 30
+    "quality_debt_cap_pct": 30,
+
+    // DEPRECATED (v3.7+, GH#17769): Model routing is now derived from
+    // pool + routing table at runtime. These fields are ignored.
+    "pulse_model": "",
+    "headless_models": "",
+
+    // Seconds of unchanged backlog before triggering an LLM supervisor session.
+    // The deterministic fill floor handles routine dispatch every 2-min cycle;
+    // the LLM supervisor only adds value for edge cases (CHANGES_REQUESTED PRs,
+    // external contributor triage, semantic dedup, stale coaching).
+    // Lower = more LLM sessions (higher token cost), higher = more autonomous.
+    // Env override: PULSE_LLM_STALL_THRESHOLD
+    "llm_stall_threshold": 3600,
+
+    // Hard ceiling in seconds for a single pulse cycle (LLM session + preflight).
+    // The LLM supervisor should complete within 15 minutes — longer runs block
+    // the deterministic fill floor from dispatching new workers.
+    // Env override: PULSE_STALE_THRESHOLD
+    "pulse_stale_threshold": 900
   },
 
   // ---------------------------------------------------------------------------

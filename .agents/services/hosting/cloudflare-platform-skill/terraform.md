@@ -1,23 +1,15 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cloudflare Terraform Provider
 
-**Expert guidance for Cloudflare Terraform Provider - infrastructure as code for Cloudflare resources.**
-
-## Core Principles
-
-- **Provider-first**: Use Terraform provider for ALL infrastructure - never mix with wrangler.toml for the same resources
-- **State management**: Always use remote state (S3, Terraform Cloud, etc.) for team environments
-- **Modular architecture**: Create reusable modules for common patterns (zones, workers, pages)
-- **Version pinning**: Always pin provider version with `~>` for predictable upgrades
-- **Secret management**: Use variables + environment vars for sensitive data - never hardcode API tokens
+**Rules:** Provider-first (never mix with wrangler.toml for same resources) · Remote state always (S3/Terraform Cloud) · Modular (zones, workers, pages) · Pin with `~>` · Secrets via env vars, never hardcoded
 
 ## Provider Setup
-
-### Basic Configuration
 
 ```hcl
 terraform {
   required_version = ">= 1.0"
-  
   required_providers {
     cloudflare = {
       source  = "cloudflare/cloudflare"
@@ -31,18 +23,12 @@ provider "cloudflare" {
 }
 ```
 
-### Authentication Methods (priority order)
+**Auth (priority order):**
+1. **API Token** (recommended): `api_token` / `CLOUDFLARE_API_TOKEN` — Dashboard → My Profile → API Tokens; scope to specific accounts/zones
+2. **Global API Key** (legacy): `api_key` + `api_email` / `CLOUDFLARE_API_KEY` + `CLOUDFLARE_EMAIL` — less secure
+3. **User Service Key**: `user_service_key` — Origin CA certificates only
 
-1. **API Token** (RECOMMENDED): `api_token` or `CLOUDFLARE_API_TOKEN`
-   - Create: Dashboard → My Profile → API Tokens
-   - Scope to specific accounts/zones for security
-
-2. **Global API Key** (LEGACY): `api_key` + `api_email` or `CLOUDFLARE_API_KEY` + `CLOUDFLARE_EMAIL`
-   - Less secure, use tokens instead
-
-3. **User Service Key**: `user_service_key` for Origin CA certificates
-
-### Backend Configuration
+**Remote state backend:**
 
 ```hcl
 terraform {
@@ -54,7 +40,7 @@ terraform {
 }
 ```
 
-## Quick Reference: Common Commands
+## Common Commands
 
 ```bash
 terraform init          # Initialize provider
@@ -63,12 +49,10 @@ terraform apply         # Apply changes
 terraform destroy       # Destroy resources
 terraform import cloudflare_zone.example <zone-id>  # Import existing
 terraform state list    # List resources in state
-terraform output        # Show outputs
-terraform fmt -recursive  # Format code
-terraform validate      # Validate configuration
+terraform fmt -recursive && terraform validate      # Format + validate
 ```
 
 ## See Also
 
-- [Patterns & Use Cases](./patterns.md) - Architecture patterns, multi-env setup, CI/CD integration
-- [Troubleshooting & Best Practices](./gotchas.md) - Common issues, security, best practices
+- [Patterns & Use Cases](./terraform-patterns.md) — multi-env, CI/CD, worker bindings, load balancing
+- [Troubleshooting & Best Practices](./terraform-gotchas.md) — common errors, security, state management

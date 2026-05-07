@@ -1,190 +1,114 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Scaling Checklist
 
-> Before increasing spend, confirm you're ready to scale.
+> Increase spend only when performance, creative, and operations can absorb more volume.
 
----
+## 1. Readiness
 
-## Pre-Scale Requirements
+### Performance
 
-### Performance Confirmation
-
-- [ ] **CPA at or below target** for 5+ consecutive days
-- [ ] **50+ conversions** with statistical confidence
-- [ ] **CTR stable** (not declining)
-- [ ] **ROAS meets target** (if tracking revenue)
-- [ ] **Consistent daily performance** (not wildly fluctuating)
+- [ ] CPA at or below target for 5+ consecutive days
+- [ ] 50+ conversions with statistical confidence
+- [ ] CTR is stable, not declining
+- [ ] ROAS meets target, if revenue is tracked
+- [ ] Daily performance is stable, not swinging wildly
 
 ### Creative Health
 
-- [ ] **Winning creative identified** (clear top performers)
-- [ ] **Frequency under 3** (no fatigue yet)
-- [ ] **Creative running <3 weeks** (still fresh)
-- [ ] **Multiple ads performing** (not just one winner)
+- [ ] Clear winning creative identified
+- [ ] Frequency is under 3
+- [ ] Winning creative has been live under 3 weeks
+- [ ] More than one ad is performing
 
-### Account Health
+### Account and Business Capacity
 
-- [ ] **Payment method valid** (can handle higher spend)
-- [ ] **No policy issues pending**
-- [ ] **Spending limits allow scale** (or raised)
+- [ ] Payment method can handle higher spend
+- [ ] No policy issues are pending
+- [ ] Spending limits allow scale or have been raised
+- [ ] Inventory or operations can handle more orders
+- [ ] Cash flow supports higher spend
+- [ ] Customer service can absorb higher volume
+- [ ] Landing page can handle added traffic
 
-### Business Readiness
+## 2. Go / No-Go Gate
 
-- [ ] **Can fulfill increased orders** (inventory, capacity)
-- [ ] **Cash flow supports increased spend**
-- [ ] **Customer service can handle volume**
-- [ ] **Landing page can handle traffic** (speed, uptime)
+All Section 1 boxes must be checked. Fix any unchecked bottleneck before increasing budget.
 
----
+## 3. Choose the Scaling Method
 
-## Scaling Decision Tree
+| Method | Use when | Next action |
+|--------|----------|-------------|
+| **Vertical** | CPA 20%+ below target, frequency <2.5, no diminishing returns, one clear winner | Increase budget 20-30% every 2-3 days |
+| **Horizontal** | Vertical flattening, want audience variation or risk spread, mature campaign | Duplicate winning ad set, change **one** variable |
+| **Creative** | Performance capped by fatigue, want volume without budget jump, multiple winners found | Add proven creative to existing ad sets |
 
-```
-Ready to Scale?
-│
-├── CPA below target for 5+ days?
-│   ├── Yes → Continue to next check
-│   └── No → NOT ready - wait for consistency
-│
-├── 50+ conversions?
-│   ├── Yes → Continue to next check
-│   └── No → NOT ready - need more data
-│
-├── Frequency under 3?
-│   ├── Yes → Continue to next check
-│   └── No → Need new creative first
-│
-├── Business can handle volume?
-│   ├── Yes → Ready to scale
-│   └── No → Fix operations first
-│
-└── SCALE IT 🚀
-```
-
----
-
-## Scaling Method Selection
-
-### When to Use Vertical Scaling (Budget Increase)
-
-- [ ] CPA is 20%+ below target
-- [ ] Frequency still low (<2.5)
-- [ ] Haven't hit diminishing returns yet
-- [ ] Single campaign/ad set to scale
-
-**How:** Increase budget 20-30% every 2-3 days
-
-### When to Use Horizontal Scaling (Duplication)
-
-- [ ] Vertical scaling hitting diminishing returns
-- [ ] Want to test audience variations
-- [ ] Diversify risk across ad sets
-- [ ] Campaign is mature
-
-**How:** Duplicate winning ad set, change ONE variable
-
-### When to Use Creative Scaling
-
-- [ ] Performance limited by creative fatigue
-- [ ] Want to scale without budget increase
-- [ ] Testing phase identified multiple winners
-
-**How:** Add new proven creative to existing ad sets
-
----
-
-## Scaling Execution Checklist
+## 4. Execute
 
 ### Vertical Scaling
 
-- [ ] Calculate new budget (current × 1.2-1.3)
-- [ ] Set budget increase time (early morning best)
-- [ ] Set maximum budget cap
-- [ ] Schedule check-in for 48 hours later
+- [ ] Calculate new budget (`current × 1.2-1.3`)
+- [ ] Raise budget early in the day
+- [ ] Set a maximum budget cap
+- [ ] Schedule check-in 48 hours later
 - [ ] Document the change
 
 ### Horizontal Scaling
 
-- [ ] Select ad set to duplicate
-- [ ] Choose ONE variable to change
-- [ ] Set starting budget (same as original)
-- [ ] Confirm no audience overlap issues
-- [ ] Schedule check-in for 5 days later
+- [ ] Select the ad set to duplicate
+- [ ] Change exactly one variable
+- [ ] Start with the same budget as the original
+- [ ] Check for audience overlap
+- [ ] Schedule check-in 5 days later
 
----
+### Creative Scaling
 
-## Post-Scale Monitoring
+- [ ] Add only proven creative variants
+- [ ] Keep audience and budget stable while judging creative impact
+- [ ] Document which creative was added and why
 
-### First 48 Hours
+## 5. Monitor After Scaling
 
-- [ ] Spend is increasing as expected
-- [ ] CPA holding (within 20% of pre-scale)
-- [ ] No delivery issues
-- [ ] Learning phase not reset
+| Window | Check |
+|--------|-------|
+| **First 48 hours** | Spend rises as expected; CPA within 20% of pre-scale; no delivery issues; learning phase not reset |
+| **Day 3-5** | CPA stabilising; no major swings; frequency acceptable; decide to continue or pause |
+| **Day 7** | Review full-week data; compare CPA to pre-scale baseline; decide if another increment is justified |
 
-### Day 3-5
+## 6. Stop Signals and Recovery
 
-- [ ] CPA stabilizing
-- [ ] No dramatic performance shifts
-- [ ] Frequency still acceptable
-- [ ] Decide: continue scaling or pause
+Stop scaling if any box is checked:
 
-### Day 7
+- [ ] CPA rises 30%+ and does not recover within 48 hours
+- [ ] Prospecting frequency rises above 3.5
+- [ ] CTR drops 30%+ week over week
+- [ ] Algorithm re-enters learning phase
+- [ ] Business capacity becomes the bottleneck
 
-- [ ] Full week data review
-- [ ] CPA vs pre-scale comparison
-- [ ] Ready for next scale increment?
-
----
-
-## Warning Signs During Scale
-
-### Stop Scaling If:
-
-- [ ] CPA rises 30%+ and doesn't recover in 48 hours
-- [ ] Frequency jumps above 3.5 (prospecting)
-- [ ] CTR drops 30%+ week-over-week
-- [ ] Algorithm enters learning phase
-- [ ] Business capacity becomes an issue
-
-### Recovery Actions:
-
-| Problem | Action |
-|---------|--------|
-| CPA spike | Pause increases, wait, or reduce |
-| High frequency | Add new creative or audiences |
+| Problem | Response |
+|---------|----------|
+| CPA spike | Pause increases, wait, or reduce budget |
+| High frequency | Add new creative or new audiences |
 | CTR drop | Refresh creative |
-| Learning reset | Wait, don't make more changes |
+| Learning reset | Wait before making more changes |
 
----
+## 7. Track Each Change
 
-## Scale Tracking Template
-
-| Date | Action | Budget (Before) | Budget (After) | CPA (Before) | CPA (After) | Notes |
-|------|--------|-----------------|----------------|--------------|-------------|-------|
-| | | $ | $ | $ | $ | |
-| | | $ | $ | $ | $ | |
+| Date | Action | Budget Before | Budget After | CPA Before | CPA After | Notes |
+|------|--------|---------------|--------------|------------|-----------|-------|
 | | | $ | $ | $ | $ | |
 
----
+## 8. Record the Ceiling
 
-## Scaling Limits
+- [ ] Maximum efficient daily spend before diminishing returns
+- [ ] Maximum daily business capacity
+- [ ] Cash flow limit
+- [ ] CPA where the campaign becomes unprofitable
 
-### Know Your Ceiling
-
-- [ ] What's maximum daily budget before diminishing returns?
-- [ ] What's maximum business can handle?
-- [ ] What's cash flow limit?
-- [ ] When does CPA become unprofitable?
-
-### Document Your Ceiling
-
-```
+```text
 Max Efficient Daily Spend: $_______
 Max Business Daily Capacity: $_______
 Breakeven CPA: $_______
 Target CPA at Scale: $_______
 ```
-
----
-
-*Complete this checklist before every scaling decision.*

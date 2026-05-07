@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC1090,SC2317,SC2329
 # SC2034: Variables set for sourced scripts (BLUE, SUPERVISOR_DB, etc.)
 # SC1090: Non-constant source paths (test harness pattern)
@@ -2203,7 +2205,7 @@ TODOEOF
 		else
 			# Should find t100 as a candidate
 			if ! printf '%s' "$candidates" | grep -q "t100"; then
-				echo "FAIL: t100 should be a candidate for 'Investigate stale evaluating recovery events'"
+				echo "FAIL: t100 should be a candidate matching 'Investigate stale evaluating recovery events'"
 				failures=$((failures + 1))
 			fi
 		fi

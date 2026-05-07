@@ -1,17 +1,21 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # AI Search KPI Scorecard Template
 
-Use this template to capture baseline and follow-up measurements for AI-search optimization work.
+Use one scorecard per AI-search cycle. Record baseline, current, delta,
+target, and evidence for each material change.
 
-## Metadata
+## Cycle Metadata
 
 - Project:
 - Date:
 - Owner:
 - Scope (domain/pages):
-- Intent cluster(s):
+- Intent clusters:
 - Competitor set:
 
-## Snapshot
+## KPI Snapshot
 
 | KPI | Baseline | Current | Delta | Target | Notes |
 |-----|----------|---------|-------|--------|-------|
@@ -25,46 +29,21 @@ Use this template to capture baseline and follow-up measurements for AI-search o
 | Citation confidence (avg) | | | | | |
 | Citation stability (variance) | | | | | |
 
-## Diagnostic Notes
+## Diagnostic Evidence
 
-### Grounding Eligibility
-
-- Queries tested:
-- Queries predicted to ground:
-- Queries confirmed grounded:
-- Key blockers:
-
-### Fan-Out and Criteria Gaps
-
-- Missing high-priority branches:
-- Partial branches:
-- Missing decision criteria:
-
-### SRO and Snippet Findings
-
-- Low-survival sections:
-- High-survival sections:
-- Proposed sentence-level edits:
-
-### Integrity and Hallucination Risk
-
-- Conflicting facts:
-- Unsupported claims:
-- Canonical source gaps:
-
-### Agent Discoverability
-
-- Task set used:
-- Completion failures:
-- Navigation/comprehension blockers:
+| Area | Record |
+|------|--------|
+| Grounding eligibility | Queries tested; predicted-to-ground queries; confirmed grounded queries; key blockers |
+| Fan-out and criteria gaps | Missing high-priority branches; partial branches; missing decision criteria |
+| SRO and snippet findings | Low-survival sections; high-survival sections; sentence-level edits to test |
+| Integrity and hallucination risk | Conflicting facts; unsupported claims; canonical source gaps |
+| Agent discoverability | Task set used; completion failures; navigation/comprehension blockers |
 
 ## Prioritized Backlog
 
-1. [ ]
-2. [ ]
-3. [ ]
+<!-- Add items as: 1. [ ] Description -->
 
-## Re-Test Plan
+## Re-test Plan
 
 - Next run date:
 - Intents to re-test:

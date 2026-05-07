@@ -1,6 +1,6 @@
 ---
 name: ai-agent-discovery
-description: Assess whether autonomous AI agents can locate and understand critical site information across multi-turn exploration
+description: Verify autonomous AI agents can locate and understand critical site information via multi-turn exploration
 mode: subagent
 tools:
   read: true
@@ -13,65 +13,37 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # AI Agent Discovery
 
-Evaluate machine discoverability, not only human UX, using multi-turn exploration scenarios.
-
-## Quick Reference
-
-- Purpose: verify that autonomous agents can find, interpret, and trust key business information
-- Inputs: target tasks/questions, indexed pages, navigation structure
-- Outputs: discoverability report, gap classification, remediation backlog
+Verify agents can find, interpret, and trust key business information. Outputs: discoverability report, gap classification, remediation backlog.
 
 ## Workflow
 
-### 1) Define discovery tasks
-
-- Select 5-15 user tasks (pricing, eligibility, integration, support, compliance)
-- Write each task as a natural language goal an agent would execute
-- Include both broad and goal-focused scenarios
-
-### 2) Simulate multi-turn exploration
-
-- Capture sequence of search attempts, page hits, and confidence changes
-- Note where agent loops, backtracks, or stalls
-- Separate retrieval failure from comprehension failure
-- Run explicit `site:` retrieval passes against first-party domain pages
-  (`site:yourdomain.com pricing`, `site:yourdomain.com integrations`)
-- Run third-party validation passes (`site:g2.com [brand]`,
-  `site:capterra.com [brand]`) and compare fact consistency
-
-### 3) Classify findings
-
-- Clearly found and accurate
-- Found but partial/uncertain
-- Not found though content exists (discoverability issue)
-- Not found because content missing (content gap)
-
-### 4) Fix by failure type
-
-- Discoverability issue: improve wording, headings, and internal linking
-- Content gap: add concise, evidence-backed section or dedicated page
-- Comprehension issue: rewrite for standalone clarity
-
-### 5) Re-run and score
-
-- Re-test same tasks after changes
-- Track task completion rate and turn count reduction
-- Promote fixes that improve both human and agent outcomes
+1. **Define tasks** — select 5–15 user goals (pricing, eligibility, integration, support, compliance); include broad and goal-focused scenarios
+2. **Simulate exploration** — capture search attempts, page hits, confidence changes; note loops/backtracks/stalls; separate retrieval failure from comprehension failure
+   - First-party: `site:yourdomain.com pricing`, `site:yourdomain.com integrations`
+   - Third-party: `site:g2.com [brand]`, `site:capterra.com [brand]` — compare fact consistency
+3. **Classify findings** — clearly found / found but partial / not found (discoverability issue) / not found (content gap)
+4. **Fix by failure type**
+   - Discoverability: improve wording, headings, internal linking
+   - Content gap: add concise, evidence-backed section or dedicated page
+   - Comprehension: rewrite for standalone clarity
+5. **Re-run and score** — re-test same tasks; track completion rate and turn count reduction; promote fixes that improve both human and agent outcomes
 
 ## Common Discoverability Problems
 
 - Critical facts trapped in PDFs or images without text equivalents
-- Site language uses internal jargon instead of user vocabulary
-- Key answers scattered across weakly-linked pages
+- Internal jargon instead of user vocabulary; key answers scattered across weakly-linked pages
 - High-value pages lack explicit sections for common decision questions
-- Page titles use brand-centric language that does not match `site:` query patterns (e.g., "Our Solution" instead of "[Category] Software Features")
-- Review platform profiles are outdated or incomplete, causing third-party validation queries to return stale information
-- Key product pages are consolidated into a single URL, making domain-scoped search return one page for all queries instead of topic-specific matches
+- Page titles use brand-centric language that doesn't match `site:` query patterns (e.g., "Our Solution" vs "[Category] Software Features")
+- Review platform profiles outdated — third-party validation returns stale data
+- Key product pages consolidated into one URL — domain-scoped search returns one page for all queries
 
 ## Related Subagents
 
-- `query-fanout-research.md` for thematic query planning
-- `ai-hallucination-defense.md` for factual consistency and claim hygiene
-- `site-crawler.md` for structure and linking audits
+- `query-fanout-research.md` — thematic query planning
+- `ai-hallucination-defense.md` — factual consistency and claim hygiene
+- `site-crawler.md` — structure and linking audits

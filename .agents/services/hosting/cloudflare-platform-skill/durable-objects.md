@@ -1,24 +1,18 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cloudflare Durable Objects
 
-Expert guidance for building stateful applications with Cloudflare Durable Objects.
-
-## Overview
-
-Durable Objects combine compute with storage in globally-unique, strongly-consistent packages:
-- **Globally unique instances**: Each DO has unique ID for multi-client coordination
-- **Co-located storage**: Fast, strongly-consistent storage with compute
-- **Automatic placement**: Objects spawn near first request location
-- **Stateful serverless**: In-memory state + persistent storage
-- **Single-threaded**: Serial request processing (no race conditions)
+Globally-unique compute + storage: single-threaded, strongly-consistent, co-located with state. Spawns near first request.
 
 ## When to Use DOs
 
-Use DOs for **stateful coordination**, not stateless request handling:
-- **Coordination**: Multiple clients interacting with shared state (chat rooms, multiplayer games)
-- **Strong consistency**: Operations must serialize to avoid races (booking systems, inventory)
-- **Per-entity storage**: Each user/tenant/resource needs isolated database (multi-tenant SaaS)
-- **Persistent connections**: Long-lived WebSockets that survive across requests
-- **Per-entity scheduled work**: Each entity needs its own timer (subscription renewals, game timeouts)
+Stateful coordination — serialized access to shared state:
+- **Coordination**: shared state across clients (chat rooms, multiplayer games)
+- **Strong consistency**: serialized operations (booking systems, inventory)
+- **Per-entity storage**: isolated database per user/tenant/resource (multi-tenant SaaS)
+- **Persistent connections**: long-lived WebSockets surviving across requests
+- **Per-entity scheduled work**: timers per entity (subscription renewals, game timeouts)
 
 ## When NOT to Use DOs
 
@@ -36,9 +30,9 @@ Use DOs for **stateful coordination**, not stateless request handling:
 
 ## Design Heuristics
 
-Model each DO around your **atom of coordination**—the logical unit needing serialized access (user, room, document, session).
+Model each DO around the **atom of coordination** — the unit needing serialized access (user, room, document, session).
 
-| Characteristic | Feels Right | Question It | Reconsider |
+| Metric | Feels Right | Question It | Reconsider |
 |----------------|-------------|-------------|------------|
 | Requests/sec (sustained) | < 100 | 100-500 | > 500 |
 | Storage keys | < 100 | 100-1000 | > 1000 |
@@ -49,32 +43,13 @@ Model each DO around your **atom of coordination**—the logical unit needing se
 
 ## Core Concepts
 
-### Class Structure
-
-All DOs extend `DurableObject` base class with constructor receiving `DurableObjectState` (storage, WebSockets, alarms) and `Env` (bindings).
-
-### Accessing from Workers
-
-Workers use bindings to get stubs, then call RPC methods directly (recommended) or use fetch handler (legacy).
-
-### ID Generation
-
-- `idFromName()`: Deterministic, named coordination
-- `newUniqueId()`: Random IDs for sharding
-- `idFromString()`: Derive from existing IDs
-- Jurisdiction option: Data locality
-
-### Storage Options
-
-- **SQLite** (recommended): Structured data, transactions, 10GB/DO
-- **Synchronous KV API**: Simple key-value on SQLite objects
-- **Asynchronous KV API**: Legacy/advanced use cases
-
-### Special Features
-
-- **Alarms**: Schedule future execution per-DO
-- **WebSocket Hibernation**: Zero-cost idle connections
-- **Point-in-Time Recovery**: Restore to any point in 30 days
+| Concept | Detail |
+|---------|--------|
+| **Class** | Extend `DurableObject`. Constructor receives `DurableObjectState` (storage, WebSockets, alarms) and `Env` (bindings). |
+| **Access** | Workers get stubs via bindings → RPC methods (recommended) or fetch handler (legacy). |
+| **ID generation** | `idFromName()` deterministic; `newUniqueId()` random/sharding; `idFromString()` from existing; jurisdiction for data locality. |
+| **Storage** | SQLite default (10GB/DO, transactions); Sync KV API (simple key-value); Async KV API (legacy/advanced). |
+| **Special features** | Alarms (per-DO scheduled execution); WebSocket Hibernation (zero-cost idle); PITR (30-day window). |
 
 ## Quick Start
 
@@ -113,16 +88,13 @@ npx wrangler deploy           # Deploy + auto-apply migrations
 
 ## Resources
 
-**Docs**: https://developers.cloudflare.com/durable-objects/  
-**API Reference**: https://developers.cloudflare.com/durable-objects/api/  
-**Examples**: https://developers.cloudflare.com/durable-objects/examples/
-
-## In This Reference
-
-- [Patterns](./patterns.md) - Rate limiting, locks, real-time collab, sessions
-- [Gotchas](./gotchas.md) - Limits, common issues, troubleshooting
+- [Docs](https://developers.cloudflare.com/durable-objects/)
+- [API Reference](https://developers.cloudflare.com/durable-objects/api/)
+- [Examples](https://developers.cloudflare.com/durable-objects/examples/)
 
 ## See Also
 
-- [Workers](../workers/README.md) - Core Workers runtime
-- [DO Storage](../do-storage/README.md) - Deep dive on storage APIs
+- [Patterns](./durable-objects-patterns.md) — Rate limiting, locks, real-time collab, sessions
+- [Gotchas](./durable-objects-gotchas.md) — Limits, common issues, troubleshooting
+- [Workers](./workers.md) — Core Workers runtime
+- [DO Storage](./do-storage.md) — Deep dive on storage APIs

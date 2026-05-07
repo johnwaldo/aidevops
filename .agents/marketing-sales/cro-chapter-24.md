@@ -1,123 +1,52 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Chapter 24: CRO Mastery and Future Trends
 
 ## 24.1 Building a CRO Culture
 
-### Organizational Mindset Shift
-
-**From Opinion to Evidence:**
-- Data-driven decision making
-- Testing as default
-- Learning from failures
-- Continuous improvement
-
-**Cross-Functional Collaboration:**
-- Marketing and product alignment
-- Shared KPIs
-- Regular experiment reviews
-- Knowledge sharing
-
-### Executive Buy-In
-
-**Building the Business Case:**
-- ROI calculations
-- Competitive analysis
-- Risk mitigation
-- Growth enablement
-
-**Reporting Structure:**
-- Regular experiment showcases
-- Revenue impact reporting
-- Customer insight sharing
-- Strategic recommendations
+| Dimension | Key actions |
+|-----------|------------|
+| Organizational mindset | Evidence-based decisions, testing as default, learning from failures; marketing-product alignment, shared KPIs, experiment reviews |
+| Executive buy-in | Business case: ROI calculations, competitive analysis, risk framing; sustain with experiment showcases, revenue impact reporting |
 
 ## 24.2 Advanced Analytics Techniques
 
-### Cohort Analysis Deep Dive
+### Cohort analysis
 
-**Cohort Types:**
-- Acquisition cohorts
-- Behavioral cohorts
-- Predictive cohorts
+| Cohort type | Analysis techniques |
+|-------------|-------------------|
+| Acquisition (by signup date/channel) | Retention curves, revenue per cohort |
+| Behavioral (by actions taken) | Cohort comparison, feature adoption rates |
+| Predictive (by modeled segments) | Causal impact analysis, intervention targeting |
 
-**Analysis Techniques:**
-- Retention curves
-- Revenue per cohort
-- Cohort comparison
-- Causal impact
+### Predictive modeling
 
-### Predictive Modeling
+**Conversion probability:** Feature engineering (behavioral signals, demographic data, session patterns) → model selection (logistic regression baseline, gradient boosting for production) → performance evaluation (AUC-ROC, calibration curves) → deployment with monitoring.
 
-**Conversion Probability:**
-- Feature engineering
-- Model selection
-- Performance evaluation
-- Deployment
-
-**Churn Prediction:**
-- Early warning signals
-- Intervention triggers
-- Win-back campaigns
+**Churn prediction:** Identify early warning signals (login frequency drop, feature disengagement, support ticket spikes) → set intervention triggers at risk thresholds → execute win-back campaigns with personalized offers based on churn reason.
 
 ## 24.3 Emerging Technologies
 
 ### AI in CRO
 
-**Automated Optimization:**
-- Multi-armed bandits
-- Reinforcement learning
-- Natural language generation
-- Image optimization
+- **Automated optimization:** Multi-armed bandits (faster than A/B for many variants), reinforcement learning (continuous adaptation), NLG for personalized copy, automated image/layout optimization
+- **Predictive analytics:** Customer lifetime value modeling, next-best-action engines, propensity scoring for targeting, demand forecasting for inventory/pricing
 
-**Predictive Analytics:**
-- Customer lifetime value
-- Next best action
-- Propensity scoring
-- Demand forecasting
+### Privacy-first optimization
 
-### Privacy-First World
+Cookieless tracking requires server-side analytics, first-party data strategies, contextual targeting, and cohort-based measurement (Topics API, attribution modeling without individual tracking).
 
-**Cookieless Tracking:**
-- Server-side solutions
-- First-party data
-- Contextual targeting
-- Cohort-based measurement
+### Voice and visual search
 
-### Voice and Visual Search
-
-**Optimization Strategies:**
-- Conversational interfaces
-- Image recognition
-- Voice commerce
-- Visual discovery
+Optimize for conversational interfaces (structured data, FAQ schema), image recognition (alt text, visual search indexing), voice commerce (simplified checkout flows), and visual discovery (shoppable images, AR try-on).
 
 ## 24.4 CRO Career Development
 
-### Skill Progression
+| Level | Core skills | Focus areas |
+|-------|------------|-------------|
+| Entry | Analytics fundamentals, A/B testing basics, tool proficiency, data interpretation | Learning frameworks, building test velocity |
+| Mid | Test strategy, statistical analysis, stakeholder management, cross-functional work | Owning experimentation roadmap |
+| Senior | Program leadership, business strategy, team development, industry thought leadership | Building CRO culture, executive alignment |
 
-**Entry Level:**
-- Analytics fundamentals
-- A/B testing basics
-- Tool proficiency
-- Data interpretation
-
-**Mid-Level:**
-- Test strategy
-- Statistical analysis
-- Stakeholder management
-- Cross-functional work
-
-**Senior-Level:**
-- Program leadership
-- Business strategy
-- Team development
-- Industry thought leadership
-
-### Certifications and Training
-
-**Recommended Certifications:**
-- Google Analytics
-- CXL Institute
-- Optimizely Certification
-- VWO Certification
-
-This final chapter prepares CRO professionals for the future of optimization.
+**Recommended certifications:** Google Analytics, CXL Institute, Optimizely Certification, VWO Certification.

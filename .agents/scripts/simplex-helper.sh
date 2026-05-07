@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # simplex-helper.sh — SimpleX Chat CLI helper for aidevops
 # Wraps common SimpleX CLI operations: install, init, bot management,
 # message sending, connection management, group operations, and status.
@@ -241,7 +243,8 @@ cmd_install() {
 	log_warn "Review the script at the URL above before proceeding."
 	log_info "Downloading SimpleX Chat installer..."
 	local installer
-	installer="$(mktemp /tmp/simplex-install-XXXXXX.sh)"
+	# t2997: drop .sh — XXXXXX must be at end for BSD mktemp.
+	installer="$(mktemp /tmp/simplex-install-XXXXXX)"
 
 	if ! curl -fsSLo "$installer" "$INSTALL_URL"; then
 		log_error "Failed to download installer from ${INSTALL_URL}"
@@ -804,7 +807,8 @@ _cmd_server_init() {
 	log_warn "Review the script at the URL above before proceeding."
 	log_info "Downloading SimpleX server installer..."
 	local installer
-	installer="$(mktemp /tmp/simplex-server-install-XXXXXX.sh)"
+	# t2997: drop .sh — XXXXXX must be at end for BSD mktemp.
+	installer="$(mktemp /tmp/simplex-server-install-XXXXXX)"
 
 	if ! curl -fsSLo "$installer" "$SERVER_INSTALL_URL"; then
 		log_error "Failed to download server installer"

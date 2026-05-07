@@ -1,4 +1,9 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Patterns & Use Cases
+
+Cloudflare Calls SFU — WebRTC session patterns, backend integration, and advanced media controls.
 
 ## Architecture
 
@@ -8,13 +13,10 @@ Client (WebRTC) <---> CF Edge <---> Backend (HTTP)
                     CF Backbone (310+ DCs)
                            |
                     Other Edges <---> Other Clients
-```
 
-Anycast: Last-mile <50ms (95%), no region select, NACK shield, distributed consensus
+# Anycast: last-mile <50ms (95%), no region select, NACK shield, distributed consensus
+# Cascading trees auto-scale to millions:
 
-Cascading trees auto-scale to millions:
-
-```
 Publisher -> Edge A -> Edge B -> Sub1
                     \-> Edge C -> Sub2,3
 ```
@@ -24,11 +26,11 @@ Publisher -> Edge A -> Edge B -> Sub1
 **1:1:** A creates session+publishes, B creates+subscribes to A+publishes, A subscribes to B
 **N:N:** All create session+publish, backend broadcasts track IDs, all subscribe to others
 **1:N:** Publisher creates+publishes, viewers each create+subscribe (no fan-out limit)
-**Breakout:** Same PeerConnection! Backend closes/adds tracks, no recreation
+**Breakout:** Same PeerConnection — backend closes/adds tracks, no recreation
 
-## Backend
+## Session API
 
-Express:
+**Express:**
 
 ```js
 app.post('/api/new-session', async (req, res) => {
@@ -38,7 +40,7 @@ app.post('/api/new-session', async (req, res) => {
 });
 ```
 
-Workers:
+**Workers:**
 
 ```ts
 export default {
@@ -49,7 +51,7 @@ export default {
 };
 ```
 
-DO Presence:
+**DO Presence:**
 
 ```ts
 export class Room {
@@ -74,9 +76,9 @@ export class Room {
 }
 ```
 
-## Advanced
+## Advanced Patterns
 
-Bandwidth mgmt:
+**Bandwidth:**
 
 ```ts
 const s = pc.getSenders().find(s => s.track?.kind === 'video');
@@ -86,7 +88,7 @@ p.encodings[0].maxBitrate = 1200000; p.encodings[0].maxFramerate = 24;
 await s.setParameters(p);
 ```
 
-Simulcast (CF auto-forwards best layer):
+**Simulcast** (CF auto-forwards best layer):
 
 ```ts
 pc.addTransceiver('video', {direction: 'sendonly', sendEncodings: [
@@ -96,7 +98,7 @@ pc.addTransceiver('video', {direction: 'sendonly', sendEncodings: [
 ]});
 ```
 
-DataChannel:
+**DataChannel:**
 
 ```ts
 const dc = pc.createDataChannel('chat', {ordered: true, maxRetransmits: 3});
@@ -104,6 +106,6 @@ dc.onopen = () => dc.send(JSON.stringify({type: 'chat', text: 'Hi'}));
 dc.onmessage = (e) => console.log('RX:', JSON.parse(e.data));
 ```
 
-Integrations: R2 for recording `env.R2_BUCKET.put(...)`, Queues for analytics
+**Integrations:** R2 for recording `env.R2_BUCKET.put(...)`, Queues for analytics
 
-Perf: 100-250ms connect, ~50ms latency (95%), 200-400ms glass-to-glass, no participant limit (client: 10-50 tracks)
+**Performance:** connect 100-250ms, latency ~50ms (95th), glass-to-glass 200-400ms, no participant limit (client: 10-50 tracks)

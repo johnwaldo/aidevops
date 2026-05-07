@@ -1,175 +1,59 @@
-# Campaign Launch Checklist
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
+# Meta Ads Campaign Launch Checklist
 
 > Don't launch until every box is checked.
 
----
+## Pre-Launch
 
-## Pre-Launch: Tracking & Technical
+### Tracking
 
-### Pixel Setup
-- [ ] Meta Pixel installed on all pages
-- [ ] Pixel verified in Events Manager
-- [ ] Test events firing correctly (use Test Events tool)
+- [ ] **Pixel & events**: Meta Pixel installed on all pages; test events firing (PageView, ViewContent, AddToCart, Purchase/Lead); parameters passing (value, currency, content_id).
+- [ ] **CAPI**: Server-side tracking implemented; event deduplication set up (matching event_id); match rate >50%.
+- [ ] **Domain**: Domain verified in Business Settings and Events Manager.
 
-### Events Configuration
-- [ ] Standard events set up (PageView, ViewContent, AddToCart, Purchase/Lead)
-- [ ] Custom events configured if needed
-- [ ] Event parameters passing correctly (value, currency, content_id)
+### Business Manager
 
-### Conversion API (CAPI)
-- [ ] CAPI implemented (server-side tracking)
-- [ ] Event deduplication set up (matching event_id)
-- [ ] Match rate acceptable (>50%)
+- [ ] Ad account in good standing; payment method valid; spending limit sufficient.
+- [ ] Proper access levels assigned; 2FA enabled; ownership clear.
 
-### Domain
-- [ ] Domain verified in Business Settings
-- [ ] Events Manager → Data Sources → Domain verification complete
+### Landing Page
 
----
+- [ ] **Technical**: Loads in <3s; mobile responsive; no broken links; form submits correctly.
+- [ ] **Message match**: Headline, offer, and visual style align with ad message/promise; no confusing redirects.
+- [ ] **Conversion optimization**: Clear CTA above the fold; social proof (logos, reviews) and trust signals (badges) present; minimal form fields; privacy policy linked.
 
-## Pre-Launch: Business Manager
+### Audiences
 
-### Account Health
-- [ ] Ad account in good standing
-- [ ] No policy violations pending
-- [ ] Payment method valid and current
-- [ ] Spending limit sufficient
+- [ ] **Custom & Lookalike**: Website visitors, high-intent page visitors (pricing, cart, checkout), and engagers (video, page) configured; customer lists uploaded; 1% lookalike from source 500+.
+- [ ] **Exclusions**: Exclude recent purchasers, employees, and higher-intent audiences from lower-intent ad sets.
 
-### Access & Permissions
-- [ ] Proper access levels assigned
-- [ ] Two-factor authentication enabled
-- [ ] Business Manager ownership clear
+### Creative
 
----
+- [ ] **Assets**: 3-5 variations; mix of formats (video, static, carousel); correct aspect ratios (9:16, 1:1, 4:5).
+- [ ] **Quality**: Video has captions; text readable on mobile; images high resolution; no policy violations.
+- [ ] **Copy**: Primary text clear; headline under limit; CTA appropriate; UTM parameters in URLs.
 
-## Pre-Launch: Landing Page
+### Campaign Settings
 
-### Technical
-- [ ] Page loads in <3 seconds
-- [ ] Mobile responsive (test on actual phone)
-- [ ] No broken links or images
-- [ ] Form submits correctly
-- [ ] Thank you page/confirmation works
-
-### Message Match
-- [ ] Headline aligns with ad message
-- [ ] Offer matches ad promise
-- [ ] Visual style consistent with ad
-- [ ] No confusing redirects
-
-### Conversion Optimization
-- [ ] Clear CTA above the fold
-- [ ] Social proof present (logos, testimonials, reviews)
-- [ ] Trust signals (security badges, guarantees)
-- [ ] Minimal form fields
-- [ ] Privacy policy linked
-
----
-
-## Pre-Launch: Audiences
-
-### Custom Audiences Created
-- [ ] Website visitors (by timeframe)
-- [ ] High-intent page visitors (pricing, cart, checkout)
-- [ ] Engagement audiences (video viewers, page engagers)
-- [ ] Customer lists uploaded (if applicable)
-
-### Lookalike Audiences Ready
-- [ ] 1% lookalike from best source
-- [ ] Source audience sufficient size (500+)
-
-### Exclusions Set
-- [ ] Exclude recent purchasers/converters
-- [ ] Exclude employees if significant
-- [ ] Higher-intent audiences excluded from lower-intent ad sets
-
----
-
-## Pre-Launch: Creative
-
-### Assets Ready
-- [ ] Minimum 3-5 creative variations
-- [ ] Mix of formats (video, static, carousel as appropriate)
-- [ ] Correct aspect ratios (9:16, 1:1, 4:5)
-
-### Quality Check
-- [ ] Video has captions
-- [ ] Text readable on mobile
-- [ ] Images high resolution
-- [ ] No policy-violating content
-
-### Copy Review
-- [ ] Primary text compelling and clear
-- [ ] Headline under character limit
-- [ ] CTA appropriate for objective
-- [ ] UTM parameters in URLs
-
----
-
-## Pre-Launch: Campaign Settings
-
-### Campaign Level
-- [ ] Correct objective selected
-- [ ] Budget type (CBO/ABO) intentional
-- [ ] Campaign spending limit set (optional)
-- [ ] A/B test configured if testing
-
-### Ad Set Level
-- [ ] Audiences configured correctly
-- [ ] Budget appropriate for goal
-- [ ] Schedule set (start/end if needed)
-- [ ] Placements: Advantage+ or intentionally restricted
-- [ ] Optimization event is correct
-- [ ] Bid strategy appropriate
-
-### Ad Level
-- [ ] All creative uploaded
-- [ ] Copy entered correctly
-- [ ] Destination URL correct
-- [ ] UTM parameters working
-- [ ] Preview checked on mobile
-
----
+- [ ] **Campaign**: Correct objective; budget type (CBO/ABO) intentional; spending limit set; A/B test configured.
+- [ ] **Ad set**: Audiences, budget, and schedule set; placements (Advantage+ or restricted); optimization event and bid strategy correct.
+- [ ] **Ad**: Assets uploaded; destination URL and UTMs correct; mobile preview checked.
 
 ## Launch Day
 
-### Final Checks
-- [ ] Preview all ads one more time
-- [ ] Confirm tracking is working (one more test)
-- [ ] Set calendar reminders for check-ins
-- [ ] Document launch in tracking sheet
+- [ ] Preview all ads; confirm tracking; set check-in reminders; document launch.
+- [ ] Set campaign to active; confirm "In Review" or "Active" status; note immediate disapprovals.
 
-### Publish
-- [ ] Campaign set to active
-- [ ] Confirm ads move to "In Review" or "Active"
-- [ ] Note any immediate disapprovals
+## Post-Launch (24-48 Hours)
 
----
+- [ ] Confirm spending and delivery; no ad disapprovals.
+- [ ] Monitor early metrics (CPM, CTR); verify events in Events Manager.
+- [ ] Record initial metrics; set up automated rules.
 
-## Post-Launch (First 24-48 Hours)
+## Red Flags — Stop and Investigate
 
-### Monitor
-- [ ] Ads are spending (delivery confirmed)
-- [ ] No ad disapprovals
-- [ ] Early metrics look reasonable (CPM, CTR)
-- [ ] Events firing in Events Manager
-
-### Document
-- [ ] Record initial metrics
-- [ ] Note any adjustments made
-- [ ] Set up automated rules if using
-
----
-
-## Red Flags to Watch
-
-**Stop and Investigate If:**
-- No spend after 24 hours
-- Ad disapproved
-- CPM dramatically higher than expected (>2x)
-- CTR below 0.3% after 1,000+ impressions
-- No conversions after significant spend
-
----
-
-*Complete this checklist before every campaign launch.*
+- No spend after 24 hours or ad disapproved.
+- CPM >2x expected or CTR <0.3% after 1,000+ impressions.
+- No conversions after significant spend.

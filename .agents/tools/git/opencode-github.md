@@ -12,6 +12,9 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # OpenCode GitHub Integration
 
 <!-- AI-CONTEXT-START -->
@@ -79,7 +82,7 @@ jobs:
           fetch-depth: 1
 
       - name: Run OpenCode
-        uses: sst/opencode/github@latest
+        uses: anomalyco/opencode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -92,7 +95,7 @@ jobs:
 ## Configuration
 
 ```yaml
-- uses: sst/opencode/github@latest
+- uses: anomalyco/opencode/github@latest
   with:
     model: anthropic/claude-sonnet-4-6  # Required
     agent: build                                # Optional: agent to use
@@ -152,7 +155,7 @@ if: |
    github.event.comment.author_association == 'COLLABORATOR')
 ```
 
-**Full security implementation** (trusted user validation, `ai-approved` label gates, prompt injection detection, audit logging): see `git/opencode-github-security.md`.
+**Full security implementation** (trusted user validation, `ai-approved` label gates, prompt injection detection, best-effort denial notices, audit logging): see `git/opencode-github-security.md`.
 
 Quick setup with max security:
 

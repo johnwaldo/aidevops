@@ -1,147 +1,43 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Landing Page Structure
 
-One goal, one CTA, one path. Every element moves the visitor toward that action.
+One goal, one CTA, one path.
 
 ## Length by Awareness Level
 
 | Awareness Level | Ideal Length | Key Sections |
 |-----------------|--------------|--------------|
 | Most Aware | Short (<500 words) | Hero, Offer, CTA |
-| Product Aware | Medium (500-1000 words) | Hero, Differentiation, Proof, Offer, CTA |
-| Solution Aware | Medium-Long (1000-2000 words) | Hero, Mechanism, Features, Proof, Offer, CTA |
-| Problem Aware | Long (2000-4000 words) | Hero, Problem, Agitate, Solution, Proof, Offer, CTA |
-| Unaware | Very Long (4000+ words) | Story-driven with full education |
+| Product Aware | Medium (500-1000) | Hero, Differentiation, Proof, Offer, CTA |
+| Solution Aware | Medium-Long (1000-2000) | Hero, Mechanism, Features, Proof, Offer, CTA |
+| Problem Aware | Long (2000-4000) | Hero, Problem, Agitate, Solution, Proof, Offer, CTA |
+| Unaware | Very Long (4000+) | Story-driven full education |
 
-The less they know, the more you educate. Cold traffic needs longer pages.
+Less awareness = more education.
 
 ## Universal Framework
 
-### 1. Hero (Above the Fold)
-
-```
-+---------------------------------------------------------+
-|  [Logo]                              [Nav: minimal]     |
-+---------------------------------------------------------+
-|  HEADLINE (clear value proposition)                     |
-|  Subheadline (who it's for + key benefit)               |
-|  [PRIMARY CTA BUTTON]                                   |
-|  "Trusted by 5,000+ companies" + [Logo bar]             |
-|  [Hero Image/Video/Demo]                                |
-+---------------------------------------------------------+
-```
-
-**Headline formula:** `[End Result] + [Time Period] + [Address Objection]`
-- "Get More Qualified Leads in 30 Days -- Without Paid Ads"
-- "Build Landing Pages That Convert in Minutes, Not Days"
-
-**Subheadline formula:** `[Audience] use [Product] to [Benefit] so they can [Outcome]`
-
-### 2. Social Proof Bar
-
-- Logo bar: "Trusted by teams at [logos]"
-- Stats: "10,000+ users | 4.8/5 on G2 | 99.9% uptime"
-- Results: "$47M+ revenue generated for clients"
-
-### 3. Problem Agitation
-
-```
-You've tried [solution 1], but [why it fails].
-You've tried [solution 2], but [why it fails].
-You've tried [solution 3], but [why it fails].
-
-Meanwhile, [negative consequence]. Every day this continues is [cost].
-
-Sound familiar?
-```
-
-### 4. Solution Introduction
-
-```
-Introducing [Product]: The [category] that [key differentiator].
-
-Unlike [competitors], [Product] uses [unique mechanism]
-to [achieve result] in [timeframe].
-```
-
-### 5. How It Works (3 steps, never more than 5)
-
-```
-1. [Action] -> [Immediate result]
-2. [Action] -> [Immediate result]
-3. [Action] -> [Immediate result]
-```
-
-### 6. Features -> Benefits -> Outcomes
-
-Present 3-6 key features, each connecting:
-- **Feature:** What it IS
-- **Benefit:** What it DOES for you
-- **Outcome:** How your LIFE changes
-
-### 7. Social Proof (Deep)
-
-1. **Testimonials with results:** Name, title, company + specific metric
-2. **Case studies:** Challenge -> Solution -> Result (with numbers)
-3. **Video testimonials:** 30-60 seconds from real customers
-4. **Review aggregators:** G2, Capterra, TrustPilot widgets
-5. **Usage stats:** "Processed 5M+ indexing requests"
-
-### 8. Objection Handling (FAQ)
-
-- "Is this right for my situation?" / "Will it work for me?"
-- "Is it worth the price?" / "Can I trust you?"
-- "What if it doesn't work?" / "Why now vs. later?"
-
-### 9. Pricing
-
-```
-+---------------+---------------+---------------+
-|   STARTER     |  PROFESSIONAL |   ENTERPRISE  |
-|   $29/mo      |   $79/mo      |   Custom      |
-|               |  MOST POPULAR |               |
-+---------------+---------------+---------------+
-| + Feature 1   | + All Starter | + All Pro +   |
-| + Feature 2   | + Feature 3   | + Dedicated   |
-|               | + Feature 4   |   support     |
-+---------------+---------------+---------------+
-| [Start Trial] | [Start Trial] | [Contact Us]  |
-+---------------+---------------+---------------+
-```
-
-Anchor with higher price first. Highlight most profitable tier. Include annual discount.
-
-### 10. Risk Reversal (Guarantee)
-
-```
-Try [Product] Risk-Free
-
-We're so confident [Product] will [deliver result] that we offer
-a [timeframe] money-back guarantee.
-
-If you don't [see specific result], just email us and we'll
-refund every penny. No questions asked.
-```
-
-Types: money-back, results guarantee, free trial, performance guarantee.
-
-### 11. Final CTA
-
-```
-+---------------------------------------------------------+
-|  Ready to [Desired Outcome]?                            |
-|  Join [number] [customers] who [achieved result].       |
-|  [     PRIMARY CTA BUTTON     ]                         |
-|  "Start your free trial today -- no credit card required"|
-+---------------------------------------------------------+
-```
+| Section | Include | Formula / Notes |
+|---------|---------|-----------------|
+| Hero | Logo + minimal nav, headline, subheadline, primary CTA, trust bar, hero image/video/demo | Headline: `[End Result] + [Time Period] + [Address Objection]` -- "Get More Qualified Leads in 30 Days -- Without Paid Ads". Subheadline: `[Audience] use [Product] to [Benefit] so they can [Outcome]` |
+| Social proof bar | Logos, stats, result callouts | "Trusted by teams at [logos]" · "10,000+ users \| 4.8/5 on G2" · "$47M+ revenue generated" |
+| Problem agitation | 2-3 failed alternatives + escalating cost | "You've tried [X], but [why it fails]" -> "Meanwhile, [negative consequence]. Every day this continues is [cost]." |
+| Solution introduction | Product category, differentiator, mechanism, timeframe | "Introducing [Product]: The [category] that [key differentiator]. Unlike [competitors], [Product] uses [unique mechanism] to [achieve result] in [timeframe]." |
+| How it works | 3-5 visual steps | `1. [Action] -> [Immediate result]` per step |
+| Features -> benefits -> outcomes | 3-6 key features | **Feature** = what it is -> **Benefit** = what it does -> **Outcome** = how life changes |
+| Deep social proof | Testimonials, case studies, video, review widgets, usage stats | Testimonials need name, title, company, metric. Case studies: challenge -> solution -> result. Video testimonials: 30-60s. Review aggregators: G2, Capterra, TrustPilot |
+| Objection handling | FAQ for fit, trust, price, timing, risk | "Right for my situation?" · "Worth the price?" · "Can I trust you?" · "What if it doesn't work?" · "Why now?" |
+| Pricing | 3 tiers, one marked "Most Popular," CTA per tier | Starter / Professional / Enterprise. Higher tiers inherit lower. Anchor with higher price first. Include annual discount |
+| Risk reversal | Guarantee statement | "Try [Product] Risk-Free. [Timeframe] money-back guarantee. If you don't [specific result], full refund." Types: money-back, results guarantee, free trial, performance guarantee |
+| Final CTA | Outcome headline, social proof count, CTA, friction reducer | "Ready to [Desired Outcome]?" + "Join [number] who [achieved result]" + CTA + "no credit card required" |
 
 ## Best Practices
 
-**Writing:** Second person ("you/your"), sentences under 20 words, paragraphs 2-3 sentences, subheads for skimming, active voice, conversational tone.
-
-**Visual:** One CTA style throughout, F-pattern reading, whitespace, high-contrast CTA buttons, mobile-first.
-
-**Avoid:** Multiple competing CTAs, walls of text, stock photos over real product shots, vague headlines ("Welcome to our website"), features without benefits, no social proof or risk reversal.
+- **Writing:** Second person, sentences <20 words, 2-3 sentence paragraphs, subheads for skimming, active voice
+- **Visual:** One CTA style, F-pattern reading, whitespace, high-contrast buttons, mobile-first
+- **Avoid:** Competing CTAs, text walls, stock photos over product shots, vague headlines, features without benefits, missing social proof, missing risk reversal
 
 ## Templates by Use Case
 
@@ -158,16 +54,15 @@ See [Templates](direct-response-copy-templates-landing-page.md) for copy-paste v
 
 | Metric | Benchmark | What It Tells You |
 |--------|-----------|-------------------|
-| Bounce Rate | 40-60% | Are visitors interested? |
-| Time on Page | 2-5 min | Are they reading? |
-| Scroll Depth | 50-70% | Are they engaged? |
-| Conversion Rate | 2-5% (cold), 10-25% (warm) | Is it working? |
-| CTA Click Rate | 3-5% | Is the CTA compelling? |
+| Bounce Rate | 40-60% | Visitor interest |
+| Time on Page | 2-5 min | Reading engagement |
+| Scroll Depth | 50-70% | Content engagement |
+| Conversion Rate | 2-5% (cold), 10-25% (warm) | Effectiveness |
+| CTA Click Rate | 3-5% | CTA compelling? |
 
-**Test:** Headline (different value props), CTA text, CTA color, social proof type/placement, page length, form fields.
+Test headline value props, CTA text/color, social proof type/placement, page length, and form fields.
 
 ## Related
 
 - [Headline Formulas](headline-formulas.md) for hero section headlines
 - [Offer Construction](offer-construction.md) for pricing sections
-- [Templates](direct-response-copy-templates-landing-page.md) for copy-paste templates

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 set -euo pipefail
 
 # Document Extraction Helper for AI DevOps Framework
@@ -207,7 +209,7 @@ do_status() {
 	echo "LLM Backends:"
 	if command -v ollama &>/dev/null; then
 		local ollama_models
-		ollama_models="$(ollama list 2>/dev/null | grep -c "." || echo "0")"
+		ollama_models="$(ollama list 2>/dev/null | safe_grep_count ".")"
 		echo "  ollama:         installed (${ollama_models} models)"
 	else
 		echo "  ollama:         not installed"
@@ -456,7 +458,9 @@ with open('${text_file}', 'w') as f:
 		elif [[ "$ext" == "pdf" ]]; then
 			# Convert first page to image for classification
 			local tmp_img
-			tmp_img="$(mktemp /tmp/classify-XXXXXX.png)"
+			# t2997: drop .png — image classifiers detect format from magic bytes,
+			# not filename extension. XXXXXX must be at end for BSD mktemp.
+			tmp_img="$(mktemp /tmp/classify-XXXXXX)"
 			if command -v magick &>/dev/null; then
 				magick -density 150 "${input_file}[0]" -quality 80 "$tmp_img" 2>/dev/null
 			elif command -v convert &>/dev/null; then

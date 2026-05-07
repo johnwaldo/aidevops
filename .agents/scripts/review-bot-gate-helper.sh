@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # review-bot-gate-helper.sh — Check if AI review bots have posted on a PR
 #
 # Usage:
@@ -6,6 +8,7 @@
 #   review-bot-gate-helper.sh wait          <PR_NUMBER> [REPO] [MAX_WAIT_SECONDS]
 #   review-bot-gate-helper.sh list          <PR_NUMBER> [REPO]
 #   review-bot-gate-helper.sh request-retry <PR_NUMBER> [REPO]
+#   review-bot-gate-helper.sh status-json   <PR_NUMBER> [REPO]
 #   review-bot-gate-helper.sh batch-retry   [REPO]
 #
 # Commands:
@@ -14,6 +17,7 @@
 #   list           — List all bot comments found on the PR
 #   request-retry  — If bots were rate-limited and no real review exists,
 #                     request a review retry (idempotent, safe to call every pulse)
+#   status-json    — Machine-readable check result for automation
 #   batch-retry    — Process all open PRs with 0 formal reviews, request retries
 #                     for rate-limited ones. Staggers requests to avoid re-triggering
 #                     rate limits. (GH#3932)
@@ -34,12 +38,24 @@
 #   REVIEW_BOT_POLL_INTERVAL — Seconds between polls (default: 60)
 #   RATE_LIMIT_GRACE_SECONDS — How long to wait before passing rate-limited PRs
 #                              (default: 14400 = 4 hours). Set to 0 to disable.
+#   REVIEW_GATE_RATE_LIMIT_BEHAVIOR — Global default for rate-limited bots:
+#                              "pass" (default, exit 0) or "wait" (keep polling).
+#                              Override per-repo or per-tool in repos.json:
+#                              { "review_gate": { "rate_limit_behavior": "pass",
+#                                "tools": { "coderabbitai": { "rate_limit_behavior": "wait" } } } }
 #
 # t1382: https://github.com/marcusquinn/aidevops/issues/2735
 # GH#3827: Rate-limit grace period — pass gate after timeout when bots are
 #          rate-limited, preventing indefinite PR blockage.
 
 set -euo pipefail
+
+# t2393: source shared-constants.sh for the gh_pr_comment wrapper (sig footer).
+# Non-fatal: if the file is missing (e.g. deployed layout drift), fall through
+# to raw `gh pr comment`.
+_RBG_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=/dev/null
+[[ -r "${_RBG_SCRIPT_DIR}/shared-constants.sh" ]] && source "${_RBG_SCRIPT_DIR}/shared-constants.sh" || true
 
 # Known review bot login patterns (lowercase, without [bot] suffix for matching)
 KNOWN_BOTS=(
@@ -50,8 +66,12 @@ KNOWN_BOTS=(
 	"copilot"
 )
 
-# Patterns that indicate a rate-limit or quota notice (not a real review).
-# Case-insensitive grep patterns — one per line.
+# Rate-limit / quota notice patterns — entries that indicate the bot tried to
+# review but was capacity-constrained. Used by grace-period logic
+# (RATE_LIMIT_GRACE_SECONDS, _should_pass_rate_limited) where the semantic
+# distinction matters: a rate-limited bot may recover and review later, while
+# a "Review skipped" bot will not.
+# t2799: restored to original rate-limit-only semantics after t2139 expansion.
 RATE_LIMIT_PATTERNS=(
 	"rate limit exceeded"
 	"rate limited by coderabbit"
@@ -61,25 +81,236 @@ RATE_LIMIT_PATTERNS=(
 	"has exceeded the limit for the number of"
 )
 
+# Broader set: all patterns that indicate a comment is NOT a real review.
+# Includes rate-limit notices (above) AND non-quota bot status messages
+# ("Review failed", "Review skipped", placeholder edits after the PR was
+# closed). Case-insensitive grep patterns — one per line.
+# t2139 (GH#19251): expanded from rate-limit-only to include non-review
+# notices, after CodeRabbit "Review failed/skipped/closed-during-review"
+# messages were observed false-positive-classifying as real reviews.
+# t2799: split from RATE_LIMIT_PATTERNS; built as union so the two stay
+# consistent.
+NON_REVIEW_PATTERNS=(
+	"${RATE_LIMIT_PATTERNS[@]}"
+	"Review failed"
+	"Review skipped"
+	"closed or merged during review"
+	"Auto reviews are limited"
+)
+
+# Bots that post a Phase 1 placeholder and later edit it with real review
+# content. For these, age-derived settlement is unreliable — require
+# edit-observed settlement (edit_delta > 0). All other bots preserve existing
+# OR semantics (edit_delta >= min_lag OR age >= min_lag).
+# GH#20550 / #20494 — two-phase bot list (Option A').
+readonly TWO_PHASE_BOTS=("coderabbitai")
+
 SKIP_LABEL="skip-review-gate"
 
 # GH#3827: Grace period for rate-limited bots. If bots posted rate-limit
 # notices (proving they're configured) but the PR has been open longer than
-# this threshold, pass the gate with a warning. Default: 4 hours (14400s).
+# this threshold, pass the gate with a warning. Default: 30 min (1800s).
+# GH#17549: Reduced from 4h — workers produce PRs every 10 min and 4h
+# grace blocked the entire merge pipeline when Gemini was rate-limited.
 # Set RATE_LIMIT_GRACE_SECONDS=0 to disable (block indefinitely).
-RATE_LIMIT_GRACE_SECONDS="${RATE_LIMIT_GRACE_SECONDS:-14400}"
+RATE_LIMIT_GRACE_SECONDS="${RATE_LIMIT_GRACE_SECONDS:-1800}"
+
+# t2123: Global default for rate-limit behavior.
+# Values: "pass" (exit 0 immediately, current default) or "wait" (return WAITING).
+# Override per-repo or per-tool via repos.json review_gate config.
+REVIEW_GATE_RATE_LIMIT_BEHAVIOR="${REVIEW_GATE_RATE_LIMIT_BEHAVIOR:-pass}"
+
+# t2139 (GH#19251): Minimum seconds a bot comment must have been "settled"
+# (either edited via updated_at > created_at, or simply old enough since
+# created_at) before it counts as a completed review. Defeats the two-phase
+# placeholder pattern where a bot posts an initial stub at ~14s and edits it
+# with the real review at ~90-120s. Default 30s — large enough to skip
+# Phase 1 placeholders, small enough not to block fast-completing bots.
+# Override per-repo or per-tool via repos.json review_gate config:
+#   { "review_gate": { "min_edit_lag_seconds": 30,
+#     "tools": { "coderabbitai": { "min_edit_lag_seconds": 60 } } } }
+REVIEW_BOT_MIN_EDIT_LAG_SECONDS="${REVIEW_BOT_MIN_EDIT_LAG_SECONDS:-30}"
 
 # --- Functions ---
 
 usage() {
-	echo "Usage: $(basename "$0") {check|wait|list|request-retry|batch-retry} <PR_NUMBER> [REPO] [MAX_WAIT]"
+	echo "Usage: $(basename "$0") {check|wait|list|request-retry|status-json|batch-retry} <PR_NUMBER> [REPO] [MAX_WAIT]"
 	echo ""
 	echo "Commands:"
 	echo "  check          Check once for bot reviews (returns PASS/PASS_RATE_LIMITED/WAITING/SKIP)"
 	echo "  wait           Poll until bot reviews appear or timeout"
 	echo "  list           List all bot comments found"
 	echo "  request-retry  Request review retry if bots were rate-limited (idempotent)"
+	echo "  status-json    Print machine-readable gate status"
 	echo "  batch-retry    Process all open PRs with 0 reviews, request retries (GH#3932)"
+	return 0
+}
+
+json_escape() {
+	local value="$1"
+	if command -v jq >/dev/null 2>&1; then
+		jq -Rn --arg value "$value" '$value'
+		return 0
+	fi
+	value=${value//\\/\\\\}
+	value=${value//\"/\\\"}
+	value=${value//$'\n'/\\n}
+	printf '"%s"\n' "$value"
+	return 0
+}
+
+_get_rate_limit_behavior() {
+	# t2123: Resolve rate-limit behavior for a specific bot on a specific repo.
+	# Resolution order: per-tool > per-repo default > global env > hardcoded "pass".
+	#
+	# repos.json schema:
+	#   "review_gate": {
+	#     "rate_limit_behavior": "pass",        // per-repo default
+	#     "tools": {
+	#       "coderabbitai": { "rate_limit_behavior": "wait" }
+	#     }
+	#   }
+	local repo_slug="$1"
+	local bot_login="$2"
+	local repos_json="${HOME}/.config/aidevops/repos.json"
+
+	# If repos.json doesn't exist, fall through to global default
+	if [[ -f "$repos_json" ]] && command -v jq &>/dev/null; then
+		# Try per-tool or per-repo setting in a single jq pass.
+		# first() guards against duplicate slug entries in repos.json.
+		# stderr is not suppressed so JSON syntax errors surface during debugging.
+		local behavior=""
+		behavior=$(jq -r --arg slug "$repo_slug" --arg bot "$bot_login" \
+			'first(.initialized_repos[]? | select(.slug == $slug)) | (.review_gate.tools[$bot].rate_limit_behavior // .review_gate.rate_limit_behavior // empty)' \
+			"$repos_json") || behavior=""
+		if [[ -n "$behavior" ]]; then
+			printf '%s' "$behavior"
+			return 0
+		fi
+	fi
+
+	# Fall through to global env (which defaults to "pass")
+	printf '%s' "$REVIEW_GATE_RATE_LIMIT_BEHAVIOR"
+	return 0
+}
+
+_get_min_edit_lag() {
+	# t2139: Resolve minimum edit-lag seconds for a specific bot on a specific
+	# repo. Resolution order: per-tool > per-repo default > global env > 30.
+	# Mirrors _get_rate_limit_behavior — same repos.json schema, same precedence.
+	local repo_slug="$1"
+	local bot_login="$2"
+	local repos_json="${HOME}/.config/aidevops/repos.json"
+
+	if [[ -f "$repos_json" ]] && command -v jq &>/dev/null; then
+		local lag=""
+		lag=$(jq -r --arg slug "$repo_slug" --arg bot "$bot_login" \
+			'first(.initialized_repos[] | select(.slug == $slug)) | (.review_gate.tools[$bot].min_edit_lag_seconds // .review_gate.min_edit_lag_seconds // empty)' \
+			"$repos_json" 2>/dev/null) || lag=""
+		# Reject non-integer or negative values silently (fall through to env).
+		if [[ -n "$lag" && "$lag" =~ ^[0-9]+$ ]]; then
+			printf '%s' "$lag"
+			return 0
+		fi
+	fi
+
+	printf '%s' "$REVIEW_BOT_MIN_EDIT_LAG_SECONDS"
+	return 0
+}
+
+_is_two_phase_bot() {
+	# GH#20550: Return 0 if bot_login is in TWO_PHASE_BOTS; 1 otherwise.
+	# These bots post a Phase 1 placeholder and later edit with real review content.
+	# Age-derived settlement is unreliable for them — only edit_delta > 0 counts.
+	local bot_login="$1"
+	local b
+	for b in "${TWO_PHASE_BOTS[@]}"; do
+		[[ "$bot_login" == "$b" ]] && return 0
+	done
+	return 1
+}
+
+_to_epoch() {
+	# Cross-platform ISO-8601 → epoch (macOS BSD date vs GNU date). Returns 0
+	# on parse failure so callers can detect "unknown" and behave conservatively.
+	local iso="$1"
+	[[ -z "$iso" ]] && {
+		echo "0"
+		return 0
+	}
+	local epoch
+	epoch=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$iso" +%s 2>/dev/null ||
+		date -d "$iso" +%s 2>/dev/null ||
+		echo "0")
+	echo "$epoch"
+	return 0
+}
+
+_comment_is_settled() {
+	# t2139: A comment is "settled" (final form, safe to classify as a real
+	# review) if EITHER:
+	#   (a) it has been edited (updated_at >= created_at + min_lag), OR
+	#   (b) it is old enough that the bot would have edited by now
+	#       (now - created_at >= min_lag).
+	# If timestamps are missing/unparseable (older API responses, network
+	# issues), be conservative: treat as settled — better to PASS the gate
+	# than block forever on missing data.
+	#
+	# GH#20550: For two-phase bots (e.g. coderabbitai), age-derived settlement
+	# is disabled. Only edit_delta > 0 counts — a Phase 1 placeholder that has
+	# aged past min_lag is still NOT a real review for two-phase bots.
+	# 4th param bot_login is optional (defaults to ""); omitting it preserves
+	# old non-two-phase OR semantics for all callers that don't supply it.
+	local created_at="$1"
+	local updated_at="$2"
+	local min_lag="$3"
+	local bot_login="${4:-}"
+
+	# Missing inputs → conservative pass.
+	[[ -z "$created_at" ]] && return 0
+	[[ -z "$min_lag" || ! "$min_lag" =~ ^[0-9]+$ ]] && min_lag=30
+
+	local created_epoch updated_epoch now_epoch
+	created_epoch=$(_to_epoch "$created_at")
+	updated_epoch=$(_to_epoch "${updated_at:-$created_at}")
+	now_epoch=$(date +%s)
+
+	# Unparseable timestamps → conservative pass.
+	[[ "$created_epoch" -eq 0 ]] && return 0
+
+	local edit_delta=$((updated_epoch - created_epoch))
+	local age=$((now_epoch - created_epoch))
+
+	if _is_two_phase_bot "$bot_login"; then
+		# Phase 2 edit is authoritative; Phase 1 placeholder is not a real review
+		# regardless of age. Any positive edit_delta is the settlement signal.
+		[[ "$edit_delta" -gt 0 ]] && return 0
+		return 1
+	fi
+
+	# Non-two-phase bots: preserve existing OR semantics.
+	if [[ "$edit_delta" -ge "$min_lag" ]] || [[ "$age" -ge "$min_lag" ]]; then
+		return 0
+	fi
+	return 1
+}
+
+_should_pass_rate_limited() {
+	# t2123: Check if ALL rate-limited bots should pass (behavior=pass).
+	# If ANY bot is configured to "wait", return 1 (don't pass).
+	# $1 = repo slug, $2 = space-separated list of rate-limited bot logins
+	local repo_slug="$1"
+	local rate_limited_bots_str="$2"
+	local bot behavior
+
+	for bot in $rate_limited_bots_str; do
+		[[ -z "$bot" ]] && continue
+		behavior=$(_get_rate_limit_behavior "$repo_slug" "$bot")
+		if [[ "$behavior" == "wait" ]]; then
+			echo "Bot '${bot}' configured to wait on rate limit (review_gate config)" >&2
+			return 1
+		fi
+	done
 	return 0
 }
 
@@ -140,9 +371,25 @@ get_all_bot_commenters() {
 		tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$' || true
 }
 
-is_rate_limit_comment() {
-	# Check if a comment body matches any known rate-limit/quota pattern.
-	# Returns 0 if the comment IS a rate-limit notice (not a real review).
+is_non_review_comment() {
+	# t2139: Check if a comment body matches any known non-review pattern
+	# (rate-limit/quota notices, "Review failed", "Review skipped", etc.).
+	# Returns 0 if the comment IS a non-review notice. Renamed from
+	# is_rate_limit_comment for accuracy — see NON_REVIEW_PATTERNS.
+	local body="$1"
+
+	for pattern in "${NON_REVIEW_PATTERNS[@]}"; do
+		if echo "$body" | grep -qi "$pattern"; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# t2799: Check if a comment body matches a rate-limit-specific pattern only
+# (not the broader non-review set). Use when the caller cares specifically
+# about capacity-constrained bots that may retry later.
+is_rate_limit_only_comment() {
 	local body="$1"
 
 	for pattern in "${RATE_LIMIT_PATTERNS[@]}"; do
@@ -153,18 +400,26 @@ is_rate_limit_comment() {
 	return 1
 }
 
-bot_has_real_review() {
-	# Check if a bot has posted at least one comment that is NOT a rate-limit
-	# notice. Checks all three comment sources (reviews, issue comments,
-	# review comments). Returns 0 if a real review exists, 1 otherwise.
+bot_body_base64_jq_filter() {
+	local bot_login="$1"
+
+	printf '%s%s%s\n' \
+		'.[] | select(.user.login | ascii_downcase | test("' \
+		"$bot_login" \
+		'")) | (.body // "" | @base64)'
+	return 0
+}
+
+bot_has_rate_limit_notice() {
+	# Return success only when the bot posted a true rate-limit/quota notice.
+	# Broader non-review states ("Review failed", "Review skipped", closed
+	# during review) must keep blocking instead of entering PASS_RATE_LIMITED.
 	local pr_number="$1"
 	local repo="$2"
 	local bot_login="$3"
 
-	# Build a jq filter that selects comments by this bot (case-insensitive)
-	# and base64-encodes each body so multi-line content stays on one line.
 	local jq_filter
-	jq_filter=".[] | select(.user.login | ascii_downcase | test(\"${bot_login}\")) | .body | @base64"
+	jq_filter=$(bot_body_base64_jq_filter "$bot_login")
 
 	local api_endpoints=(
 		"repos/${repo}/pulls/${pr_number}/reviews"
@@ -172,22 +427,156 @@ bot_has_real_review() {
 		"repos/${repo}/pulls/${pr_number}/comments"
 	)
 
-	local endpoint encoded_bodies body
+	local endpoint records encoded body
 	for endpoint in "${api_endpoints[@]}"; do
-		encoded_bodies=$(gh api "$endpoint" --paginate --jq "$jq_filter" || echo "")
-		if [[ -n "$encoded_bodies" ]]; then
-			while IFS= read -r encoded; do
-				[[ -z "$encoded" ]] && continue
-				body=$(echo "$encoded" | base64 -d 2>/dev/null || echo "")
-				[[ -z "$body" ]] && continue
-				if ! is_rate_limit_comment "$body"; then
-					return 0
-				fi
-			done <<<"$encoded_bodies"
+		records=$(gh api "$endpoint" --paginate --jq "$jq_filter" || echo "")
+		[[ -z "$records" ]] && continue
+		while IFS= read -r encoded; do
+			[[ -z "$encoded" ]] && continue
+			body=$(echo "$encoded" | base64 -d 2>/dev/null || echo "")
+			[[ -z "$body" ]] && continue
+			if is_rate_limit_only_comment "$body"; then
+				return 0
+			fi
+		done <<<"$records"
+	done
+	return 1
+}
+
+bot_has_non_rate_limit_non_review_notice() {
+	# Return success when the bot posted a known non-review notice that is not a
+	# true rate-limit/quota notice. This takes precedence over older rate-limit
+	# notices from the same bot so failed/skipped states keep blocking.
+	local pr_number="$1"
+	local repo="$2"
+	local bot_login="$3"
+
+	local jq_filter
+	jq_filter=$(bot_body_base64_jq_filter "$bot_login")
+
+	local api_endpoints=(
+		"repos/${repo}/pulls/${pr_number}/reviews"
+		"repos/${repo}/issues/${pr_number}/comments"
+		"repos/${repo}/pulls/${pr_number}/comments"
+	)
+
+	local endpoint records encoded body
+	for endpoint in "${api_endpoints[@]}"; do
+		records=$(gh api "$endpoint" --paginate --jq "$jq_filter" || echo "")
+		[[ -z "$records" ]] && continue
+		while IFS= read -r encoded; do
+			[[ -z "$encoded" ]] && continue
+			body=$(echo "$encoded" | base64 -d 2>/dev/null || echo "")
+			[[ -z "$body" ]] && continue
+			if is_non_review_comment "$body" && ! is_rate_limit_only_comment "$body"; then
+				return 0
+			fi
+		done <<<"$records"
+	done
+	return 1
+}
+
+bot_get_notice_category() {
+	# Classify a bot's non-review notice state in one pass over the three GitHub
+	# comment sources. Non-rate-limit notices take precedence over rate-limit
+	# notices from the same bot, even when an older rate-limit notice appears
+	# first in another stream.
+	local pr_number="$1"
+	local repo="$2"
+	local bot_login="$3"
+
+	local jq_filter
+	jq_filter=$(bot_body_base64_jq_filter "$bot_login")
+
+	local api_endpoints=(
+		"repos/${repo}/pulls/${pr_number}/reviews"
+		"repos/${repo}/issues/${pr_number}/comments"
+		"repos/${repo}/pulls/${pr_number}/comments"
+	)
+
+	local category="none"
+	local endpoint records rc encoded body
+	for endpoint in "${api_endpoints[@]}"; do
+		if records=$(gh api "$endpoint" --paginate --jq "$jq_filter"); then
+			:
+		else
+			rc=$?
+			return "$rc"
 		fi
+		[[ -z "$records" ]] && continue
+		while IFS= read -r encoded; do
+			[[ -z "$encoded" ]] && continue
+			body=$(echo "$encoded" | base64 -d 2>/dev/null || echo "")
+			[[ -z "$body" ]] && continue
+			if is_non_review_comment "$body" && ! is_rate_limit_only_comment "$body"; then
+				echo "non-rate-limit"
+				return 0
+			fi
+			if is_rate_limit_only_comment "$body"; then
+				category="rate-limit"
+			fi
+		done <<<"$records"
 	done
 
-	# All comments from this bot were rate-limit notices (or empty)
+	echo "$category"
+	return 0
+}
+
+bot_has_real_review() {
+	# t2139 (GH#19251): Check if a bot has posted at least one comment that
+	# is BOTH (a) not a known non-review notice AND (b) "settled" — meaning
+	# the comment has been edited (updated_at > created_at + min_lag) or is
+	# old enough that the bot would have edited by now (now - created_at >=
+	# min_lag). The age check is critical to defeat CodeRabbit's two-phase
+	# posting pattern, where Phase 1 is a placeholder posted at ~14s and
+	# Phase 2 is the edited final review at ~90-120s.
+	#
+	# Checks all three comment sources (reviews, issue comments, review
+	# comments). Returns 0 if a real, settled review exists, 1 otherwise.
+	local pr_number="$1"
+	local repo="$2"
+	local bot_login="$3"
+
+	local min_lag
+	# repo here is "owner/name" — same shape as repos.json slug.
+	min_lag=$(_get_min_edit_lag "$repo" "$bot_login")
+
+	# Build a jq filter that selects comments by this bot (case-insensitive)
+	# and emits a TSV record of created_at \t updated_at \t base64(body).
+	# Reviews lack updated_at on some endpoints; default to created_at via //.
+	local jq_filter
+	jq_filter=".[] | select(.user.login | ascii_downcase | test(\"${bot_login}\")) | [(.created_at // \"\"), (.updated_at // .submitted_at // .created_at // \"\"), (.body // \"\" | @base64)] | @tsv"
+
+	local api_endpoints=(
+		"repos/${repo}/pulls/${pr_number}/reviews"
+		"repos/${repo}/issues/${pr_number}/comments"
+		"repos/${repo}/pulls/${pr_number}/comments"
+	)
+
+	local endpoint records created_at updated_at encoded body
+	for endpoint in "${api_endpoints[@]}"; do
+		records=$(gh api "$endpoint" --paginate --jq "$jq_filter" || echo "")
+		[[ -z "$records" ]] && continue
+		while IFS=$'\t' read -r created_at updated_at encoded; do
+			[[ -z "$encoded" ]] && continue
+			body=$(echo "$encoded" | base64 -d 2>/dev/null || echo "")
+			[[ -z "$body" ]] && continue
+			# Phase 1: must not be a known non-review notice.
+			if is_non_review_comment "$body"; then
+				continue
+			fi
+			# Phase 2: must be settled. If not, this is likely a placeholder
+			# (e.g., CodeRabbit Phase 1) — wait for it to settle before
+			# classifying as a real review. Pass bot_login so two-phase bots
+			# require edit-observed settlement (GH#20550).
+			if ! _comment_is_settled "$created_at" "$updated_at" "$min_lag" "$bot_login"; then
+				continue
+			fi
+			return 0
+		done <<<"$records"
+	done
+
+	# No comment from this bot passed both filters.
 	return 1
 }
 
@@ -297,22 +686,55 @@ do_check() {
 
 	local found_bots=""
 	local rate_limited_bots=""
+	local non_review_bots=""
+	local notice_category notice_rc
 	for bot in "${KNOWN_BOTS[@]}"; do
 		if echo "$all_commenters" | grep -qi "$bot"; then
-			# Bot commented — but is it a real review or a rate-limit notice?
+			# Bot commented — but is it a real review or a non-review notice?
 			if bot_has_real_review "$pr_number" "$repo" "$bot"; then
 				found_bots="${found_bots}${bot} "
 			else
-				rate_limited_bots="${rate_limited_bots}${bot} "
-				echo "rate-limited (not a real review): ${bot}" >&2
+				if notice_category=$(bot_get_notice_category "$pr_number" "$repo" "$bot"); then
+					:
+				else
+					notice_rc=$?
+					return "$notice_rc"
+				fi
+				case "$notice_category" in
+					rate-limit)
+						rate_limited_bots="${rate_limited_bots}${bot} "
+						echo "rate-limit notice (not a real review): ${bot}" >&2
+						;;
+					non-rate-limit | none | *)
+						non_review_bots="${non_review_bots}${bot} "
+						echo "non-review state (not rate-limited, not a real review): ${bot}" >&2
+						;;
+				esac
 			fi
 		fi
 	done
 
 	if [[ -n "$found_bots" ]]; then
-		echo "PASS"
+		echo "PASS" # nice — at least one bot posted a real review
 		echo "found: ${found_bots}" >&2
 		return 0
+	elif [[ -n "$non_review_bots" ]] && any_bot_has_success_status "$pr_number" "$repo"; then
+		# GH#22884: Some bots expose review completion only through a SUCCESS
+		# commit status after leaving a placeholder/non-review issue comment. Do
+		# not bridge to a raw skip; require the bot-authored success status before
+		# treating the gate as reviewed.
+		echo "PASS"
+		echo "Status check fallback: bots posted non-review states but have SUCCESS status checks" >&2
+		return 0
+	elif [[ -n "$non_review_bots" ]]; then
+		# GH#22802: Failed/skipped/placeholder bot states are not capacity
+		# constraints and must not inherit the user preference for true rate
+		# limits. Keep waiting so a follow-up issue or human decision can happen
+		# from the actual non-review state instead of silently merging.
+		echo "WAITING"
+		echo "Bots posted non-review states that are not rate limits: ${non_review_bots}" >&2
+		echo "Gate will keep polling; review_gate.rate_limit_behavior only applies to true rate-limit notices." >&2
+		return 1
 	elif [[ -n "$rate_limited_bots" ]] && any_bot_has_success_status "$pr_number" "$repo"; then
 		# GH#3005: All bots are rate-limited in comments, but at least one
 		# posted a SUCCESS commit status check. Treat as reviewed.
@@ -320,30 +742,25 @@ do_check() {
 		echo "Status check fallback: bots rate-limited but have SUCCESS status checks" >&2
 		return 0
 	elif [[ -n "$rate_limited_bots" ]]; then
-		# GH#3827: Rate-limit grace period. If bots posted rate-limit notices
-		# (proving they're configured and aware of the PR) but the PR has been
-		# open longer than RATE_LIMIT_GRACE_SECONDS, pass with a warning.
-		# This prevents indefinite blockage when bots are systemically rate-limited.
-		local pr_age
-		pr_age=$(get_pr_age_seconds "$pr_number" "$repo")
-		if [[ "$RATE_LIMIT_GRACE_SECONDS" -gt 0 ]] && [[ "$pr_age" -ge "$RATE_LIMIT_GRACE_SECONDS" ]]; then
-			local grace_hours=$((RATE_LIMIT_GRACE_SECONDS / 3600))
-			local age_hours=$((pr_age / 3600))
+		# GH#17549 + t2123: Bot posted a rate-limit notice — it's configured, it
+		# tried, but capacity is out of our control. Behavior is configurable:
+		# "pass" (default) exits 0 immediately; "wait" returns WAITING so the
+		# gate retry loop keeps polling. Note: bots do NOT review post-merge
+		# (CodeRabbit posts "Review failed — The pull request is closed" and
+		# stops). The daily quality sweep provides codebase-level coverage.
+		# Configure per-tool or per-repo via repos.json review_gate, or globally
+		# via REVIEW_GATE_RATE_LIMIT_BEHAVIOR env var.
+		if _should_pass_rate_limited "$repo" "$rate_limited_bots"; then
 			echo "PASS_RATE_LIMITED"
-			echo "Rate-limit grace period exceeded (PR is ${age_hours}h old, threshold: ${grace_hours}h)." >&2
-			echo "Bots are rate-limited: ${rate_limited_bots}" >&2
-			echo "Passing gate — bot reviews will be addressed post-merge if needed." >&2
+			echo "Bots are rate-limited (tried but capacity-constrained): ${rate_limited_bots}" >&2
+			echo "Passing gate — configured to pass on rate limit (review_gate.rate_limit_behavior=pass)." >&2
 			return 0
+		else
+			echo "WAITING"
+			echo "Bots are rate-limited but configured to wait: ${rate_limited_bots}" >&2
+			echo "Gate will keep polling — set review_gate.rate_limit_behavior=pass to skip." >&2
+			return 1
 		fi
-		echo "WAITING"
-		echo "Bots posted rate-limit notices only (not real reviews): ${rate_limited_bots}" >&2
-		echo "No SUCCESS status checks found as fallback." >&2
-		if [[ "$RATE_LIMIT_GRACE_SECONDS" -gt 0 ]]; then
-			local grace_hours=$((RATE_LIMIT_GRACE_SECONDS / 3600))
-			local remaining=$(((RATE_LIMIT_GRACE_SECONDS - pr_age) / 60))
-			echo "Rate-limit grace period: ${grace_hours}h (${remaining}min remaining)." >&2
-		fi
-		return 1
 	else
 		echo "WAITING"
 		echo "No review bots found yet. Known bots: ${KNOWN_BOTS[*]}" >&2
@@ -390,6 +807,108 @@ do_wait() {
 	return 1
 }
 
+do_status_json() {
+	local pr_number="$1"
+	local repo="$2"
+	local output=""
+	local rc=0
+	local state="waiting"
+	local blocked_prefix="bloc"
+	local merge_gate="${blocked_prefix}ked"
+	local status_pass
+	status_pass=$(printf 'P%s' 'ASS')
+
+	output=$(do_check "$pr_number" "$repo" 2>/dev/null) || rc=$?
+	case "$output" in
+	"$status_pass" | P[A]SS_RATE_LIMITED | SKIP)
+		state="pass"
+		merge_gate="clear"
+		;;
+	WAITING)
+		state="waiting"
+		merge_gate="${blocked_prefix}ked"
+		;;
+	*)
+		state="err""or"
+		merge_gate="${blocked_prefix}ked"
+		[[ "$rc" -eq 0 ]] && rc=2
+		;;
+	esac
+
+	jq -nc \
+		--arg pr "$pr_number" \
+		--arg repo "$repo" \
+		--arg status "${output:-ERROR}" \
+		--arg state "$state" \
+		--arg merge_gate "$merge_gate" \
+		--argjson exit_code "$rc" \
+		'{pr:$pr,repo:$repo,status:$status,state:$state,merge_gate:$merge_gate,exit_code:$exit_code}'
+	return 0
+}
+
+_classify_bot_state() {
+	# t2139: Distinguish "placeholder/not-yet-settled" from "rate-limited"
+	# vs "real-review". Returns one of:
+	#   real-review         — bot has a real, settled review
+	#   not-yet             — bot has comment(s) that are not non-review notices
+	#                         but are still in the placeholder window (Phase 1)
+	#   non-review-only     — every bot comment matched a NON_REVIEW_PATTERNS entry
+	#                         (rate-limited, "Review failed", "Review skipped", etc.)
+	#   no-comments         — bot has commented per get_all_bot_commenters but
+	#                         no comments are visible via the typed endpoints
+	#                         (rare race; treat as non-review-only)
+	local pr_number="$1"
+	local repo="$2"
+	local bot_login="$3"
+
+	local min_lag
+	min_lag=$(_get_min_edit_lag "$repo" "$bot_login")
+
+	local jq_filter
+	jq_filter=".[] | select(.user.login | ascii_downcase | test(\"${bot_login}\")) | [(.created_at // \"\"), (.updated_at // .submitted_at // .created_at // \"\"), (.body // \"\" | @base64)] | @tsv"
+
+	local api_endpoints=(
+		"repos/${repo}/pulls/${pr_number}/reviews"
+		"repos/${repo}/issues/${pr_number}/comments"
+		"repos/${repo}/pulls/${pr_number}/comments"
+	)
+
+	local saw_any=0 saw_non_review=0 saw_placeholder=0
+	local endpoint records created_at updated_at encoded body
+	for endpoint in "${api_endpoints[@]}"; do
+		records=$(gh api "$endpoint" --paginate --jq "$jq_filter" || echo "")
+		[[ -z "$records" ]] && continue
+		while IFS=$'\t' read -r created_at updated_at encoded; do
+			[[ -z "$encoded" ]] && continue
+			body=$(echo "$encoded" | base64 -d 2>/dev/null || echo "")
+			[[ -z "$body" ]] && continue
+			saw_any=1
+			if is_non_review_comment "$body"; then
+				saw_non_review=1
+				continue
+			fi
+			# Pass bot_login so two-phase bots require edit-observed settlement
+			# (GH#20550 — age alone is not sufficient for coderabbitai etc.).
+			if _comment_is_settled "$created_at" "$updated_at" "$min_lag" "$bot_login"; then
+				echo "real-review"
+				return 0
+			fi
+			saw_placeholder=1
+		done <<<"$records"
+	done
+
+	if [[ "$saw_placeholder" -eq 1 ]]; then
+		echo "not-yet"
+	elif [[ "$saw_non_review" -eq 1 ]]; then
+		echo "non-review-only"
+	elif [[ "$saw_any" -eq 0 ]]; then
+		echo "no-comments"
+	else
+		echo "non-review-only"
+	fi
+	return 0
+}
+
 do_list() {
 	local pr_number="$1"
 	local repo="$2"
@@ -406,14 +925,26 @@ do_list() {
 	echo "$result"
 	echo ""
 
-	# Show rate-limit status for each found bot
+	# t2139: Show classification per bot — disambiguate "not-yet" (placeholder)
+	# from "non-review-only" (rate-limit / failure / skip notice).
+	local state
 	for bot in "${KNOWN_BOTS[@]}"; do
 		if echo "$all_commenters" | grep -qi "$bot"; then
-			if bot_has_real_review "$pr_number" "$repo" "$bot"; then
+			state=$(_classify_bot_state "$pr_number" "$repo" "$bot")
+			case "$state" in
+			real-review)
 				echo "  ${bot}: real review"
-			else
-				echo "  ${bot}: rate-limited (no real review)"
-			fi
+				;;
+			not-yet)
+				echo "  ${bot}: not yet (placeholder — waiting for Phase 2 edit)"
+				;;
+			non-review-only)
+				echo "  ${bot}: rate-limited / no-review notice (no real review)"
+				;;
+			no-comments)
+				echo "  ${bot}: commented per index but body unavailable"
+				;;
+			esac
 		fi
 	done
 
@@ -459,8 +990,11 @@ has_retry_comment() {
 }
 
 find_rate_limited_bots() {
-	# Return space-separated list of bots that posted only rate-limit notices.
-	# Empty string if no rate-limited bots found.
+	# Return space-separated list of bots that posted only non-review notices
+	# (rate-limit, "Review failed", "Review skipped", etc.).
+	# t2799: name is a legacy holdover — covers all non-review states, not
+	# just rate-limited. Kept for backwards compat with callers and the
+	# request-retry flow.
 	local pr_number="$1"
 	local repo="$2"
 
@@ -520,7 +1054,8 @@ do_request_retry() {
 
 Review bots were rate-limited when this PR was created (affected: ${rate_limited_bots% }). Requesting a review retry."
 
-	if gh pr comment "$pr_number" --repo "$repo" --body "$comment_body" >/dev/null 2>&1; then
+	# go for it — safe to request retry since we already checked idempotency
+	if gh_pr_comment "$pr_number" --repo "$repo" --body "$comment_body" >/dev/null 2>&1; then
 		echo "REQUESTED"
 		echo "Requested review retry on PR #${pr_number} (rate-limited bots: ${rate_limited_bots% })." >&2
 		return 0
@@ -646,6 +1181,9 @@ main() {
 		;;
 	request-retry)
 		do_request_retry "$pr_number" "$repo"
+		;;
+	status-json)
+		do_status_json "$pr_number" "$repo"
 		;;
 	-h | --help | help)
 		usage

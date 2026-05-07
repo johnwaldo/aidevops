@@ -8,21 +8,24 @@ tools:
   bash: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Stealth Patches (Chromium/Playwright)
 
-Remove automation detection signals from Playwright/Chromium. Primary: `rebrowser-patches` (MIT). Lightweight alternative: `playwright-stealth`.
+Remove Playwright/Chromium automation signals. Primary: `rebrowser-patches` (MIT). Lightweight fallback: `playwright-stealth`.
 
-## Tool Selection
+## Choose the Tool First
 
-| Tool | Approach | Stealth | Best For |
+| Tool | Approach | Stealth | Use When |
 |------|----------|---------|----------|
-| **rebrowser-patches** | Patches Playwright source | High | Production, Cloudflare/DataDome |
+| **rebrowser-patches** | Patches Playwright source | High | Production Chromium, Cloudflare/DataDome, existing Playwright code |
 | **playwright-stealth** | Runtime JS evasions | Medium | Quick Python scripts, basic evasion |
-| **Manual args** | Chrome flags only | Low | Dev testing |
+| **Manual args** | Chrome flags only | Low | Dev testing only |
 
 ## rebrowser-patches
 
-Fixes: `Runtime.enable` CDP leak, `navigator.webdriver`, CDP artifacts, headless indicators, `//# sourceURL=` leaks.
+Patches `Runtime.enable` CDP leaks, `navigator.webdriver`, other CDP artifacts, headless indicators, and `//# sourceURL=` leaks.
 
 ```bash
 npx rebrowser-patches@latest patch        # Patch existing Playwright
@@ -31,21 +34,11 @@ pip install rebrowser-playwright          # Drop-in replacement (Python)
 npx rebrowser-patches@latest unpatch     # Restore original
 ```
 
-**Node.js:**
-
 ```javascript
 import { chromium } from 'rebrowser-playwright';  // or 'playwright' after patching
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--disable-blink-features=AutomationControlled'],
-});
-const context = await browser.newContext({
-  viewport: { width: 1920, height: 1080 },
-  userAgent: '<realistic UA string>',
-});
+const browser = await chromium.launch({ headless: true, args: ['--disable-blink-features=AutomationControlled'] });
+const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, userAgent: '<realistic UA string>' });
 ```
-
-**Python:**
 
 ```python
 from rebrowser_playwright.sync_api import sync_playwright  # or playwright after patching
@@ -54,7 +47,7 @@ with sync_playwright() as p:
     context = browser.new_context(viewport={'width': 1920, 'height': 1080}, user_agent='<realistic UA string>')
 ```
 
-## playwright-stealth (Python)
+## playwright-stealth
 
 JS-level evasions: `navigator.webdriver`, plugins, languages, `chrome.runtime`, `window.chrome`, Permissions API, iframe detection, WebGL, `hardwareConcurrency`.
 
@@ -71,18 +64,12 @@ with sync_playwright() as p:
 
 ## Manual Stealth Args
 
-Minimal evasion via Chrome flags (no patching required):
+Chrome flags only; useful for dev checks, not serious anti-bot bypass.
 
 ```javascript
 const browser = await chromium.launch({
   headless: true,
-  args: [
-    '--disable-blink-features=AutomationControlled',
-    '--disable-infobars',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-component-extensions-with-background-pages',
-  ],
+  args: ['--disable-blink-features=AutomationControlled', '--disable-infobars', '--no-first-run', '--no-default-browser-check', '--disable-component-extensions-with-background-pages'],
   ignoreDefaultArgs: ['--enable-automation'],
 });
 ```
@@ -99,11 +86,11 @@ import { createStealthContext } from '~/.aidevops/agents/scripts/stealth-context
 const { browser, context, page } = await createStealthContext({
   headless: true,
   proxy: { server: 'socks5://127.0.0.1:1080' },  // optional
-  profile: 'my-profile',                           // optional: saved state
+  profile: 'my-profile',  // optional: saved state
 });
 ```
 
-## Detection Test Sites
+## Test Against Detection Sites
 
 | Site | URL |
 |------|-----|
@@ -116,10 +103,10 @@ const { browser, context, page } = await createStealthContext({
 
 ## Limitations
 
-- **rebrowser-patches**: Chromium only; re-patch after Playwright updates
-- **playwright-stealth**: JS-level only; detectable by sophisticated anti-bots
-- **Neither** handles fingerprint rotation, WebRTC/font spoofing
-- **Full anti-detect**: Use Camoufox (`fingerprint-profiles.md`) -- C++ level fingerprint spoofing, Firefox-based, `pip upgrade` maintenance
+- **rebrowser-patches**: Chromium only; re-patch after Playwright updates.
+- **playwright-stealth**: JS-level only; sophisticated anti-bots still detect it.
+- **Neither** handles fingerprint rotation or WebRTC/font spoofing.
+- **Full anti-detect**: use Camoufox (`fingerprint-profiles.md`) for C++-level fingerprint spoofing on Firefox; requires `pip upgrade` maintenance.
 
 | Aspect | rebrowser-patches | Camoufox |
 |--------|------------------|----------|

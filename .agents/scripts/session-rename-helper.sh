@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # session-rename-helper.sh - Rename OpenCode sessions via SQLite database
 # Part of aidevops framework: https://aidevops.sh
 #
@@ -29,6 +31,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+# shellcheck source=/dev/null
 source "${SCRIPT_DIR}/shared-constants.sh"
 
 # =============================================================================
@@ -68,6 +71,56 @@ _require_sqlite3() {
 	return 0
 }
 
+# Escape a string for SQL single-quoted literals.
+# Arguments:
+#   $1 - raw string
+# Output: escaped string on stdout
+_sql_escape() {
+	local raw_value="$1"
+	printf '%s' "$raw_value" | sed "s/'/''/g"
+	return 0
+}
+
+# Resolve sync target session ID.
+# Priority:
+#   1) explicit session ID argument
+#   2) most recent session whose directory matches $PWD
+#   3) most recent session globally
+# Arguments:
+#   $1 - sqlite database path
+#   $2 - optional explicit session ID
+# Output: session ID on stdout
+# Returns: 0 on success, 1 when no session found
+_resolve_sync_session_id() {
+	local db_path="$1"
+	local explicit_session_id="${2:-}"
+
+	if [[ -n "$explicit_session_id" ]]; then
+		printf '%s' "$explicit_session_id"
+		return 0
+	fi
+
+	local cwd_escaped
+	cwd_escaped="$(_sql_escape "$PWD")"
+
+	local session_id
+	session_id="$(sqlite3 "$db_path" \
+		"SELECT id FROM session WHERE directory = '${cwd_escaped}' ORDER BY time_updated DESC LIMIT 1;" 2>/dev/null || echo "")"
+
+	if [[ -z "$session_id" ]]; then
+		session_id="$(sqlite3 "$db_path" \
+			"SELECT id FROM session ORDER BY time_updated DESC LIMIT 1;" 2>/dev/null || echo "")"
+	fi
+
+	if [[ -z "$session_id" ]]; then
+		print_error "No sessions found in database"
+		return 1
+	fi
+
+	printf '%s' "$session_id"
+	return 0
+}
+
 # =============================================================================
 # Commands
 # =============================================================================
@@ -101,9 +154,13 @@ cmd_rename() {
 	local now_ms
 	now_ms="$(date +%s)000"
 
+	local escaped_title escaped_session_id
+	escaped_title="$(_sql_escape "$new_title")"
+	escaped_session_id="$(_sql_escape "$session_id")"
+
 	local changes
 	changes="$(sqlite3 "$db_path" \
-		"UPDATE session SET title = '$(printf '%s' "$new_title" | sed "s/'/''/g")', time_updated = ${now_ms} WHERE id = '$(printf '%s' "$session_id" | sed "s/'/''/g")'; SELECT changes();")"
+		"UPDATE session SET title = '${escaped_title}', time_updated = ${now_ms} WHERE id = '${escaped_session_id}'; SELECT changes();")"
 
 	if [[ "$changes" -eq 0 ]]; then
 		print_error "Session not found: ${session_id}"
@@ -115,10 +172,55 @@ cmd_rename() {
 	return 0
 }
 
-# Rename the most recent (or specified) session to match the current git branch.
+# Check whether a branch name is a meaningful session title.
+# Default branches (main/master/HEAD) are NOT meaningful — they represent the
+# absence of a feature branch and should never clobber a session title. This
+# matters because pre-edit-check.sh triggers sync-branch on every edit, and
+# interactive sessions in canonical repo directories stay on main (t1990).
+# Without this guard, planning-only sessions end up titled "main" forever.
 # Arguments:
-#   $1 - session ID (optional; defaults to most recent session)
-# Returns: 0 on success, 1 on failure
+#   $1 - branch name
+# Returns: 0 if branch is meaningful (rename allowed), 1 otherwise
+_is_meaningful_branch_title() {
+	local branch="$1"
+	case "$branch" in
+	"" | HEAD | main | master) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+# Check whether the current session title is safe to overwrite.
+# A title is overwritable when it is empty, the default "New Session", or
+# itself one of the default branch names (main/master/HEAD). A meaningful
+# custom title — anything else, including feature branch names or
+# LLM-generated summaries — is preserved.
+# Arguments:
+#   $1 - sqlite database path
+#   $2 - session ID
+# Returns: 0 if safe to overwrite, 1 if a meaningful title already exists
+_is_title_overwritable() {
+	local db_path="$1"
+	local session_id="$2"
+
+	local escaped_session_id
+	escaped_session_id="$(_sql_escape "$session_id")"
+
+	local current_title
+	current_title="$(sqlite3 "$db_path" \
+		"SELECT COALESCE(title, '') FROM session WHERE id = '${escaped_session_id}';" 2>/dev/null || echo "")"
+
+	case "$current_title" in
+	"" | "New Session" | HEAD | main | master) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# Rename the most relevant (or specified) session to match the current git branch.
+# Skips default branch names (main/master/HEAD) and preserves meaningful
+# existing titles to avoid the "session title stuck as main" bug (t2039).
+# Arguments:
+#   $1 - session ID (optional; defaults to current-directory session)
+# Returns: 0 on success or skip, 1 on failure
 cmd_sync_branch() {
 	local session_id="${1:-}"
 
@@ -127,15 +229,8 @@ cmd_sync_branch() {
 	local db_path
 	db_path="$(_get_db_path)" || return 1
 
-	# Resolve session ID if not provided
-	if [[ -z "$session_id" ]]; then
-		session_id="$(sqlite3 "$db_path" \
-			"SELECT id FROM session ORDER BY time_updated DESC LIMIT 1;" 2>/dev/null || echo "")"
-		if [[ -z "$session_id" ]]; then
-			print_error "No sessions found in database"
-			return 1
-		fi
-	fi
+	# Resolve session ID (explicit argument, then cwd match, then global fallback)
+	session_id="$(_resolve_sync_session_id "$db_path" "$session_id")" || return 1
 
 	# Get current git branch
 	local branch
@@ -147,6 +242,21 @@ cmd_sync_branch() {
 	if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
 		print_error "No branch checked out (detached HEAD state)"
 		return 1
+	fi
+
+	# Guard 1: never write default branch names as session titles.
+	# Returns 0 (success) so pre-edit-check.sh's best-effort trigger stays quiet.
+	if ! _is_meaningful_branch_title "$branch"; then
+		print_info "Skipping session rename: '${branch}' is not a meaningful title"
+		return 0
+	fi
+
+	# Guard 2: do not clobber a meaningful existing title.
+	# A user-set title or a feature-branch title should survive later syncs
+	# that happen from the canonical main directory.
+	if ! _is_title_overwritable "$db_path" "$session_id"; then
+		print_info "Skipping session rename: session already has a meaningful title"
+		return 0
 	fi
 
 	cmd_rename "$session_id" "$branch"

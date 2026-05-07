@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # opus-review-helper.sh — Cadence control for opus strategic review (t1340)
 #
 # The supervisor pulse runs every 2 minutes at sonnet tier for mechanical
@@ -38,10 +40,9 @@ STATE_FILE="${STATE_DIR}/.opus-review-last"
 # COLOURS
 # ============================================================
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=shared-constants.sh
+[[ -f "${SCRIPT_DIR}/shared-constants.sh" ]] && source "${SCRIPT_DIR}/shared-constants.sh"
 
 # ============================================================
 # FUNCTIONS

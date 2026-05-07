@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # routine-helper.sh - Plan and install scheduled non-code routine runs
 
 set -euo pipefail
@@ -17,8 +19,17 @@ routine-helper.sh - Plan and install scheduled opencode routines
 
 Usage:
   routine-helper.sh plan --name NAME --schedule "CRON" --dir PATH --prompt "..." [options]
+  routine-helper.sh install --name NAME --schedule "CRON" --dir PATH --prompt "..." [options]
   routine-helper.sh install-launchd --name NAME --schedule "CRON" --dir PATH --prompt "..." [options]
   routine-helper.sh install-cron --name NAME --schedule "CRON" --dir PATH --prompt "..." [options]
+  routine-helper.sh install-systemd --name NAME --schedule "CRON" --dir PATH --prompt "..." [options]
+
+Subcommands:
+  plan              Show what would be installed (dry run)
+  install           Auto-detect scheduler (launchd/systemd/cron) and install
+  install-launchd   Install as macOS launchd agent
+  install-cron      Install as cron entry
+  install-systemd   Install as systemd user timer (Linux)
 
 Options:
   --name NAME       Routine name (used in labels/markers)
@@ -35,6 +46,10 @@ Examples:
     --title "Weekly rankings" --prompt "/seo-export --account client-a --format summary"
 
   routine-helper.sh install-cron --name seo-weekly --schedule "0 9 * * 1" \
+    --dir ~/Git/aidev-ops-client-seo-reports --agent SEO \
+    --title "Weekly rankings" --prompt "/seo-export --account client-a --format summary"
+
+  routine-helper.sh install-systemd --name seo-weekly --schedule "0 9 * * 1" \
     --dir ~/Git/aidev-ops-client-seo-reports --agent SEO \
     --title "Weekly rankings" --prompt "/seo-export --account client-a --format summary"
 EOF
@@ -182,6 +197,46 @@ parse_cron_to_launchd_xml() {
 	fi
 	printf '    </dict>\n'
 	printf '  </array>\n'
+	return 0
+}
+
+parse_cron_to_oncalendar() {
+	local schedule="$1"
+	local minute=""
+	local hour=""
+	local day_of_month=""
+	local month=""
+	local weekday=""
+
+	read -r minute hour day_of_month month weekday <<<"$schedule"
+
+	local value
+	for value in "$minute" "$hour" "$day_of_month" "$month" "$weekday"; do
+		if [[ "$value" != "*" && ! "$value" =~ ^[0-9]+$ ]]; then
+			die "systemd install supports only '*' or numeric cron fields"
+			return 1
+		fi
+	done
+
+	local dow_map=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat" "Sun")
+	local cal_dow="*"
+	if [[ "$weekday" != "*" ]]; then
+		cal_dow="${dow_map[$weekday]}"
+	fi
+
+	local cal_month="*"
+	[[ "$month" != "*" ]] && cal_month=$(printf '%02d' "$month")
+
+	local cal_day="*"
+	[[ "$day_of_month" != "*" ]] && cal_day=$(printf '%02d' "$day_of_month")
+
+	local cal_hour="*"
+	[[ "$hour" != "*" ]] && cal_hour=$(printf '%02d' "$hour")
+
+	local cal_min="00"
+	[[ "$minute" != "*" ]] && cal_min=$(printf '%02d' "$minute")
+
+	printf '%s *-%s-%s %s:%s:00' "$cal_dow" "$cal_month" "$cal_day" "$cal_hour" "$cal_min"
 	return 0
 }
 
@@ -336,7 +391,7 @@ cmd_install_launchd() {
 	local home_escaped
 	home_escaped=$(xml_escape "$HOME")
 	local env_path_escaped
-	env_path_escaped=$(xml_escape "/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:${PATH}")
+	env_path_escaped=$(xml_escape "$(aidevops_launchd_sanitized_path "/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin:${PATH}")")
 	local log_path_escaped
 	log_path_escaped=$(xml_escape "${HOME}/.aidevops/logs/routine-${ROUTINE_NAME}.log")
 
@@ -379,7 +434,68 @@ EOF
 
 	printf '[OK] Wrote launchd plist: %s\n' "$plist_path"
 	printf '[INFO] launchd schedule mapped from cron: %s\n' "$ROUTINE_SCHEDULE"
+	# shell-portability: ignore next — launchctl is in a string (printf format), not a command
 	printf '[INFO] Then load with: launchctl load %s\n' "$plist_path"
+	return 0
+}
+
+cmd_install_systemd() {
+	parse_common_args "$@" || {
+		local rc=$?
+		[[ $rc -eq 2 ]] && return 0
+		return 1
+	}
+
+	local command
+	command=$(build_opencode_command "$ROUTINE_DIR" "$ROUTINE_PROMPT" "$ROUTINE_AGENT" "$ROUTINE_TITLE" "$ROUTINE_MODEL")
+
+	local on_calendar
+	on_calendar=$(parse_cron_to_oncalendar "$ROUTINE_SCHEDULE") || return 1
+
+	local service_name="sh.aidevops.routine-${ROUTINE_NAME}"
+	local service_dir="$HOME/.config/systemd/user"
+	local service_file="${service_dir}/${service_name}.service"
+	local timer_file="${service_dir}/${service_name}.timer"
+	local log_file="$HOME/.aidevops/logs/routine-${ROUTINE_NAME}.log"
+
+	mkdir -p "$service_dir" "$HOME/.aidevops/logs"
+
+	cat >"$service_file" <<EOF
+[Unit]
+Description=aidevops routine ${ROUTINE_NAME}
+After=network.target
+
+[Service]
+Type=oneshot
+KillMode=process
+ExecStart=/bin/bash -lc $(printf '%q' "$command")
+Environment=HOME=${HOME}
+Environment=PATH=${PATH}
+StandardOutput=append:${log_file}
+StandardError=append:${log_file}
+EOF
+
+	cat >"$timer_file" <<EOF
+[Unit]
+Description=aidevops routine ${ROUTINE_NAME} Timer
+
+[Timer]
+OnCalendar=${on_calendar}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+	systemctl --user daemon-reload 2>/dev/null || true
+	if systemctl --user enable --now "${service_name}.timer" 2>/dev/null; then
+		printf '[OK] Installed systemd timer: %s\n' "$service_name"
+		printf '[INFO] OnCalendar=%s (from cron: %s)\n' "$on_calendar" "$ROUTINE_SCHEDULE"
+	else
+		printf '[OK] Wrote systemd units: %s\n' "$service_file"
+		printf '[INFO] OnCalendar=%s (from cron: %s)\n' "$on_calendar" "$ROUTINE_SCHEDULE"
+		printf '[INFO] Enable with: systemctl --user enable --now %s.timer\n' "$service_name"
+	fi
 	return 0
 }
 
@@ -398,6 +514,21 @@ main() {
 		;;
 	install-launchd)
 		cmd_install_launchd "$@"
+		return $?
+		;;
+	install-systemd)
+		cmd_install_systemd "$@"
+		return $?
+		;;
+	install)
+		# shellcheck source=platform-detect.sh
+		# shellcheck disable=SC1091
+		source "${SCRIPT_DIR}/platform-detect.sh" 2>/dev/null || true
+		case "${AIDEVOPS_SCHEDULER:-cron}" in
+		launchd) cmd_install_launchd "$@" ;;
+		systemd) cmd_install_systemd "$@" ;;
+		*) cmd_install_cron "$@" ;;
+		esac
 		return $?
 		;;
 	help | --help | -h)

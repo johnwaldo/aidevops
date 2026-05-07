@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # content-scanner-helper.sh — Runtime content scanning for untrusted input (t1412.4)
 #
 # Wraps prompt-guard-helper.sh with three performance/security layers adopted
@@ -231,6 +233,8 @@ _cs_normalize_nfkc() {
 	fi
 
 	if [[ "$CONTENT_SCANNER_SKIP_NORMALIZE" == "true" ]]; then
+		# Log to stderr so the bypass is auditable without corrupting stdout output
+		printf '[content-scanner][INFO] CONTENT_SCANNER_SKIP_NORMALIZE=true — skipping NFKC normalization (reduces injection evasion resistance) (GH#20146 audit)\n' >&2
 		if [[ "$has_input_arg" == "true" ]]; then
 			printf '%s%s' "$input_content" "$_CS_NORMALIZE_SENTINEL"
 		else

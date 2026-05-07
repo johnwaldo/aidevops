@@ -19,40 +19,23 @@ tools:
   task: false
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Composer 2 Tier Model (Frontier Coding)
 
-You are a frontier-level AI coding assistant powered by Cursor Composer 2. This tier is optimised for complex, multi-file code implementation where coding quality and accuracy matter more than cost.
+Cursor Composer 2 for complex coding tasks where implementation quality matters more than cost.
+Context: 200K tokens. Cost: $0.50/1M input, $2.50/1M output. Requires Cursor OAuth pool (t1549).
 
-## Capabilities
+## Best Fit
 
-- Complex multi-file feature implementation
-- Large-scale refactors with deep understanding of existing code patterns
-- High-quality code generation that reduces review cycles
-- Frontier-level reasoning about code architecture and patterns
-- Test writing for complex modules
+- Multi-file features spanning 5+ files
+- Large refactors across existing patterns or subsystems
+- Code generation where correctness reduces review cost
+- Complex test writing for non-trivial modules
 
-## When to Use This Tier
+## Avoid When
 
-- Implementing features that span 5+ files
-- Refactoring entire subsystems (e.g., migrating a data layer, replacing an auth system)
-- Code generation tasks where correctness is critical and review cost is high
-- Projects where the Cursor OAuth pool (t1549) is configured
-
-## Constraints
-
-- Requires Cursor OAuth pool configured via `oauth-pool.mjs` (t1549). Falls back to `sonnet` if no Cursor account is available.
-- For simple single-file changes, use `sonnet` instead (lower cost, sufficient quality)
-- For architecture decisions or novel design problems, use `opus` instead
-- For large-context analysis (>100K tokens), use `pro` instead
-
-## Model Details
-
-| Field | Value |
-|-------|-------|
-| Provider | Cursor |
-| Model | composer-2 |
-| Context | 200K tokens |
-| Input cost | $0.50/1M tokens |
-| Output cost | $2.50/1M tokens |
-| Tier | composer2 (frontier coding) |
-| Requires | Cursor OAuth pool (t1549) |
+- Simple or single-file change — use `sonnet`
+- Primarily architecture or novel design — use `opus`
+- Primarily large-context analysis (>100K tokens) — use `pro`

@@ -11,6 +11,9 @@ tools:
   webfetch: false
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Documentation AI Context
 
 <!-- AI-CONTEXT-START -->
@@ -18,20 +21,18 @@ tools:
 ## Quick Reference
 
 - **Location**: `.agents/*.md` (lowercase filenames)
-- **Service guides**: hostinger.md, hetzner.md, coolify.md, mainwp.md, etc.
-- **Structure**: Overview, Configuration, Usage, Security, Troubleshooting, MCP Integration
-- **AI Context blocks**: `<!-- AI-CONTEXT-START -->` for quick reference
-- **Cross-service workflows**: Domain -> DNS -> Hosting, Dev -> Quality -> Deploy
-- **Best practices**: recommendations-opinionated.md for provider selection
-- **Setup guides**: *-setup.md for complex integrations
+- **Discovery**: `git ls-files '.agents/*.md'` — never hardcode guide lists
+- **Guide shape**: Overview → Configuration → Usage → Security → Troubleshooting → MCP/AI integration
+- **Quick-load block**: `<!-- AI-CONTEXT-START -->` for stable high-signal context
 - **Config templates**: `configs/[service]-config.json.txt`
-- **Discovery**: Use `git ls-files '.agents/*.md'` — not hardcoded lists
+- **Setup docs**: `*-setup.md` for multi-step integrations
+- **Provider guidance**: `recommendations-opinionated.md`
+- **Cross-service flows**: Domain → DNS → Hosting; Dev → Quality → Deploy
+- **Priority**: service guide → framework context → best-practices guide → setup guide → Context7 MCP for latest external docs
 
 <!-- AI-CONTEXT-END -->
 
-## Service Guides
-
-Discover with `git ls-files '.agents/*.md'`. Key categories:
+## Service Guide Categories
 
 | Category | Guides |
 |----------|--------|
@@ -45,67 +46,8 @@ Discover with `git ls-files '.agents/*.md'`. Key categories:
 
 ## Standard Guide Structure
 
-Each service guide follows this format:
+Sections in order: `# [Service Name] Guide` → `## Provider Overview` (type, strengths, API, use cases) → `## Configuration` → `## Usage Examples` → `## Security Best Practices` → `## Troubleshooting` → `## MCP Integration` / `## AI Assistant Integration` (when relevant) → `## Best Practices`
 
-```markdown
-# [Service Name] Guide
+## Standards & Maintenance
 
-## Provider Overview
-- Service type, strengths, API support, use cases
-
-## Configuration
-## Usage Examples
-## Security Best Practices
-## Troubleshooting
-## MCP Integration (if applicable)
-## Best Practices
-## AI Assistant Integration
-```
-
-## Documentation Standards
-
-**Content**: Complete feature coverage, real working examples, security considerations, troubleshooting, AI integration patterns.
-
-**Writing**: Clear technical language, consistent formatting, syntax-highlighted code, visual hierarchy with headers, cross-references to related guides.
-
-**Technical**: Accurate command syntax, current API info, working sanitized config examples, version-aware where applicable.
-
-## Maintenance
-
-- Update on service API changes, new features, security advisories
-- Verify all commands and examples work
-- Keep structure consistent across guides
-- Evolve best practices from experience
-
-## Cross-Service Workflows
-
-Common integration patterns:
-
-**Domain -> DNS -> Hosting:**
-- Domain purchasing (Spaceship/101domains) -> DNS (Cloudflare/Route53) -> Hosting (Hetzner/Hostinger)
-
-**Development -> Quality -> Deployment:**
-- Git platforms (GitHub/GitLab) -> Code auditing (CodeRabbit/SonarCloud) -> Deployment (Coolify/hosting)
-
-**Security -> Credentials -> Monitoring:**
-- Vaultwarden (credentials) -> Email monitoring (SES) -> Security auditing
-
-Each service guide includes integration examples, workflow patterns, cross-service dependencies, and combined operation examples.
-
-## Finding Information
-
-```bash
-# Service-specific information
-.agents/[service-name].md
-
-# Framework overview
-.agents/AGENTS.md
-
-# Provider selection guidance
-.agents/recommendations.md
-
-# Setup procedures
-.agents/[service]-setup.md
-```
-
-**Navigation priority**: Service guide (primary) -> Framework context (AGENTS.md) -> Best practices guide -> Setup guides -> Context7 MCP (latest external docs).
+Cover core features, working examples, security concerns, troubleshooting, and AI integration patterns. Use clear technical language, consistent formatting, syntax-highlighted code, and cross-references. Keep commands accurate, examples sanitized, API details current (version notes when they matter). Update on API changes, new features, and security advisories.

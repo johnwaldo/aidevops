@@ -12,18 +12,24 @@ tools:
   task: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Agent Browser - Headless Browser Automation CLI
 
 <!-- AI-CONTEXT-START -->
 
 ## Quick Reference
 
-- **Install**: `npm install -g agent-browser && agent-browser install`
-- **Architecture**: Rust CLI + Node.js fallback, Playwright daemon (auto-starts, persists)
+- **Install**: `npm install -g agent-browser && agent-browser install` (Linux: `--with-deps`; iOS: `npm install -g appium && appium driver install xcuitest`)
+- **Source**: `git clone https://github.com/vercel-labs/agent-browser && pnpm install && pnpm build && agent-browser install`
 - **GitHub**: https://github.com/vercel-labs/agent-browser
+- **Architecture**: Rust CLI + Node.js fallback, Playwright daemon (auto-starts, persists)
 - **Limitations**: No proxy, no extensions, no Chrome DevTools MCP pairing
 - **Performance** (warm): navigate+screenshot 1.9s, form fill 1.4s, reliability 0.6s. Cold-start ~3-5s.
 - **iOS** (macOS only): `-p ios --device "iPhone 16 Pro"` — Mobile Safari via Appium
+- **License**: Apache-2.0 | TypeScript (74%), Rust (22%)
+- **Platform**: macOS/Linux ARM64+x64 (native Rust + Node.js fallback); Windows (Node.js only); iOS (macOS only)
 
 **Core workflow** — use refs from `snapshot -i` for deterministic targeting:
 
@@ -40,36 +46,24 @@ agent-browser screenshot page.png && agent-browser close
 
 <!-- AI-CONTEXT-END -->
 
-## Installation
-
-```bash
-npm install -g agent-browser && agent-browser install   # standard
-agent-browser install --with-deps                       # Linux: system deps
-# From source: git clone https://github.com/vercel-labs/agent-browser && cd agent-browser && pnpm install && pnpm build && agent-browser install
-# iOS Simulator: npm install -g appium && appium driver install xcuitest
-```
-
 ## Core Commands
 
 ```bash
-# Navigation
+# Navigate
 agent-browser open <url> | back | forward | reload
-
-# Interaction
-agent-browser click <sel>             # Click element
-agent-browser fill <sel> <text>       # Clear and fill
-agent-browser type <sel> <text>       # Type (no clear)
+# Interact
+agent-browser click <sel>
+agent-browser fill <sel> <text>       # clear+fill
+agent-browser type <sel> <text>       # type without clear
 agent-browser press <key>             # Enter, Tab, Control+a, etc.
-agent-browser select <sel> <val>      # Dropdown
-agent-browser check/uncheck <sel>     # Checkbox
+agent-browser select <sel> <val>      # dropdown
+agent-browser check/uncheck <sel>
 agent-browser scroll <dir> [px]       # up/down/left/right
 agent-browser drag <src> <tgt> | upload <sel> <files> | hover <sel>
-
 # Read
 agent-browser get text/html/value/title/url <sel>
 agent-browser get attr <sel> <attr> | get count/box <sel>
 agent-browser is visible/enabled/checked <sel>
-
 # Output
 agent-browser screenshot [path] [--full] | pdf <path> | eval <js> | close
 ```
@@ -86,19 +80,14 @@ agent-browser find label "Email" fill "test@test.com"
 agent-browser find first ".item" click | find nth 2 "a" text
 ```
 
-## Sessions
+## Sessions, Wait, Storage, Network
 
-Each session has isolated browser instance, cookies, storage, history, and auth state. Parallel: `--session s1/s2/s3` (3 parallel tested in 2.0s).
+Isolated browser per session (cookies, storage, history, auth). Parallel sessions: `--session s1/s2/s3` (3 parallel tested in 2.0s).
 
 ```bash
-agent-browser --session agent1 open site-a.com
-AGENT_BROWSER_SESSION=agent1 agent-browser click "#btn"
+agent-browser --session agent1 open site-a.com         # named session
+AGENT_BROWSER_SESSION=agent1 agent-browser click "#btn" # env var
 agent-browser session list
-```
-
-## Wait, Cookies, Storage, Network
-
-```bash
 agent-browser wait <selector> | <ms> | --text "Welcome" | --url "**/dash" | --load networkidle
 agent-browser wait --fn "window.ready === true"
 agent-browser cookies | cookies set <name> <val> | cookies clear
@@ -122,11 +111,9 @@ agent-browser trace start/stop [path] | console [--clear] | errors [--clear]
 agent-browser highlight <sel> | state save/load <path>
 ```
 
-## iOS Simulator
+## iOS Simulator (macOS only)
 
-- **Env vars**: `AGENT_BROWSER_PROVIDER=ios`, `AGENT_BROWSER_IOS_DEVICE="iPhone 16 Pro"`, `AGENT_BROWSER_IOS_UDID=<udid>`
-- **First launch**: ~30-60s to boot simulator; subsequent commands are fast
-- **Real device**: UDID via `xcrun xctrace list devices`, sign WebDriverAgent in Xcode (free Apple Developer account)
+Env vars: `AGENT_BROWSER_PROVIDER=ios`, `AGENT_BROWSER_IOS_DEVICE="iPhone 16 Pro"`, `AGENT_BROWSER_IOS_UDID=<udid>`. First launch ~30-60s (simulator boot). Real device: UDID via `xcrun xctrace list devices`, sign WebDriverAgent in Xcode.
 
 ```bash
 agent-browser device list
@@ -134,14 +121,6 @@ agent-browser -p ios --device "iPhone 16 Pro" open https://example.com
 agent-browser -p ios snapshot -i | tap @e1 | swipe up/down/left/right [px]
 agent-browser -p ios screenshot mobile.png | close
 ```
-
-## Platform Support
-
-| Platform | Binary | Fallback | iOS |
-|----------|--------|----------|-----|
-| macOS ARM64/x64 | Native Rust | Node.js | Yes |
-| Linux ARM64/x64 | Native Rust | Node.js | No |
-| Windows | — | Node.js | No |
 
 ## Comparison
 
@@ -156,16 +135,15 @@ agent-browser -p ios screenshot mobile.png | close
 ## Common Patterns
 
 ```bash
-# Login flow
+# Login — fill, submit, save auth state
 agent-browser open https://app.example.com/login && agent-browser snapshot -i
 agent-browser fill @e3 "user@example.com" && agent-browser fill @e4 "password"
 agent-browser click @e5 && agent-browser wait --url "**/dashboard" && agent-browser state save auth.json
 
-# Form submission
+# Form — fill, select, check, submit
 agent-browser open https://example.com/form && agent-browser snapshot -i
 agent-browser fill @e1 "John Doe" && agent-browser fill @e2 "john@example.com"
-agent-browser select @e3 "US" && agent-browser check @e4
-agent-browser click @e5 && agent-browser wait --text "Success"
+agent-browser select @e3 "US" && agent-browser check @e4 && agent-browser click @e5 && agent-browser wait --text "Success"
 
 # Data extraction
 agent-browser open https://example.com/products && agent-browser snapshot --json > products.json
@@ -174,8 +152,3 @@ agent-browser open https://example.com/products && agent-browser snapshot --json
 agent-browser --session s1 open https://site-a.com && agent-browser --session s1 state load auth-a.json
 agent-browser --session s2 open https://site-b.com && agent-browser --session s2 state load auth-b.json
 ```
-
-## Resources
-
-- **GitHub**: https://github.com/vercel-labs/agent-browser
-- **License**: Apache-2.0 | **Languages**: TypeScript (74%), Rust (22%)

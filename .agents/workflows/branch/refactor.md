@@ -3,16 +3,13 @@ description: Refactor branch - code restructure, same behavior
 mode: subagent
 tools:
   read: true
-  write: true
-  edit: true
-  bash: true
-  glob: true
   grep: true
 ---
 
-# Refactor Branch
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
-<!-- AI-CONTEXT-START -->
+# Refactor Branch
 
 | Aspect | Value |
 |--------|-------|
@@ -26,67 +23,37 @@ git checkout main && git pull origin main
 git checkout -b refactor/{description}
 ```
 
-<!-- AI-CONTEXT-END -->
-
 ## When to Use
 
 - Code restructuring without behavior change
-- Extracting reusable components
-- Improving code organization
-- Reducing technical debt
+- Extracting reusable components, reducing technical debt
 - Performance improvements (same behavior, faster)
 
-**Not for**: Bug fixes (use `bugfix/`) or new features (use `feature/`).
+**Not for**: Bug fixes (`bugfix/`) or new features (`feature/`).
 
-## The Golden Rule
+**Golden rule: Same inputs → Same outputs.** If behavior changes: split into `bugfix/`/`feature/` or document the intentional change.
 
-> **Same inputs → Same outputs**
+## Testing & Review
 
-If behavior changes, it's not a refactor. Either:
-- Split into separate `bugfix/` or `feature/` branch
-- Document the intentional behavior change
-
-## Unique Guidance
-
-### Extra Testing Scrutiny
-
-Refactors require **extra testing scrutiny**:
-
-- [ ] All existing tests pass (mandatory)
-- [ ] No new test failures
-- [ ] Manual verification of key flows
-- [ ] Performance not degraded (if applicable)
-
-### Ensure Tests Pass Before Starting
+All existing tests must pass before and after:
 
 ```bash
 npm test  # or project-specific test command
 ```
 
-### PR Review Focus
-
-Reviewers should verify:
-1. No behavior changes (unless documented)
-2. Tests still pass
-3. Code is actually cleaner/better
-4. No hidden bugs introduced
+**PR reviewers verify:** no behavior changes (unless documented), tests pass, no performance regression.
 
 ## Examples
 
 ```bash
+# Branch names
 refactor/extract-auth-service
 refactor/simplify-database-layer
 refactor/consolidate-api-handlers
-```
 
-## Commit Example
-
-```bash
+# Commit message
 refactor: extract authentication into dedicated service
 
 - Move auth logic from UserController to AuthService
-- No behavior changes
-- All existing tests pass
-
-This improves testability and separation of concerns.
+- No behavior changes; all existing tests pass
 ```

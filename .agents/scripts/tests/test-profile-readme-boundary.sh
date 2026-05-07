@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit
 SOURCE_HELPER="${SCRIPT_DIR}/../profile-readme-helper.sh"
+SOURCE_DATA_LIB="${SCRIPT_DIR}/../profile-readme-data-lib.sh"
+SOURCE_RENDER_LIB="${SCRIPT_DIR}/../profile-readme-render-lib.sh"
 
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
+readonly TEST_RED='\033[0;31m'
+readonly TEST_GREEN='\033[0;32m'
 readonly RESET='\033[0m'
 
 TESTS_RUN=0
@@ -23,16 +27,26 @@ print_result() {
 	TESTS_RUN=$((TESTS_RUN + 1))
 
 	if [[ "$result" -eq 0 ]]; then
-		echo -e "${GREEN}PASS${RESET} ${test_name}"
+		echo -e "${TEST_GREEN}PASS${RESET} ${test_name}"
 		TESTS_PASSED=$((TESTS_PASSED + 1))
 	else
-		echo -e "${RED}FAIL${RESET} ${test_name}"
+		echo -e "${TEST_RED}FAIL${RESET} ${test_name}"
 		if [[ -n "$message" ]]; then
 			echo "       ${message}"
 		fi
 		TESTS_FAILED=$((TESTS_FAILED + 1))
 	fi
 
+	return 0
+}
+
+install_helper_with_libs() {
+	local helper_dir="$1"
+	local helper_path="${helper_dir}/profile-readme-helper.sh"
+	cp "${SOURCE_HELPER}" "${helper_path}"
+	chmod +x "${helper_path}"
+	cp "${SOURCE_DATA_LIB}" "${helper_dir}/profile-readme-data-lib.sh"
+	cp "${SOURCE_RENDER_LIB}" "${helper_dir}/profile-readme-render-lib.sh"
 	return 0
 }
 
@@ -93,6 +107,7 @@ EOF
 	git init -b main "${profile_repo}" >/dev/null
 	git -C "${profile_repo}" config user.name "Fixture"
 	git -C "${profile_repo}" config user.email "fixture@example.com"
+	git -C "${profile_repo}" config commit.gpgsign false
 	git -C "${profile_repo}" remote add origin "${remote_repo}"
 
 	cat >"${profile_repo}/README.md" <<'EOF'
@@ -148,8 +163,7 @@ test_update_preserves_manual_sections() {
 	local helper_path="${helper_dir}/profile-readme-helper.sh"
 
 	mkdir -p "${helper_dir}" "${fixture_home}"
-	cp "${SOURCE_HELPER}" "${helper_path}"
-	chmod +x "${helper_path}"
+	install_helper_with_libs "${helper_dir}"
 
 	write_stub_dependencies "${helper_dir}"
 	create_profile_repo_fixture "${fixture_home}" "${fixture_repo}" "${fixture_remote}"
@@ -204,8 +218,7 @@ test_inject_markers_into_existing_readme() {
 
 	mkdir -p "${helper_dir}" "${fixture_home}/.config/aidevops"
 	mkdir -p "${fixture_home}/.aidevops/.agent-workspace/observability"
-	cp "${SOURCE_HELPER}" "${helper_path}"
-	chmod +x "${helper_path}"
+	install_helper_with_libs "${helper_dir}"
 	write_stub_dependencies "${helper_dir}"
 
 	# Create a bare remote and local clone with NO markers
@@ -213,6 +226,7 @@ test_inject_markers_into_existing_readme() {
 	git init -b main "${fixture_repo}" >/dev/null
 	git -C "${fixture_repo}" config user.name "Fixture"
 	git -C "${fixture_repo}" config user.email "fixture@example.com"
+	git -C "${fixture_repo}" config commit.gpgsign false
 	git -C "${fixture_repo}" remote add origin "${fixture_remote}"
 
 	# Write a user-authored README without any aidevops markers
@@ -290,8 +304,7 @@ test_diverged_history_recovery() {
 
 	mkdir -p "${helper_dir}" "${fixture_home}/.config/aidevops"
 	mkdir -p "${fixture_home}/.aidevops/.agent-workspace/observability"
-	cp "${SOURCE_HELPER}" "${helper_path}"
-	chmod +x "${helper_path}"
+	install_helper_with_libs "${helper_dir}"
 	write_stub_dependencies "${helper_dir}"
 
 	# Create initial remote and local clone with markers
@@ -299,6 +312,7 @@ test_diverged_history_recovery() {
 	git init -b main "${fixture_repo}" >/dev/null
 	git -C "${fixture_repo}" config user.name "Fixture"
 	git -C "${fixture_repo}" config user.email "fixture@example.com"
+	git -C "${fixture_repo}" config commit.gpgsign false
 	git -C "${fixture_repo}" remote add origin "${fixture_remote}"
 
 	cat >"${fixture_repo}/README.md" <<'EOF'
@@ -325,6 +339,7 @@ EOF
 	git clone "${fixture_remote}" "${tmp_clone}" 2>/dev/null
 	git -C "${tmp_clone}" config user.name "GitHub"
 	git -C "${tmp_clone}" config user.email "noreply@github.com"
+	git -C "${tmp_clone}" config commit.gpgsign false
 	echo "# fixture" >"${tmp_clone}/README.md"
 	git -C "${tmp_clone}" add README.md
 	git -C "${tmp_clone}" commit -m "Initial commit" >/dev/null
@@ -383,8 +398,7 @@ test_default_template_replaced_with_rich_readme() {
 	mkdir -p "${helper_dir}" "${fixture_home}/.config/aidevops"
 	mkdir -p "${fixture_home}/.aidevops/.agent-workspace/observability"
 	mkdir -p "${fixture_home}/.aidevops/cache"
-	cp "${SOURCE_HELPER}" "${helper_path}"
-	chmod +x "${helper_path}"
+	install_helper_with_libs "${helper_dir}"
 	write_stub_dependencies "${helper_dir}"
 
 	# Create a bare remote and local clone with the default GitHub template
@@ -392,6 +406,7 @@ test_default_template_replaced_with_rich_readme() {
 	git init -b main "${fixture_repo}" >/dev/null
 	git -C "${fixture_repo}" config user.name "Fixture"
 	git -C "${fixture_repo}" config user.email "fixture@example.com"
+	git -C "${fixture_repo}" config commit.gpgsign false
 	git -C "${fixture_repo}" remote add origin "${fixture_remote}"
 
 	# Write the exact default GitHub profile template
@@ -476,14 +491,14 @@ test_default_template_with_existing_markers_replaced() {
 	mkdir -p "${helper_dir}" "${fixture_home}/.config/aidevops"
 	mkdir -p "${fixture_home}/.aidevops/.agent-workspace/observability"
 	mkdir -p "${fixture_home}/.aidevops/cache"
-	cp "${SOURCE_HELPER}" "${helper_path}"
-	chmod +x "${helper_path}"
+	install_helper_with_libs "${helper_dir}"
 	write_stub_dependencies "${helper_dir}"
 
 	git init --bare --initial-branch=main "${fixture_remote}" >/dev/null
 	git init -b main "${fixture_repo}" >/dev/null
 	git -C "${fixture_repo}" config user.name "Fixture"
 	git -C "${fixture_repo}" config user.email "fixture@example.com"
+	git -C "${fixture_repo}" config commit.gpgsign false
 	git -C "${fixture_repo}" remote add origin "${fixture_remote}"
 
 	# Simulate Alex's exact case: default GitHub template with markers already
@@ -567,6 +582,60 @@ EOF
 	return 0
 }
 
+test_session_time_vars_default_missing_null_values() {
+	local test_name="session time vars default missing and null values"
+
+	TEST_DIR=$(mktemp -d)
+	local stdout_file="${TEST_DIR}/stdout"
+	local stderr_file="${TEST_DIR}/stderr"
+
+	# shellcheck source=../profile-readme-data-lib.sh
+	source "${SOURCE_DATA_LIB}"
+	# shellcheck source=../profile-readme-render-lib.sh
+	source "${SOURCE_RENDER_LIB}"
+
+	local valid_json null_json empty_json assignments
+	valid_json='{"interactive_human_hours":1.25,"worker_human_hours":2,"worker_machine_hours":3,"total_human_hours":4,"total_machine_hours":5,"interactive_sessions":6,"worker_sessions":7}'
+	null_json='{"interactive_human_hours":null,"worker_human_hours":null,"worker_machine_hours":null,"total_human_hours":null,"total_machine_hours":null,"interactive_sessions":null,"worker_sessions":null}'
+	empty_json='{}'
+
+	if ! _generate_session_time_vars "${empty_json}" "${null_json}" "${valid_json}" "${valid_json}" >"${stdout_file}" 2>"${stderr_file}"; then
+		print_result "${test_name}" 1 "session time var generation failed"
+		return 0
+	fi
+
+	assignments=$(<"${stdout_file}")
+	if grep -q 'printf: null' "${stderr_file}"; then
+		print_result "${test_name}" 1 "printf emitted null numeric warning"
+		return 0
+	fi
+	if grep -q 'null' "${stdout_file}"; then
+		print_result "${test_name}" 1 "rendered shell assignments contain raw null"
+		return 0
+	fi
+
+	local day_human day_worker day_total day_interactive day_workers
+	local week_human week_worker week_total week_interactive week_workers
+	local month_human month_worker month_total month_interactive month_workers
+	local year_human year_worker year_total year_interactive year_workers
+	eval "${assignments}"
+	if [[ "${day_human}" != "0.0" || "${day_worker}" != "0.0" || "${day_total}" != "0.0" ]]; then
+		print_result "${test_name}" 1 "missing day hour fields did not default to 0.0"
+		return 0
+	fi
+	if [[ "${day_interactive}" != "0" || "${day_workers}" != "0" || "${week_interactive}" != "0" || "${week_workers}" != "0" ]]; then
+		print_result "${test_name}" 1 "missing/null count fields did not default to 0"
+		return 0
+	fi
+	if [[ "${month_human}" != "1.2" || "${month_worker}" != "5.0" || "${month_total}" != "9.0" || "${month_interactive}" != "6" || "${month_workers}" != "7" ]]; then
+		print_result "${test_name}" 1 "valid session data rendering changed"
+		return 0
+	fi
+
+	print_result "${test_name}" 0
+	return 0
+}
+
 main() {
 	if [[ ! -x "${SOURCE_HELPER}" ]]; then
 		echo "Helper script not found or not executable: ${SOURCE_HELPER}" >&2
@@ -582,6 +651,8 @@ main() {
 	test_default_template_replaced_with_rich_readme
 	teardown
 	test_default_template_with_existing_markers_replaced
+	teardown
+	test_session_time_vars_default_missing_null_values
 	teardown
 
 	echo ""

@@ -1,8 +1,18 @@
 ---
 description: Mobile app testing - simulator, emulator, device, E2E, accessibility, QA workflows
 mode: subagent
-tools: [read, write, edit, bash, glob, grep, task]
+tools:
+  read: true
+  write: true
+  edit: true
+  bash: true
+  glob: true
+  grep: true
+  task: true
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Mobile App Testing
 
@@ -10,11 +20,8 @@ tools: [read, write, edit, bash, glob, grep, task]
 
 ## Quick Reference
 
-- **Purpose**: Test mobile apps across simulators, emulators, and physical devices
-- **Tools**: agent-device, xcodebuild-mcp, maestro, ios-simulator-mcp, playwright-emulation
 - **Levels**: Unit → Integration → E2E → Visual → Accessibility → Performance
-
-**Tool decision tree**:
+- **Tool decision**:
 
 ```text
 AI-driven exploratory?     -> agent-device (CLI, both platforms)
@@ -28,85 +35,55 @@ Mobile web layout?         -> playwright-emulation (device presets, touch)
 
 ## Testing Strategy
 
-### Unit
+**Unit**: Expo → Jest + React Native Testing Library. Swift → XCTest (`xcodebuild-mcp test_sim`). Cover: business logic, data transforms, state management.
 
-- **Expo**: Jest + React Native Testing Library
-- **Swift**: XCTest (`xcodebuild-mcp test_sim`)
-- Cover: business logic, data transforms, state management
+**Integration**: API clients (mock servers), navigation flows, state persistence, notification handling.
 
-### Integration
-
-Test API clients (mock servers), navigation flows, state persistence, notification handling.
-
-### E2E (Maestro)
+**E2E (Maestro)**:
 
 ```yaml
-# flows/onboarding.yaml
 appId: com.example.myapp
 ---
-- launchApp:
-    clearState: true
+- launchApp: { clearState: true }
 - assertVisible: "Welcome"
 - tapOn: "Get Started"
-- assertVisible: "Step 1"
-- tapOn: "Next"
 - assertVisible: "You're all set"
 - tapOn: "Start Using App"
 - assertVisible: "Home"
 ```
 
-### AI-Driven (agent-device)
+**AI-Driven (agent-device)**:
 
 ```bash
 agent-device open "My App" --platform ios   # Open app
 agent-device snapshot                        # Accessibility tree
 agent-device click @e3                       # Interact via refs
-agent-device fill @e7 "test@example.com"
-agent-device screenshot ./test-evidence.png  # Capture state
-agent-device close                           # Clean up
+agent-device screenshot ./evidence.png       # Capture state
 ```
 
-### Visual Regression
+**Visual**: Screenshots at key states via `ios-simulator-mcp` or `agent-device`. Test light/dark modes across: iPhone SE, iPhone 16, iPhone 16 Pro Max, iPad.
 
-Capture screenshots at key states via `ios-simulator-mcp` or `agent-device`. Test light/dark modes across sizes (iPhone SE, iPhone 16, iPhone 16 Pro Max, iPad).
+**Accessibility**: `agent-device snapshot` — inspect tree. Verify labels, VoiceOver/TalkBack, colour contrast, Dynamic Type. See `tools/accessibility/accessibility-audit.md`.
 
-### Accessibility
-
-- `agent-device snapshot` — inspect accessibility tree
-- Verify all elements have labels; test VoiceOver/TalkBack
-- Check colour contrast, Dynamic Type support
-- See `tools/accessibility/accessibility-audit.md`
-
-### Performance
-
-Targets: launch < 2s, animations 60fps. Monitor memory and network payload sizes. Test on older devices.
+**Performance**: Launch < 2s, animations 60fps. Monitor memory and network payload. Test on older devices.
 
 ## Device Matrix
 
 | Device | Screen | Purpose |
 |--------|--------|---------|
-| iPhone SE (3rd) | 4.7" | Smallest iPhone |
+| iPhone SE (3rd) | 4.7" | Smallest |
 | iPhone 16 | 6.1" | Standard |
 | iPhone 16 Pro Max | 6.9" | Largest |
 | iPad (10th) | 10.9" | Tablet |
-| Pixel 7 / Galaxy S24 | 6.2–6.3" | Android |
+| Pixel 7 / Galaxy S24 | 6.2-6.3" | Android |
 
 Use `playwright-emulation` device presets for web-based testing.
 
-## TestFlight & Internal Testing
+## Distribution Testing
 
-### iOS (TestFlight)
+**iOS (TestFlight)**: `eas build --platform ios --profile preview` or Xcode archive → App Store Connect. Internal: 100 testers, no review. External: 10k testers, review required.
 
-1. Build: `eas build --platform ios --profile preview` (Expo) or Xcode archive
-2. Upload to App Store Connect
-3. Internal testers (100 max, no review) or external (10k, requires review)
-4. Collect feedback via TestFlight's built-in mechanism
-
-### Android (Internal Testing)
-
-1. Build: `eas build --platform android --profile preview` or `./gradlew assembleRelease`
-2. Upload to Google Play Console → internal testing track
-3. Add testers via email/Google Group; distribute via internal link
+**Android**: `eas build --platform android --profile preview` or `./gradlew assembleRelease` → Google Play Console internal track. Distribute via email/Google Group.
 
 ## Pre-Submission Checklist
 

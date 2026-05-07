@@ -6,11 +6,14 @@ metadata:
   tags: duration, video, length, time, seconds
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Getting video duration with Mediabunny
 
-Mediabunny can extract the duration of a video file. It works in browser, Node.js, and Bun environments.
+Use `Input.computeDuration()` to get duration in seconds. Works in browser, Node.js, and Bun.
 
-## Getting video duration
+## URL source
 
 ```tsx
 import { Input, ALL_FORMATS, UrlSource } from "mediabunny";
@@ -18,26 +21,15 @@ import { Input, ALL_FORMATS, UrlSource } from "mediabunny";
 export const getVideoDuration = async (src: string) => {
   const input = new Input({
     formats: ALL_FORMATS,
-    source: new UrlSource(src, {
-      getRetryDelay: () => null,
-    }),
+    source: new UrlSource(src, { getRetryDelay: () => null }),
   });
-
-  const durationInSeconds = await input.computeDuration();
-  return durationInSeconds;
+  return await input.computeDuration();
 };
 ```
 
-## Usage
+Use with Remotion `staticFile()`: `getVideoDuration(staticFile("video.mp4"))`
 
-```tsx
-const duration = await getVideoDuration("https://remotion.media/video.mp4");
-console.log(duration); // e.g. 10.5 (seconds)
-```
-
-## Using with local files
-
-For local files, use `FileSource` instead of `UrlSource`:
+## Local file source
 
 ```tsx
 import { Input, ALL_FORMATS, FileSource } from "mediabunny";
@@ -46,14 +38,5 @@ const input = new Input({
   formats: ALL_FORMATS,
   source: new FileSource(file), // File object from input or drag-drop
 });
-
 const durationInSeconds = await input.computeDuration();
-```
-
-## Using with staticFile in Remotion
-
-```tsx
-import { staticFile } from "remotion";
-
-const duration = await getVideoDuration(staticFile("video.mp4"));
 ```

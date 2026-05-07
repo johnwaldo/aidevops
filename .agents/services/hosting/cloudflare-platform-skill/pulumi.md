@@ -1,18 +1,11 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Cloudflare Pulumi Provider
 
-Expert guidance for Cloudflare Pulumi Provider (@pulumi/cloudflare).
+Programmatic management of Cloudflare resources via `@pulumi/cloudflare` v6.x: Workers, Pages, D1, KV, R2, DNS, Queues, etc.
 
-## Overview
-
-Programmatic management of Cloudflare resources: Workers, Pages, D1, KV, R2, DNS, Queues, etc.
-
-**Packages:**
-- TypeScript/JS: `@pulumi/cloudflare`
-- Python: `pulumi-cloudflare`
-- Go: `github.com/pulumi/pulumi-cloudflare/sdk/v6/go/cloudflare`
-- .NET: `Pulumi.Cloudflare`
-
-**Version:** v6.x
+**Packages:** TypeScript/JS: `@pulumi/cloudflare` | Python: `pulumi-cloudflare` | Go: `github.com/pulumi/pulumi-cloudflare/sdk/v6/go/cloudflare` | .NET: `Pulumi.Cloudflare`
 
 ## Core Principles
 
@@ -24,40 +17,17 @@ Programmatic management of Cloudflare resources: Workers, Pages, D1, KV, R2, DNS
 
 ## Authentication
 
-Three methods (mutually exclusive):
+Three methods (mutually exclusive). Preferred: API Token.
 
-**1. API Token (Recommended)**
-
-```typescript
-import * as cloudflare from "@pulumi/cloudflare";
-
-const provider = new cloudflare.Provider("cf", {
-    apiToken: process.env.CLOUDFLARE_API_TOKEN,
-});
-```
-
-Env: `CLOUDFLARE_API_TOKEN`
-
-**2. API Key (Legacy)**
+| Method | Env vars | Provider property |
+|--------|----------|-------------------|
+| API Token (recommended) | `CLOUDFLARE_API_TOKEN` | `apiToken` |
+| API Key (legacy) | `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL` | `apiKey` + `email` |
+| API User Service Key | `CLOUDFLARE_API_USER_SERVICE_KEY` | `apiUserServiceKey` |
 
 ```typescript
-const provider = new cloudflare.Provider("cf", {
-    apiKey: process.env.CLOUDFLARE_API_KEY,
-    email: process.env.CLOUDFLARE_EMAIL,
-});
+const provider = new cloudflare.Provider("cf", { apiToken: process.env.CLOUDFLARE_API_TOKEN });
 ```
-
-Env: `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL`
-
-**3. API User Service Key**
-
-```typescript
-const provider = new cloudflare.Provider("cf", {
-    apiUserServiceKey: process.env.CLOUDFLARE_API_USER_SERVICE_KEY,
-});
-```
-
-Env: `CLOUDFLARE_API_USER_SERVICE_KEY`
 
 ## Setup
 
@@ -71,7 +41,7 @@ config:
     value: ${CLOUDFLARE_API_TOKEN}
 ```
 
-**Pulumi.<stack>.yaml:**
+**Pulumi.\<stack\>.yaml** — store accountId per stack:
 
 ```yaml
 config:
@@ -88,25 +58,20 @@ const config = new pulumi.Config("cloudflare");
 const accountId = config.require("accountId");
 ```
 
-## Essential Imports
-
-```typescript
-import * as pulumi from "@pulumi/pulumi";
-import * as cloudflare from "@pulumi/cloudflare";
-```
-
 ## Common Resource Types
 
-- `Provider` - Provider config
-- `WorkerScript` - Worker
-- `WorkersKvNamespace` - KV
-- `R2Bucket` - R2
-- `D1Database` - D1
-- `Queue` - Queue
-- `PagesProject` - Pages
-- `DnsRecord` - DNS
-- `WorkerRoute` - Worker route
-- `WorkersDomain` - Custom domain
+| Resource | Purpose |
+|----------|---------|
+| `Provider` | Provider config |
+| `WorkerScript` | Worker |
+| `WorkersKvNamespace` | KV |
+| `R2Bucket` | R2 |
+| `D1Database` | D1 |
+| `Queue` | Queue |
+| `PagesProject` | Pages |
+| `DnsRecord` | DNS |
+| `WorkerRoute` | Worker route |
+| `WorkersDomain` | Custom domain |
 
 ## Key Properties
 
@@ -116,4 +81,5 @@ import * as cloudflare from "@pulumi/cloudflare";
 - `*Bindings` - Connect resources to Workers
 
 ---
+
 See: [patterns.md](./patterns.md), [gotchas.md](./gotchas.md)

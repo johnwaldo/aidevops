@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # test-batch-quality-hardening.sh
 #
 # Verification tests for batch quality-hardening-8h deployed tasks.
@@ -490,7 +492,7 @@ else
 fi
 
 # Test: Python version pre-check before cisco-ai-skill-scanner install (t1351)
-PLUGINS_SH="$REPO_DIR/setup-modules/plugins.sh"
+PLUGINS_SH="$REPO_DIR/.agents/scripts/setup/modules/plugins.sh"
 if [[ -f "$PLUGINS_SH" ]]; then
 	if grep -q 'check_python_for_skill_scanner' "$PLUGINS_SH"; then
 		pass "plugins.sh has Python version pre-check for skill scanner (t1351)"

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # Shell safety baseline
 set -Eeuo pipefail
@@ -10,7 +12,7 @@ shopt -s inherit_errexit 2>/dev/null || true
 # AI Assistant Server Access Framework Setup Script
 # Helps developers set up the framework for their infrastructure
 #
-# Version: 3.5.402
+# Version: 3.14.82
 #
 # Quick Install:
 #   npm install -g aidevops && aidevops update          (recommended)
@@ -30,17 +32,26 @@ INTERACTIVE_MODE=false
 NON_INTERACTIVE="${AIDEVOPS_NON_INTERACTIVE:-false}"
 UPDATE_TOOLS_MODE=false
 # Python compatibility floor used by setup checks and skill/tool gating.
-# Keep in sync with setup-modules/plugins.sh requirements.
+# Keep in sync with .agents/scripts/setup/modules/plugins.sh requirements.
 PYTHON_REQUIRED_MAJOR=3
 PYTHON_REQUIRED_MINOR=10
 export PYTHON_REQUIRED_MAJOR PYTHON_REQUIRED_MINOR
-# Platform constants — exported for sourced setup-modules (shell-env.sh,
+# Platform constants — exported for sourced .agents/scripts/setup/modules (shell-env.sh,
 # tool-install.sh) that reference them at runtime.
 PLATFORM_MACOS=$([[ "$(uname -s)" == "Darwin" ]] && echo true || echo false)
 PLATFORM_ARM64=$([[ "$(uname -m)" == "arm64" || "$(uname -m)" == "aarch64" ]] && echo true || echo false)
 export PLATFORM_MACOS PLATFORM_ARM64
 readonly PLATFORM_MACOS PLATFORM_ARM64
-# Repo constants — exported; consumed by setup-modules/core.sh, agent-deploy.sh
+# Extended platform detection (t1748: Linux/WSL2 support).
+# Sources platform-detect.sh when available to export AIDEVOPS_PLATFORM,
+# AIDEVOPS_SCHEDULER, AIDEVOPS_CLIPBOARD_COPY, etc.
+_platform_detect_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.agents/scripts/platform-detect.sh"
+if [[ -f "$_platform_detect_script" ]]; then
+	# shellcheck disable=SC1090  # dynamic path, exists at runtime
+	source "$_platform_detect_script"
+fi
+unset _platform_detect_script
+# Repo constants — exported; consumed by .agents/scripts/setup/modules/core.sh, agent-deploy.sh
 REPO_URL="https://github.com/marcusquinn/aidevops.git"
 # INSTALL_DIR: resolve from the directory where setup.sh is executed (supports worktrees)
 # For bootstrap (curl install), this will be /dev/fd/NN and trigger re-exec after clone
@@ -74,12 +85,28 @@ if [[ -d "$SETUP_MODULES_DIR" ]]; then
 	source "$SETUP_MODULES_DIR/_services.sh"
 	# shellcheck disable=SC1091
 	source "$SETUP_MODULES_DIR/_bootstrap.sh"
+	# shellcheck disable=SC1091
+	source "$SETUP_MODULES_DIR/_routines.sh"
+	# shellcheck disable=SC1091
+	source "$SETUP_MODULES_DIR/_scheduler_runtime.sh"
+	# shellcheck disable=SC1091
+	source "$SETUP_MODULES_DIR/_runtime_helpers.sh"
+	# shellcheck disable=SC1091
+	source "$SETUP_MODULES_DIR/_privacy_guard.sh"
+	# shellcheck disable=SC1091
+	source "$SETUP_MODULES_DIR/_complexity_guard.sh"
+	# shellcheck disable=SC1091
+	source "$SETUP_MODULES_DIR/_task_id_guard.sh"
+	# shellcheck disable=SC1091
+	source "$SETUP_MODULES_DIR/_canonical_guard.sh"
+	# shellcheck disable=SC1091
+	source "$SETUP_MODULES_DIR/_worktree_exclusions.sh"
 fi
 
-print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_info() { local _m="$1"; echo -e "${BLUE}[INFO]${NC} $_m"; return 0; }
+print_success() { local _m="$1"; echo -e "${GREEN}[SUCCESS]${NC} $_m"; return 0; }
+print_warning() { local _m="$1"; echo -e "${YELLOW}[WARNING]${NC} $_m"; return 0; }
+print_error() { local _m="$1"; echo -e "${RED}[ERROR]${NC} $_m"; return 0; }
 
 # Source shared-constants for config support (is_feature_enabled / config_enabled)
 # Try repo-local first, then deployed location
@@ -119,6 +146,44 @@ _cron_escape() {
 	return 0
 }
 
+# GH#21060 / t2911: Per-stage timing helper for non-interactive setup runs.
+# Wraps a function call, records start/end time, and appends TSV lines to
+# $HOME/.aidevops/logs/setup-stage-timings.log:
+#   iso8601_utc <TAB> stage_name <TAB> duration_seconds <TAB> exit_code
+# A RUNNING row is written before each stage starts so a tool/worker timeout
+# still leaves the currently executing phase in the timing log.
+# Usage: _time_step "stage_name" function_name [args...]
+# ShellCheck: $@ is used deliberately (SC2068 not applicable; no word-splitting
+# issue since we shift the stage-name arg first and pass the rest as a command).
+_time_step_log() {
+	local _ts_stage="$1"
+	local _ts_duration="$2"
+	local _ts_exit="$3"
+	printf '%s\t%s\t%s\t%s\n' \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+		"$_ts_stage" \
+		"$_ts_duration" \
+		"$_ts_exit" \
+		>>"$HOME/.aidevops/logs/setup-stage-timings.log" 2>/dev/null || true
+	return 0
+}
+
+_time_step() {
+	local _ts_stage="$1"
+	shift
+	local _ts_start _ts_end _ts_duration _ts_exit
+	print_info "Starting setup stage: $_ts_stage"
+	_time_step_log "$_ts_stage" "0.00" "RUNNING"
+	_ts_start=$(date +%s.%N 2>/dev/null || date +%s)
+	_ts_exit=0
+	"$@" || _ts_exit=$?
+	_ts_end=$(date +%s.%N 2>/dev/null || date +%s)
+	_ts_duration=$(awk -v a="$_ts_start" -v b="$_ts_end" 'BEGIN { printf "%.2f", b - a }')
+	_time_step_log "$_ts_stage" "$_ts_duration" "$_ts_exit"
+	print_info "Finished setup stage: $_ts_stage (${_ts_duration}s, exit=${_ts_exit})"
+	return "$_ts_exit"
+}
+
 # Resolve the canonical main worktree path for the current repo.
 # When setup.sh is run from a linked worktree, launchd/cron should still point
 # autonomous services at the main repo checkout, not the feature worktree.
@@ -134,405 +199,11 @@ _resolve_main_worktree_dir() {
 	return 0
 }
 
-# Ensure the crontab has a single PATH= line at the top with the current $PATH.
-# Individual cron entries must NOT set inline PATH= — it overrides the global one
-# and hardcodes system-specific paths (nvm, bun, cargo, etc.). This function
-# manages a tagged comment + PATH line pair; re-running setup.sh updates it
-# idempotently. The marker must be a separate comment line because crontab does
-# NOT support inline comments on environment variable lines — anything after
-# PATH= is treated as part of the value.
-_ensure_cron_path() {
-	local current_crontab marker="# aidevops-path"
-	current_crontab=$(crontab -l 2>/dev/null) || current_crontab=""
+# Scheduler runtime helpers are sourced from .agents/scripts/setup/_scheduler_runtime.sh
+# with the rest of the setup modules near the top of this file.
 
-	# Deduplicate PATH entries (preserving order)
-	# Bash 3.2 compat: no associative arrays — use string-based seen list
-	local deduped_path=""
-	local seen_dirs=" "
-	local IFS=':'
-	for dir in $PATH; do
-		if [[ -n "$dir" && "$seen_dirs" != *" ${dir} "* ]]; then
-			seen_dirs="${seen_dirs}${dir} "
-			deduped_path="${deduped_path:+${deduped_path}:}${dir}"
-		fi
-	done
-	unset IFS
-
-	# Marker on its own line, PATH on the next — crontab treats everything
-	# after PATH= as the value (no inline comments)
-	local path_block="${marker}
-PATH=${deduped_path}"
-
-	# Remove only the aidevops-managed marker + PATH pair.
-	# User-owned PATH= lines are left untouched.
-	local filtered
-	filtered=$(printf '%s\n' "$current_crontab" | awk -v marker="$marker" '
-		$0 == marker { drop_next_path=1; next }
-		drop_next_path && /^PATH=/ { drop_next_path=0; next }
-		{ drop_next_path=0; print }
-	')
-
-	if [[ -n "$filtered" ]]; then
-		current_crontab="${path_block}
-${filtered}"
-	else
-		current_crontab="$path_block"
-	fi
-
-	printf '%s\n' "$current_crontab" | crontab - 2>/dev/null || true
-	return 0
-}
-
-# Check if a launchd agent is loaded (SIGPIPE-safe for pipefail, t1265)
-_launchd_has_agent() {
-	local label="$1"
-	local output
-	output=$(launchctl list 2>/dev/null) || true
-	echo "$output" | grep -qF "$label"
-	return $?
-}
-
-# Install a launchd plist only if its content has changed.
-# Avoids unnecessary unload/reload which resets StartInterval timers.
-# Usage: _launchd_install_if_changed <label> <plist_path> <new_content>
-# Returns: 0 = installed or unchanged, 1 = failed to load
-_launchd_install_if_changed() {
-	local label="$1"
-	local plist_path="$2"
-	local new_content="$3"
-
-	# Compare with existing plist — skip reload if identical
-	if [[ -f "$plist_path" ]]; then
-		local existing_content
-		existing_content=$(cat "$plist_path")
-		if [[ "$existing_content" == "$new_content" ]]; then
-			# Ensure it's loaded even if content unchanged
-			if ! _launchd_has_agent "$label"; then
-				launchctl load "$plist_path" 2>/dev/null || return 1
-			fi
-			return 0
-		fi
-		# Content changed — unload before replacing
-		if _launchd_has_agent "$label"; then
-			launchctl unload "$plist_path" 2>/dev/null || true
-		fi
-	fi
-
-	# Write new plist and load
-	printf '%s\n' "$new_content" >"$plist_path"
-	launchctl load "$plist_path" 2>/dev/null || return 1
-	return 0
-}
-
-# Detect whether a scheduler is already installed via launchd or cron.
-# Optionally migrates legacy launchd labels / cron entries to launchd on macOS.
-_scheduler_detect_installed() {
-	local scheduler_name="$1"
-	local launchd_label="$2"
-	local legacy_launchd_label="$3"
-	local cron_marker="$4"
-	local migrate_script="$5"
-	local migrate_arg="$6"
-	local migrate_hint="$7"
-	local installed=false
-
-	if _launchd_has_agent "$launchd_label"; then
-		installed=true
-	elif [[ -n "$legacy_launchd_label" ]] && _launchd_has_agent "$legacy_launchd_label"; then
-		if [[ -n "$migrate_script" ]] && [[ -x "$migrate_script" ]]; then
-			if bash "$migrate_script" "$migrate_arg" >/dev/null 2>&1; then
-				print_info "$scheduler_name LaunchAgent migrated to new label"
-			else
-				print_warning "$scheduler_name label migration failed. Run: $migrate_hint"
-			fi
-		fi
-		installed=true
-	elif crontab -l 2>/dev/null | grep -qF "$cron_marker"; then
-		if [[ "$PLATFORM_MACOS" == "true" ]] && [[ -n "$migrate_script" ]] && [[ -x "$migrate_script" ]]; then
-			if bash "$migrate_script" "$migrate_arg" >/dev/null 2>&1; then
-				print_info "$scheduler_name migrated from cron to launchd"
-			else
-				print_warning "$scheduler_name cron->launchd migration failed. Run: $migrate_hint"
-			fi
-		fi
-		installed=true
-	fi
-
-	if [[ "$installed" == "true" ]]; then
-		return 0
-	fi
-
-	return 1
-}
-# Spinner for long-running operations
-# Usage: run_with_spinner "Installing package..." command arg1 arg2
-run_with_spinner() {
-	local message="$1"
-	shift
-	local pid
-	local spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-	local i=0
-
-	# Suppress Homebrew's slow auto-update for all backgrounded brew commands.
-	# run_with_spinner backgrounds via "$@" &, so env var prefix syntax
-	# (VAR=x cmd) doesn't propagate. Export globally for the child process.
-	local _brew_was_set="${HOMEBREW_NO_AUTO_UPDATE:-}"
-	local _cmd="${1:-}"
-	local _subcmd="${2:-}"
-	if [[ "$_cmd" == "brew" && "$_subcmd" != "update" ]]; then
-		export HOMEBREW_NO_AUTO_UPDATE=1
-	fi
-
-	# Start command in background
-	"$@" &>/dev/null &
-	pid=$!
-
-	# Show spinner while command runs
-	printf "${BLUE}[INFO]${NC} %s " "$message"
-	while kill -0 "$pid" 2>/dev/null; do
-		printf "\r${BLUE}[INFO]${NC} %s %s" "$message" "${spin_chars:i++%${#spin_chars}:1}"
-		sleep 0.1
-	done
-
-	# Check exit status
-	wait "$pid"
-	local exit_code=$?
-
-	# Restore HOMEBREW_NO_AUTO_UPDATE to previous state
-	if [[ -z "$_brew_was_set" ]]; then
-		unset HOMEBREW_NO_AUTO_UPDATE
-	fi
-
-	# Clear spinner and show result
-	printf "\r"
-	if [[ $exit_code -eq 0 ]]; then
-		print_success "$message done"
-	else
-		print_error "$message failed"
-	fi
-
-	return $exit_code
-}
-
-# Verified install: download script to temp file, inspect, then execute
-# Replaces unsafe curl|sh patterns with download-verify-execute
-# Usage: verified_install "description" "url" [extra_args...]
-# Options (set before calling):
-#   VERIFIED_INSTALL_SUDO="true"  - run with sudo
-#   VERIFIED_INSTALL_SHELL="sh"  - use sh instead of bash (default: bash)
-# Returns: 0 on success, 1 on failure
-verified_install() {
-	local description="$1"
-	local url="$2"
-	shift 2
-	local extra_args=("$@")
-	local shell="${VERIFIED_INSTALL_SHELL:-bash}"
-	local use_sudo="${VERIFIED_INSTALL_SUDO:-false}"
-
-	# Reset options for next call
-	VERIFIED_INSTALL_SUDO="false"
-	VERIFIED_INSTALL_SHELL="bash"
-
-	# Create secure temp file
-	local tmp_script
-	tmp_script=$(mktemp "${TMPDIR:-/tmp}/aidevops-install-XXXXXX.sh") || {
-		print_error "Failed to create temp file for $description"
-		return 1
-	}
-
-	# Ensure cleanup on exit from this function
-	# shellcheck disable=SC2064
-	trap "rm -f '$tmp_script'" RETURN
-
-	# Download script to file (not piped to shell)
-	print_info "Downloading $description install script..."
-	if ! curl -fsSL "$url" -o "$tmp_script" 2>/dev/null; then
-		print_error "Failed to download $description install script from $url"
-		return 1
-	fi
-
-	# Verify download is non-empty and looks like a script
-	if [[ ! -s "$tmp_script" ]]; then
-		print_error "Downloaded $description script is empty"
-		return 1
-	fi
-
-	# Basic content safety check: reject binary content
-	if file "$tmp_script" 2>/dev/null | grep -qv 'text'; then
-		print_error "Downloaded $description script appears to be binary, not a shell script"
-		return 1
-	fi
-
-	# Make executable
-	chmod +x "$tmp_script"
-
-	# Execute from file
-	# Build cmd array once; prepend sudo conditionally to avoid duplicating the safe expansion
-	# Use ${extra_args[@]+"${extra_args[@]}"} for safe expansion under set -u when array is empty
-	local cmd=()
-	[[ "$use_sudo" == "true" ]] && cmd+=(sudo)
-	cmd+=("$shell" "$tmp_script" ${extra_args[@]+"${extra_args[@]}"})
-
-	if "${cmd[@]}"; then
-		print_success "$description installed"
-		return 0
-	else
-		print_error "$description installation failed"
-		return 1
-	fi
-}
-
-# Find OpenCode config file (checks multiple possible locations)
-# Returns: path to config file, or empty string if not found
-find_opencode_config() {
-	local candidates=(
-		"$HOME/.config/opencode/opencode.json"                     # XDG standard (Linux, some macOS)
-		"$HOME/.opencode/opencode.json"                            # Alternative location
-		"$HOME/Library/Application Support/opencode/opencode.json" # macOS standard
-	)
-	for candidate in "${candidates[@]}"; do
-		if [[ -f "$candidate" ]]; then
-			echo "$candidate"
-			return 0
-		fi
-	done
-	return 1
-}
-
-# get_latest_homebrew_python_formula() and find_python3() are defined in
-# _common.sh (sourced above). Not duplicated here — see GH#5239 review.
-
-# Install a package globally via npm, with sudo when needed on Linux.
-# Usage: npm_global_install "package-name" OR npm_global_install "package@version"
-# On Linux with apt-installed npm, automatically prepends sudo.
-# Returns: 0 on success, 1 on failure
-npm_global_install() {
-	local pkg="$1"
-
-	if command -v npm >/dev/null 2>&1; then
-		# npm global installs need sudo on Linux when prefix dir isn't writable
-		if [[ "$(uname)" != "Darwin" ]] && [[ ! -w "$(npm config get prefix 2>/dev/null)/lib" ]]; then
-			sudo npm install -g "$pkg"
-		else
-			npm install -g "$pkg"
-		fi
-		return $?
-	else
-		return 1
-	fi
-}
-
-# Prompt the user for input, with non-interactive fallback.
-# Canonical definition in .agents/scripts/setup/_common.sh; this fallback
-# ensures the function exists even when _common.sh was not sourced (e.g.
-# bootstrap from curl where setup-modules/ doesn't exist yet).
-if ! type setup_prompt &>/dev/null; then
-	setup_prompt() {
-		local var_name="$1"
-		local prompt_text="$2"
-		local default_value="${3:-}"
-
-		# Non-interactive: use default without prompting
-		if [[ "${NON_INTERACTIVE:-false}" == "true" ]] || [[ ! -t 0 ]]; then
-			# shellcheck disable=SC2059  # var_name is a variable name, not a format string
-			printf -v "$var_name" '%s' "$default_value"
-			return 0
-		fi
-
-		local _setup_prompt_reply=""
-		read -r -p "$prompt_text" _setup_prompt_reply || _setup_prompt_reply="$default_value"
-		# shellcheck disable=SC2059  # var_name is a variable name, not a format string
-		printf -v "$var_name" '%s' "$_setup_prompt_reply"
-		return 0
-	}
-fi
-
-# Confirm step in interactive mode
-# Usage: confirm_step "Step description" && function_to_run
-# Returns: 0 if confirmed or not interactive, 1 if skipped
-confirm_step() {
-	local step_name="$1"
-
-	# Skip confirmation in non-interactive mode
-	if [[ "$INTERACTIVE_MODE" != "true" ]]; then
-		return 0
-	fi
-
-	echo ""
-	echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-	echo -e "${BLUE}Step:${NC} $step_name"
-	echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-	while true; do
-		echo -n -e "${GREEN}Run this step? [Y]es / [n]o / [q]uit: ${NC}"
-		read -r response
-		# Convert to lowercase (bash 3.2 compatible)
-		response=$(echo "$response" | tr '[:upper:]' '[:lower:]')
-		case "$response" in
-		y | yes | "")
-			return 0
-			;;
-		n | no | s | skip)
-			print_warning "Skipped: $step_name"
-			return 1
-			;;
-		q | quit | exit)
-			echo ""
-			print_info "Setup cancelled by user"
-			exit 0
-			;;
-		*)
-			echo "Please answer: y (yes), n (no), or q (quit)"
-			;;
-		esac
-	done
-}
-
-# Backup rotation settings
-BACKUP_KEEP_COUNT=10
-
-# Create a backup with rotation (keeps last N backups)
-# Usage: create_backup_with_rotation <source_path> <backup_name>
-# Example: create_backup_with_rotation "$target_dir" "agents"
-# Creates: ~/.aidevops/agents-backups/20251221_123456/
-create_backup_with_rotation() {
-	local source_path="$1"
-	local backup_name="$2"
-	local backup_base="$HOME/.aidevops/${backup_name}-backups"
-	local backup_dir
-	backup_dir="$backup_base/$(date +%Y%m%d_%H%M%S)"
-
-	# Create backup directory
-	mkdir -p "$backup_dir"
-
-	# Copy source to backup
-	if [[ -d "$source_path" ]]; then
-		cp -R "$source_path" "$backup_dir/"
-	elif [[ -f "$source_path" ]]; then
-		cp "$source_path" "$backup_dir/"
-	else
-		print_warning "Source path does not exist: $source_path"
-		return 1
-	fi
-
-	print_info "Backed up to $backup_dir"
-
-	# Rotate old backups (keep last N)
-	local backup_count
-	backup_count=$(find "$backup_base" -maxdepth 1 -type d -name "20*" 2>/dev/null | wc -l | tr -d ' ')
-
-	if [[ $backup_count -gt $BACKUP_KEEP_COUNT ]]; then
-		local to_delete=$((backup_count - BACKUP_KEEP_COUNT))
-		print_info "Rotating backups: removing $to_delete old backup(s), keeping last $BACKUP_KEEP_COUNT"
-
-		# Delete oldest backups (sorted by name = sorted by date)
-		find "$backup_base" -maxdepth 1 -type d -name "20*" 2>/dev/null | sort | head -n "$to_delete" | while read -r old_backup; do
-			rm -rf "$old_backup"
-		done
-	fi
-
-	return 0
-}
+# Runtime helper functions are sourced from .agents/scripts/setup/_runtime_helpers.sh
+# with the rest of the setup modules near the top of this file.
 
 # Validate namespace string for safe use in paths and shell commands
 # Returns 0 if valid, 1 if invalid
@@ -555,11 +226,11 @@ validate_namespace() {
 # =============================================================================
 # Bootstrap guard: detect curl/process-substitution execution
 # When running via `bash <(curl ...)`, BASH_SOURCE[0] is /dev/fd/NN and the
-# setup-modules/ directory doesn't exist at that path. We must clone the repo
+# .agents/scripts/setup/modules/ directory doesn't exist at that path. We must clone the repo
 # first, then re-exec the local copy. This MUST run before any source lines.
 # =============================================================================
 _setup_script_dir="$(dirname "${BASH_SOURCE[0]}")"
-if [[ ! -d "$_setup_script_dir/setup-modules" ]]; then
+if [[ ! -d "$_setup_script_dir/.agents/scripts/setup/modules" ]]; then
 	# Running from curl pipe or process substitution — bootstrap the repo
 	print_info "Remote install detected — bootstrapping repository..."
 
@@ -619,37 +290,46 @@ if [[ ! -d "$_setup_script_dir/setup-modules" ]]; then
 
 	print_success "Repository ready at $_bootstrap_install_dir"
 
-	# Re-execute the local copy (which has setup-modules/ available)
+	# Re-execute the local copy (which has .agents/scripts/setup/modules/ available)
 	cd "$_bootstrap_install_dir" || exit 1
 	exec bash "./setup.sh" "$@"
 fi
 unset _setup_script_dir
 
-# Source modularized setup functions
-# shellcheck disable=SC1091  # Dynamic path via BASH_SOURCE; files exist at runtime
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/core.sh"
+# Source modularized setup functions from the canonical setup module tree.
+# The sibling .agents/scripts/setup/_*.sh files above are bootstrap/fallback
+# helpers loaded early by the root entrypoint; normal setup implementation
+# modules live under modules/ so the repository root has no module directory.
+SETUP_IMPL_MODULES_DIR="${SETUP_MODULES_DIR}/modules"
+# shellcheck disable=SC1091  # Dynamic path via $SETUP_IMPL_MODULES_DIR
+source "${SETUP_IMPL_MODULES_DIR}/core.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/migrations.sh"
+source "${SETUP_IMPL_MODULES_DIR}/migrations.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/shell-env.sh"
+source "${SETUP_IMPL_MODULES_DIR}/shell-env.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/tool-install.sh"
+source "${SETUP_IMPL_MODULES_DIR}/tool-install.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/mcp-setup.sh"
+source "${SETUP_IMPL_MODULES_DIR}/mcp-setup.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/agent-deploy.sh"
+source "${SETUP_IMPL_MODULES_DIR}/agent-deploy.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/config.sh"
+source "${SETUP_IMPL_MODULES_DIR}/agent-runtime.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/plugins.sh"
+source "${SETUP_IMPL_MODULES_DIR}/tool-beads.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/schedulers.sh"
+source "${SETUP_IMPL_MODULES_DIR}/config.sh"
 # shellcheck disable=SC1091
-source "$(dirname "${BASH_SOURCE[0]}")/setup-modules/post-setup.sh"
+source "${SETUP_IMPL_MODULES_DIR}/plugins.sh"
+# shellcheck disable=SC1091
+source "${SETUP_IMPL_MODULES_DIR}/schedulers.sh"
+# shellcheck disable=SC1091
+source "${SETUP_IMPL_MODULES_DIR}/post-setup.sh"
 
 parse_args() {
 	while [[ $# -gt 0 ]]; do
-		case "$1" in
+		local _opt="$1"
+		case "$_opt" in
 		--clean)
 			CLEAN_MODE=true
 			shift
@@ -684,7 +364,7 @@ parse_args() {
 			exit 0
 			;;
 		*)
-			print_error "Unknown option: $1"
+			print_error "Unknown option: $_opt"
 			echo "Use --help for usage information"
 			exit 1
 			;;
@@ -735,56 +415,717 @@ _setup_print_header() {
 	return 0
 }
 
+# GH#18950 (t2087) + GH#18965 (t2094): ensure modern bash is installed
+# and up to date on macOS. Runs after platform detection, before deploy.
+# Uses the canonical `ensure` subcommand which combines install + upgrade:
+#   - Missing → interactive prompt for install (or silent with --yes)
+#   - Installed but drifted → silent upgrade (brew upgrade bash)
+#   - Current → no-op
+# Rate-limits `brew update` to 24h internally. Always fail-open — never
+# blocks setup on a bash upgrade failure.
+#
+# Opt-out: AIDEVOPS_AUTO_UPGRADE_BASH=0 disables install + upgrade entirely.
+_setup_check_bash_upgrade() {
+	# Only applies to macOS; Linux bash is already modern on any current distro.
+	if [[ "${AIDEVOPS_PLATFORM:-}" != "macos" ]]; then
+		return 0
+	fi
+
+	local helper="${INSTALL_DIR}/.agents/scripts/bash-upgrade-helper.sh"
+	[[ -x "$helper" ]] || return 0
+
+	if [[ "$NON_INTERACTIVE" == "true" ]]; then
+		# Non-interactive: ensure does everything silently (install with
+		# --yes, upgrade on drift, no-op when current). Same pattern as
+		# `aidevops update` — fire-and-forget.
+		"$helper" ensure --yes --quiet || print_warning "bash ensure failed (non-fatal) — advisory written"
+		return 0
+	fi
+
+	# Interactive: ensure prompts on first install (inherited from
+	# _bu_cmd_install's read path), runs silently on upgrade. Users don't
+	# see a prompt on every `./setup.sh` run — only the first one.
+	"$helper" ensure || print_warning "bash ensure failed (non-fatal) — advisory written"
+	return 0
+}
+
+# GH#17769: Comment out deprecated model env vars in a single credentials file.
+_comment_out_deprecated_model_vars() {
+	local file="$1"
+	local deprecated_vars="AIDEVOPS_HEADLESS_MODELS|PULSE_MODEL"
+	local deprecation_note="# DEPRECATED by aidevops v3.7+ — model routing is now automatic (GH#17769)"
+	[[ -f "$file" ]] || return 0
+	# Only process lines that are active exports (not already commented)
+	if grep -qE "^[[:space:]]*export[[:space:]]+(${deprecated_vars})=" "$file" 2>/dev/null; then
+		sed -i.bak -E "s/^([[:space:]]*)(export[[:space:]]+(${deprecated_vars})=.*)$/\1${deprecation_note}\n\1# \2/" "$file"
+		rm -f "${file}.bak"
+		print_info "Commented out deprecated model env vars in $(basename "$file")"
+	fi
+	return 0
+}
+
+# GH#17769: Comment out deprecated model env vars from credentials.sh.
+# Runs on every `aidevops update`. Uses sed to comment out (not delete) lines
+# so the user's file history is preserved.
+_cleanup_legacy_model_config() {
+	local creds_file="${HOME}/.config/aidevops/credentials.sh"
+	_comment_out_deprecated_model_vars "$creds_file"
+
+	# Clean up tenant credentials files
+	local tenant_dir="${HOME}/.config/aidevops/tenants"
+	if [[ -d "$tenant_dir" ]]; then
+		local tenant_creds=""
+		while IFS= read -r -d '' tenant_creds; do
+			_comment_out_deprecated_model_vars "$tenant_creds"
+		done < <(find "$tenant_dir" -name "credentials.sh" -print0 2>/dev/null)
+	fi
+	return 0
+}
+
+# Deploy auto-hotfix.conf template to user-level configs if not already present.
+# The template ships in .agents/configs/; this copies to ~/.aidevops/configs/
+# where user edits survive `aidevops update`. Existing user config is preserved.
+_deploy_hotfix_config() {
+	local source_conf="${INSTALL_DIR:-.}/.agents/configs/auto-hotfix.conf"
+	local target_dir="$HOME/.aidevops/configs"
+	local target_conf="$target_dir/auto-hotfix.conf"
+
+	if [[ ! -f "$source_conf" ]]; then
+		return 0
+	fi
+
+	# Only deploy if the user doesn't have one yet (preserve user edits)
+	if [[ -f "$target_conf" ]]; then
+		return 0
+	fi
+
+	mkdir -p "$target_dir"
+	cp "$source_conf" "$target_conf"
+	chmod 600 "$target_conf"
+	return 0
+}
+
+# t2919: Early pulse plist install. The pulse launchd agent is critical
+# infrastructure — without it, every other pulse-driven feature (worker
+# dispatch, issue routing, cross-repo coordination) is dead. Previously,
+# setup_supervisor_pulse only ran inside _setup_post_setup_steps which
+# executes AFTER ~25 other migration/setup steps. When `aidevops update`
+# runs unattended and any earlier step times out (e.g. brew taps, MCP
+# installs, slow repo scans), the pulse plist never gets installed/refreshed
+# and the runner falls behind.
+#
+# Install immediately after deploy_aidevops_agents (so the scripts the plist
+# references already exist on disk). The late install in _setup_post_setup_steps
+# remains as the canonical regenerate-on-change path — _launchd_install_if_changed
+# compares content and skips reload when identical, so the second call is a
+# no-op when nothing changed. Failure here is non-fatal: the late path retries.
+_setup_install_pulse_plist_early() {
+	local _early_os
+	_early_os="$(uname -s)"
+	if _should_setup_noninteractive_supervisor_pulse; then
+		setup_supervisor_pulse "$_early_os" || print_warning "Early pulse plist install failed (will retry late)"
+	fi
+	return 0
+}
+
+# Provision knowledge planes for all repos in repos.json where knowledge != "off".
+# Idempotent: already-provisioned directories are not modified.
+# Called from the non-interactive setup path (update) and after interactive init.
+setup_knowledge_planes() {
+	local repos_file="$HOME/.config/aidevops/repos.json"
+	local helper
+	helper="${BASH_SOURCE[0]%/*}/.agents/scripts/knowledge-helper.sh"
+	if [[ ! -f "$helper" ]]; then
+		helper="$HOME/.aidevops/agents/scripts/knowledge-helper.sh"
+	fi
+	if [[ ! -f "$helper" ]]; then
+		print_warning "knowledge-helper.sh not found — skipping knowledge plane provisioning"
+		return 0
+	fi
+	if [[ ! -f "$repos_file" ]]; then
+		return 0
+	fi
+	if ! command -v jq &>/dev/null; then
+		print_warning "jq not installed — skipping knowledge plane provisioning"
+		return 0
+	fi
+	local repo_path mode
+	while IFS=$'\t' read -r repo_path mode; do
+		[[ -z "$repo_path" || "$mode" == "off" ]] && continue
+		if [[ ! -d "$repo_path" ]]; then
+			print_warning "knowledge-plane: repo path not found: $repo_path"
+			continue
+		fi
+		bash "$helper" provision "$repo_path" || print_warning "knowledge-plane: provision failed for $repo_path"
+	done < <(jq -r '.initialized_repos[] | select(.knowledge != null and .knowledge != "off") | [.path, .knowledge] | @tsv' "$repos_file" 2>/dev/null || true)
+	return 0
+}
+
+# Provision cases planes for all repos in repos.json where cases != "off".
+# Idempotent: already-provisioned directories are not modified.
+# Called from the non-interactive setup path (update) and after interactive init.
+setup_cases_planes() {
+	local repos_file="$HOME/.config/aidevops/repos.json"
+	local helper
+	helper="${BASH_SOURCE[0]%/*}/.agents/scripts/case-helper.sh"
+	if [[ ! -f "$helper" ]]; then
+		helper="$HOME/.aidevops/agents/scripts/case-helper.sh"
+	fi
+	if [[ ! -f "$helper" ]]; then
+		print_warning "case-helper.sh not found — skipping cases plane provisioning"
+		return 0
+	fi
+	if [[ ! -f "$repos_file" ]]; then
+		return 0
+	fi
+	if ! command -v jq &>/dev/null; then
+		print_warning "jq not installed — skipping cases plane provisioning"
+		return 0
+	fi
+	local repo_path mode
+	while IFS=$'\t' read -r repo_path mode; do
+		[[ -z "$repo_path" || "$mode" == "off" ]] && continue
+		if [[ ! -d "$repo_path" ]]; then
+			print_warning "cases-plane: repo path not found: $repo_path"
+			continue
+		fi
+		bash "$helper" init "$repo_path" || print_warning "cases-plane: init failed for $repo_path"
+	done < <(jq -r '.initialized_repos[] | select(.cases != null and .cases != "off") | [.path, .cases] | @tsv' "$repos_file" 2>/dev/null || true)
+	return 0
+}
+
+# Non-interactive setup singleton state. This lock only gates the deployment path;
+# interactive setup remains prompt-driven and can still be used for first-run init.
+SETUP_NONINTERACTIVE_LOCK_HELD=false
+SETUP_NONINTERACTIVE_LOCK_DIR=""
+SETUP_NONINTERACTIVE_CHILD_PIDS=""
+SETUP_NONINTERACTIVE_TERMINATING=false
+
+_setup_lock_pid_alive() {
+	local pid="$1"
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
+	kill -0 "$pid" 2>/dev/null
+	return $?
+}
+
+_setup_lock_pid_is_noninteractive_setup() {
+	local pid="$1"
+	local owner_args=""
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
+	owner_args=$(ps -p "$pid" -o args= 2>/dev/null || true)
+	[[ -n "$owner_args" ]] || return 0
+	[[ "$owner_args" == *"setup.sh"* && "$owner_args" == *"--non-interactive"* ]]
+	return $?
+}
+
+_setup_lock_dir_age_seconds() {
+	local lock_dir="$1"
+	local lock_mtime=""
+	local now=""
+	if ! [[ -d "$lock_dir" ]]; then
+		printf '%s\n' 0
+		return 0
+	fi
+	if type _file_mtime_epoch >/dev/null 2>&1; then
+		lock_mtime=$(_file_mtime_epoch "$lock_dir" 2>/dev/null || true)
+	elif [[ "$(uname -s 2>/dev/null || true)" == "Darwin" || "$(uname -s 2>/dev/null || true)" == "FreeBSD" ]]; then
+		lock_mtime=$(stat -f %m "$lock_dir" 2>/dev/null || true)
+	else
+		lock_mtime=$(stat -c %Y "$lock_dir" 2>/dev/null || true)
+	fi
+	now=$(date +%s 2>/dev/null || true)
+	if [[ "$lock_mtime" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ && "$now" -ge "$lock_mtime" ]]; then
+		printf '%s\n' $((now - lock_mtime))
+		return 0
+	fi
+	printf '%s\n' 0
+	return 0
+}
+
+_setup_lock_started_age_seconds() {
+	local lock_dir="$1"
+	local started_str=""
+	local started_epoch=""
+	local now_epoch=""
+	if [[ -r "$lock_dir/started_at" ]]; then
+		started_str=$(tr -d '[:space:]' <"$lock_dir/started_at" 2>/dev/null || true)
+		started_epoch=$(date -d "$started_str" +%s 2>/dev/null || \
+			date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$started_str" +%s 2>/dev/null || true)
+		now_epoch=$(date +%s 2>/dev/null || true)
+		if [[ "$started_epoch" =~ ^[0-9]+$ && "$now_epoch" =~ ^[0-9]+$ && "$now_epoch" -ge "$started_epoch" ]]; then
+			printf '%s\n' $((now_epoch - started_epoch))
+			return 0
+		fi
+	fi
+	_setup_lock_dir_age_seconds "$lock_dir"
+	return 0
+}
+
+_setup_pid_elapsed_seconds() {
+	local pid="$1"
+	local etime=""
+	local first="" second="" third=""
+	local days=0 hours=0 minutes=0 seconds=0
+	[[ "$pid" =~ ^[0-9]+$ ]] || return 1
+	etime=$(ps -p "$pid" -o etime= 2>/dev/null || true)
+	etime="${etime//[[:space:]]/}"
+	[[ -n "$etime" ]] || return 1
+	IFS=':' read -r first second third <<<"$etime"
+	if [[ -n "$third" ]]; then
+		seconds="$third"
+		minutes="$second"
+		if [[ "$first" == *"-"* ]]; then
+			days="${first%%-*}"
+			hours="${first#*-}"
+		else
+			hours="$first"
+		fi
+	else
+		minutes="$first"
+		seconds="$second"
+	fi
+	if [[ "$days" =~ ^[0-9]+$ && "$hours" =~ ^[0-9]+$ && "$minutes" =~ ^[0-9]+$ && "$seconds" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' $((days * 86400 + hours * 3600 + minutes * 60 + seconds))
+		return 0
+	fi
+	return 1
+}
+
+_setup_register_child_pid() {
+	local pid="$1"
+	[[ -n "$pid" ]] || return 0
+	SETUP_NONINTERACTIVE_CHILD_PIDS="${SETUP_NONINTERACTIVE_CHILD_PIDS}${SETUP_NONINTERACTIVE_CHILD_PIDS:+ }${pid}"
+	return 0
+}
+
+_setup_collect_child_pids() {
+	local parent_pid="$1"
+	local child_pid=""
+	local child_pids=""
+	local current_pid="${BASHPID:-$$}"
+	child_pids=$(pgrep -P "$parent_pid" 2>/dev/null || true)
+	for child_pid in $child_pids; do
+		[[ -n "$child_pid" && "$child_pid" != "$current_pid" ]] || continue
+		printf '%s\n' "$child_pid"
+		_setup_collect_child_pids "$child_pid"
+	done
+	return 0
+}
+
+_setup_kill_pid_tree() {
+	local signal_name="$1"
+	local root_pid="$2"
+	local child_pid=""
+	local current_pid="${BASHPID:-$$}"
+	[[ -n "$root_pid" && "$root_pid" != "$current_pid" ]] || return 0
+	for child_pid in $(_setup_collect_child_pids "$root_pid"); do
+		kill "-${signal_name}" "$child_pid" 2>/dev/null || true
+	done
+	kill "-${signal_name}" "$root_pid" 2>/dev/null || true
+	return 0
+}
+
+_setup_cleanup_noninteractive_children() {
+	local pid=""
+	local current_pid="${BASHPID:-$$}"
+	local grace_s="${AIDEVOPS_SETUP_CHILD_TERM_GRACE_S:-2}"
+	local has_live_child=false
+	[[ "$grace_s" =~ ^[0-9]+$ ]] || grace_s=2
+	for pid in $(_setup_collect_child_pids "$current_pid"); do
+		_setup_register_child_pid "$pid"
+	done
+	for pid in ${SETUP_NONINTERACTIVE_CHILD_PIDS:-}; do
+		if _setup_lock_pid_alive "$pid"; then
+			has_live_child=true
+			_setup_kill_pid_tree TERM "$pid"
+		fi
+	done
+	if [[ "$has_live_child" == "true" && "$grace_s" -gt 0 ]]; then
+		sleep "$grace_s" 2>/dev/null || true
+	fi
+	for pid in ${SETUP_NONINTERACTIVE_CHILD_PIDS:-}; do
+		if _setup_lock_pid_alive "$pid"; then
+			_setup_kill_pid_tree KILL "$pid"
+		fi
+	done
+	for pid in ${SETUP_NONINTERACTIVE_CHILD_PIDS:-}; do
+		wait "$pid" 2>/dev/null || true
+	done
+	return 0
+}
+
+_setup_run_noncritical_stage_bounded() {
+	local stage_label="$1"
+	local timeout_s="$2"
+	shift 2
+	local start_s=$SECONDS
+	local pid=""
+	local rc=0
+	[[ "$timeout_s" =~ ^[0-9]+$ ]] || timeout_s=60
+	"$@" &
+	pid=$!
+	_setup_register_child_pid "$pid"
+	while _setup_lock_pid_alive "$pid"; do
+		if (( SECONDS - start_s >= timeout_s )); then
+			_setup_kill_pid_tree TERM "$pid"
+			sleep "${AIDEVOPS_SETUP_CHILD_TERM_GRACE_S:-2}" 2>/dev/null || true
+			_setup_kill_pid_tree KILL "$pid"
+			wait "$pid" 2>/dev/null || true
+			print_warning "${stage_label} exceeded ${timeout_s}s — skipping remaining non-critical work"
+			return 0
+		fi
+		sleep 1
+	done
+	wait "$pid" 2>/dev/null || rc=$?
+	return "$rc"
+}
+
+_setup_release_noninteractive_setup_lock() {
+	local lock_dir="${SETUP_NONINTERACTIVE_LOCK_DIR:-}"
+	local owner_pid=""
+	if [[ "${SETUP_NONINTERACTIVE_LOCK_HELD:-false}" != "true" || -z "$lock_dir" ]]; then
+		return 0
+	fi
+	if [[ -r "$lock_dir/owner.pid" ]]; then
+		owner_pid=$(tr -d '[:space:]' <"$lock_dir/owner.pid" 2>/dev/null || true)
+	fi
+	if [[ -z "$owner_pid" || "$owner_pid" == "$$" ]]; then
+		rm -rf "$lock_dir" 2>/dev/null || true
+	fi
+	SETUP_NONINTERACTIVE_LOCK_HELD=false
+	return 0
+}
+
+_setup_noninteractive_signal_exit() {
+	local signal_name="$1"
+	local exit_code=143
+	[[ "$signal_name" == "INT" ]] && exit_code=130
+	SETUP_NONINTERACTIVE_TERMINATING=true
+	print_warning "setup.sh --non-interactive received ${signal_name}; cleaning up child deployment processes"
+	_setup_cleanup_noninteractive_children
+	_setup_release_noninteractive_setup_lock
+	exit "$exit_code"
+}
+
+# Compute how many seconds the live lock owner has held the setup lock.
+# Uses started_at_epoch when it agrees with the owner PID runtime; falls back to
+# the PID runtime when an old lock timestamp points at a newer live setup owner.
+# Prints the age in seconds on stdout; prints 0 when unknown.
+_setup_lock_owner_age() {
+	local lock_dir="$1"
+	local owner_pid="$2"
+	local _start_epoch="" _now_epoch="" _age_tmp="" _pid_age=""
+	if [[ -r "$lock_dir/started_at_epoch" ]]; then
+		_start_epoch=$(tr -d '[:space:]' <"$lock_dir/started_at_epoch" 2>/dev/null || true)
+		_now_epoch=$(date +%s 2>/dev/null || printf '0')
+		if [[ "$_start_epoch" =~ ^[0-9]+$ && "$_now_epoch" =~ ^[0-9]+$ && "$_now_epoch" -ge "$_start_epoch" ]]; then
+			_age_tmp="$((_now_epoch - _start_epoch))"
+			_pid_age=$(_setup_pid_elapsed_seconds "$owner_pid" 2>/dev/null || true)
+			if [[ "$_pid_age" =~ ^[0-9]+$ && "$_age_tmp" -gt $((_pid_age + 300)) ]]; then
+				printf '%s' "$_pid_age"
+				return 0
+			fi
+			printf '%s' "$_age_tmp"
+			return 0
+		fi
+	fi
+	# Fallback: ps etimes (seconds elapsed since process start).
+	_age_tmp=$(ps -p "$owner_pid" -o etimes= 2>/dev/null | tr -d '[:space:]')
+	if [[ "$_age_tmp" =~ ^[0-9]+$ ]]; then
+		printf '%s' "$_age_tmp"
+		return 0
+	fi
+	printf '0'
+	return 0
+}
+
+_setup_command_key_looks_secret() {
+	local key="$1"
+	key="${key#--}"
+	key="${key#-}"
+	case "$key" in
+		*password*|*passwd*|*secret*|*token*|*credential*|*api-key*|*api_key*|*apikey*|*access-key*|*access_key*|*private-key*|*private_key*|bearer)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+_setup_redact_secret_like_command_values() {
+	local command_text="$1"
+	local redacted=""
+	local separator=""
+	local word=""
+	local lower_word=""
+	local key_part=""
+	local redact_next=false
+
+	for word in $command_text; do
+		lower_word=$(printf '%s' "$word" | tr '[:upper:]' '[:lower:]')
+		if [[ "$redact_next" == "true" ]]; then
+			word="[redacted]"
+			redact_next=false
+		elif [[ "$lower_word" == *=* ]]; then
+			key_part="${lower_word%%=*}"
+			if _setup_command_key_looks_secret "$key_part"; then
+				word="${word%%=*}=[redacted]"
+			fi
+		elif _setup_command_key_looks_secret "$lower_word"; then
+			redact_next=true
+		fi
+		redacted="${redacted}${separator}${word}"
+		separator=" "
+	done
+
+	printf '%s' "$redacted"
+	return 0
+}
+
+_setup_acquire_noninteractive_setup_lock() {
+	local lock_dir="${AIDEVOPS_SETUP_LOCK_DIR:-$HOME/.aidevops/locks/setup-noninteractive.lock.d}"
+	# Max seconds to wait for a live, non-stale owner before timing out.
+	local wait_ceiling="${AIDEVOPS_SETUP_WAIT_TIMEOUT_S:-900}"
+	# Max seconds a live owner may hold the lock before it is treated as
+	# stale and reclaimed (0 disables stale-live reclaim).
+	local stale_ceiling="${AIDEVOPS_SETUP_STALE_TIMEOUT_S:-1800}"
+	local owner_pid="" owner_cmd="" owner_age=0
+	local reclaim_attempts=0 waited=0
+	local _diag_stl="$HOME/.aidevops/logs/setup-stage-timings.log"
+	local _diag_interval_s="${AIDEVOPS_SETUP_LOCK_DIAG_INTERVAL_S:-60}"
+	[[ "$_diag_interval_s" =~ ^[0-9]+$ && "$_diag_interval_s" -gt 0 ]] || _diag_interval_s=60
+	mkdir -p "$(dirname "$lock_dir")" 2>/dev/null || true
+	while true; do
+		if mkdir "$lock_dir" 2>/dev/null; then
+			SETUP_NONINTERACTIVE_LOCK_DIR="$lock_dir"
+			SETUP_NONINTERACTIVE_LOCK_HELD=true
+			printf '%s\n' "$$" >"$lock_dir/owner.pid" 2>/dev/null || true
+			printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$lock_dir/started_at" 2>/dev/null || true
+			printf '%s\n' "$(date +%s 2>/dev/null || printf '0')" >"$lock_dir/started_at_epoch" 2>/dev/null || true
+			printf '%s\n' "$0 $*" >"$lock_dir/command" 2>/dev/null || true
+			trap '_setup_cleanup_noninteractive_children; _setup_release_noninteractive_setup_lock' EXIT
+			trap '_setup_noninteractive_signal_exit TERM' TERM
+			trap '_setup_noninteractive_signal_exit INT' INT
+			return 0
+		fi
+
+		# Lock exists — inspect owner.
+		owner_pid=""
+		if [[ -r "$lock_dir/owner.pid" ]]; then
+			owner_pid=$(tr -d '[:space:]' <"$lock_dir/owner.pid" 2>/dev/null || true)
+		fi
+
+		if [[ -z "$owner_pid" ]]; then
+			local _lock_age="0"
+			_lock_age=$(_setup_lock_dir_age_seconds "$lock_dir")
+			if [[ "$_lock_age" -le 300 ]]; then
+				print_error "Another setup.sh --non-interactive process is acquiring the deploy lock (lock: ${lock_dir}, age ${_lock_age}s). Exiting to avoid overlapping deployments."
+				return 75
+			fi
+			print_warning "Removing stale setup.sh --non-interactive lock with no owner at ${lock_dir} (age ${_lock_age}s)"
+			rm -rf "$lock_dir" 2>/dev/null || true
+			reclaim_attempts=$((reclaim_attempts + 1))
+			if [[ "$reclaim_attempts" -ge 2 ]]; then
+				print_error "Unable to acquire setup.sh --non-interactive lock at ${lock_dir} after ${reclaim_attempts} stale-lock removals"
+				return 75
+			fi
+			continue
+		fi
+
+		if ! _setup_lock_pid_alive "$owner_pid"; then
+			# Dead owner — reclaim the stale lock.
+			if [[ "$reclaim_attempts" -ge 2 ]]; then
+				print_error "Unable to acquire setup.sh --non-interactive lock at ${lock_dir} after ${reclaim_attempts} stale-lock removals"
+				return 75
+			fi
+			print_warning "Removing stale setup.sh --non-interactive lock at ${lock_dir}"
+			rm -rf "$lock_dir" 2>/dev/null || true
+			reclaim_attempts=$((reclaim_attempts + 1))
+			continue
+		fi
+
+		if ! _setup_lock_pid_is_noninteractive_setup "$owner_pid"; then
+			local _owner_lock_age="0"
+			_owner_lock_age=$(_setup_lock_dir_age_seconds "$lock_dir")
+			if [[ "$_owner_lock_age" -le 300 ]]; then
+				print_error "Another setup.sh --non-interactive process may be acquiring the deploy lock (pid ${owner_pid}; lock: ${lock_dir}, age ${_owner_lock_age}s). Exiting to avoid overlapping deployments."
+				return 75
+			fi
+			print_warning "Removing stale setup.sh --non-interactive lock at ${lock_dir}; owner pid ${owner_pid} no longer appears to be setup.sh --non-interactive (age ${_owner_lock_age}s)"
+			rm -rf "$lock_dir" 2>/dev/null || true
+			reclaim_attempts=$((reclaim_attempts + 1))
+			continue
+		fi
+
+		# Owner is alive — compute age and read current setup stage.
+		owner_age=$(_setup_lock_owner_age "$lock_dir" "$owner_pid")
+		owner_cmd=""
+		[[ -r "$lock_dir/command" ]] && owner_cmd=$(tr '\n' ' ' <"$lock_dir/command" 2>/dev/null || true)
+		[[ -n "$owner_cmd" ]] && owner_cmd=$(_setup_redact_secret_like_command_values "$owner_cmd")
+		local _diag_stage=""
+		if [[ -r "$_diag_stl" ]]; then
+			local _diag_cur_stage=""
+			_diag_cur_stage=$(awk -F'\t' '$4=="RUNNING"{s=$2} END{if(s)printf "%s",s}' "$_diag_stl" 2>/dev/null || true)
+			[[ -n "$_diag_cur_stage" ]] && _diag_stage=", stage: ${_diag_cur_stage}"
+		fi
+
+		# Stale-live reclaim: owner alive but running far too long.
+		if [[ "$stale_ceiling" -gt 0 && "$owner_age" -ge "$stale_ceiling" ]]; then
+			if [[ "$reclaim_attempts" -ge 2 ]]; then
+				print_error "Unable to acquire setup.sh --non-interactive lock: owner (pid ${owner_pid}, age ${owner_age}s) exceeds stale ceiling but reclaim limit reached. Diagnose: ${_diag_stl}"
+				return 75
+			fi
+			print_warning "setup.sh --non-interactive lock owner (pid ${owner_pid}) running ${owner_age}s — exceeds stale ceiling ${stale_ceiling}s (AIDEVOPS_SETUP_STALE_TIMEOUT_S)${owner_cmd:+; command: ${owner_cmd}}. Reclaiming lock."
+			rm -rf "$lock_dir" 2>/dev/null || true
+			reclaim_attempts=$((reclaim_attempts + 1))
+			continue
+		fi
+
+		# Live non-stale owner — check wait ceiling before sleeping.
+		if [[ "$waited" -ge "$wait_ceiling" ]]; then
+			print_error "Timed out waiting ${waited}s for setup.sh --non-interactive lock (owner pid ${owner_pid}, age ${owner_age}s${_diag_stage}${owner_cmd:+, command: ${owner_cmd}}). Increase AIDEVOPS_SETUP_WAIT_TIMEOUT_S (current: ${wait_ceiling}s) or kill pid ${owner_pid} to unblock. Diagnose: ${_diag_stl}"
+			return 75
+		fi
+
+		# Emit diagnostics on first block and every diagnostic interval thereafter.
+		if [[ "$waited" -eq 0 ]]; then
+			print_info "Another setup.sh --non-interactive is running (pid ${owner_pid}, age ${owner_age}s${_diag_stage}${owner_cmd:+, command: ${owner_cmd}}). Waiting up to ${wait_ceiling}s (AIDEVOPS_SETUP_WAIT_TIMEOUT_S). Diagnose: ${_diag_stl}"
+		elif [[ $(( waited % _diag_interval_s )) -eq 0 ]]; then
+			print_info "Still waiting for setup lock (owner pid ${owner_pid}, age ${owner_age}s${_diag_stage}${owner_cmd:+, command: ${owner_cmd}}, waited ${waited}s of ${wait_ceiling}s max). Diagnose: ${_diag_stl}"
+		fi
+
+		sleep 10
+		waited=$((waited + 10))
+	done
+}
+
 # Non-interactive path: deploy agents and run safe migrations only (no prompts).
+# GH#21060 / t2911: Every direct function call is wrapped with _time_step so
+# that a one-line-per-stage TSV timing record is appended to
+# $HOME/.aidevops/logs/setup-stage-timings.log for post-run diagnostics.
 _setup_run_non_interactive() {
 	print_info "Non-interactive mode: deploying agents and running safe migrations only"
-	verify_location
-	check_requirements
-	check_python_upgrade_available
-	set_permissions
-	migrate_old_backups
-	migrate_loop_state_directories
-	migrate_agent_to_agents_folder
-	migrate_mcp_env_to_credentials
-	migrate_pulse_repos_to_repos_json
-	cleanup_deprecated_paths
-	migrate_orphaned_supervisor
-	cleanup_deprecated_mcps
-	cleanup_stale_bun_opencode
-	validate_opencode_config
-	deploy_aidevops_agents
-	sync_agent_sources
-	setup_shellcheck_wrapper
-	if is_feature_enabled safety_hooks 2>/dev/null; then
-		setup_safety_hooks
+
+	# GH#21060: Initialise per-stage timing log; rotate if over 10K lines / 1MB.
+	local _stl
+	_stl="$HOME/.aidevops/logs/setup-stage-timings.log"
+	mkdir -p "$(dirname "$_stl")" 2>/dev/null || true
+	if [[ -f "$_stl" ]]; then
+		local _stl_lines _stl_bytes
+		_stl_lines=$(wc -l <"$_stl" 2>/dev/null || echo "0")
+		_stl_bytes=$(wc -c <"$_stl" 2>/dev/null || echo "0")
+		# Strip whitespace that wc adds on some platforms
+		_stl_lines="${_stl_lines//[[:space:]]/}"
+		_stl_bytes="${_stl_bytes//[[:space:]]/}"
+		if [[ "${_stl_lines:-0}" -gt 10000 ]] || [[ "${_stl_bytes:-0}" -gt 1048576 ]]; then
+			: >"$_stl" 2>/dev/null || true
+			print_info "setup-stage-timings.log rotated (was ${_stl_lines} lines / ${_stl_bytes} bytes)"
+		fi
 	fi
-	init_settings_json
+
+	_time_step "protect_current_setup_worktree" protect_current_setup_worktree
+	_time_step "verify_location" verify_location
+	_time_step "check_requirements" check_requirements
+	# Run quality tool detection in non-interactive mode too (warn-only path).
+	_time_step "check_quality_tools" check_quality_tools
+	# Check setsid availability; auto-install util-linux on macOS if missing
+	# (GH#21102 / t2926: missing setsid kills workers on every pulse restart).
+	_time_step "setup_setsid_advisory" setup_setsid_advisory
+	_time_step "check_python_upgrade_available" check_python_upgrade_available
+	_time_step "set_permissions" set_permissions
+	_time_step "migrate_old_backups" migrate_old_backups
+	_time_step "migrate_loop_state_directories" migrate_loop_state_directories
+	_time_step "migrate_agent_to_agents_folder" migrate_agent_to_agents_folder
+	_time_step "migrate_mcp_env_to_credentials" migrate_mcp_env_to_credentials
+	_time_step "migrate_pulse_repos_to_repos_json" migrate_pulse_repos_to_repos_json
+	_time_step "cleanup_deprecated_paths" cleanup_deprecated_paths
+	_time_step "migrate_orphaned_supervisor" migrate_orphaned_supervisor
+	_time_step "backfill_issue_relationships" backfill_issue_relationships
+	_time_step "cleanup_deprecated_mcps" cleanup_deprecated_mcps
+	_time_step "cleanup_stale_bun_opencode" cleanup_stale_bun_opencode
+	_time_step "cleanup_stale_health_issue_caches" cleanup_stale_health_issue_caches
+	_time_step "cleanup_worktree_entries_in_repos_json" cleanup_worktree_entries_in_repos_json
+	_time_step "_cleanup_legacy_model_config" _cleanup_legacy_model_config
+	# t2888: install/heal opencode-ai. Companion to t2887's runtime canary
+	# fail-fast -- t2887 detects when $OPENCODE_BIN_DEFAULT is wrong, this
+	# one fixes it by reinstalling opencode-ai@latest (overwriting any bin
+	# collision with @anthropic-ai/claude-code or similar). Skipping this
+	# in non-interactive mode is the bug PR #20189 introduced and what
+	# alex-solovyev's runner spam stemmed from.
+	_time_step "setup_opencode_cli" setup_opencode_cli
+	_time_step "validate_opencode_config" validate_opencode_config
+	_time_step "deploy_aidevops_agents" deploy_aidevops_agents
+	_time_step "_setup_install_pulse_plist_early" _setup_install_pulse_plist_early
+	_time_step "_deploy_hotfix_config" _deploy_hotfix_config
+	_time_step "sync_agent_sources" sync_agent_sources
+	_time_step "install_aidevops_cli" install_aidevops_cli
+	_time_step "setup_shellcheck_wrapper" setup_shellcheck_wrapper
+	if is_feature_enabled safety_hooks 2>/dev/null; then
+		_time_step "setup_safety_hooks" setup_safety_hooks
+	fi
+	_time_step "init_settings_json" init_settings_json
 
 	# Parallelise independent skill operations (t1356: ~84s serial -> ~18s parallel)
 	# generate_agent_skills must complete before create_skill_symlinks (symlinks
 	# depend on generated SKILL.md files). scan_imported_skills is independent.
 	local _pid_symlinks=""
-	if generate_agent_skills; then
-		create_skill_symlinks &
+	if _time_step "generate_agent_skills" generate_agent_skills; then
+		_time_step "create_skill_symlinks" create_skill_symlinks &
 		_pid_symlinks=$!
+		_setup_register_child_pid "$_pid_symlinks"
 	else
 		print_warning "Agent skills generation failed — skipping skill symlinks"
 	fi
 
-	scan_imported_skills &
+	_time_step "scan_imported_skills" scan_imported_skills &
 	local _pid_scan=$!
+	_setup_register_child_pid "$_pid_scan"
 
 	if [[ -n "$_pid_symlinks" ]]; then
 		wait "$_pid_symlinks" 2>/dev/null || print_warning "Skill symlink creation encountered issues (non-critical)"
 	fi
 	wait "$_pid_scan" 2>/dev/null || print_warning "Skill security scan encountered issues (non-critical)"
 
-	inject_agents_reference
-	update_opencode_config
-	update_claude_config
-	update_codex_config
-	update_cursor_config
-	disable_ondemand_mcps
+	_time_step "inject_agents_reference" inject_agents_reference
+	# Use the bounded wrapper so a slow file-system traversal across many agent
+	# files does not consume the remaining postflight budget and trip the outer
+	# timeout (GH#22087). AIDEVOPS_DEPLOY_RUNTIMES_TIMEOUT controls the deadline.
+	_time_step "deploy_agents_to_runtimes" _deploy_agents_to_runtimes_bounded || true
+	_time_step "update_opencode_config" _setup_run_noncritical_stage_bounded "OpenCode config update" "${AIDEVOPS_UPDATE_OPENCODE_CONFIG_TIMEOUT:-60}" update_opencode_config
+	_time_step "update_claude_config" update_claude_config
+	_time_step "update_codex_config" update_codex_config
+	_time_step "update_cursor_config" update_cursor_config
+	_time_step "disable_ondemand_mcps" disable_ondemand_mcps
+	# Scaffold personal routines repo if not already present (idempotent).
+	# Creates local git repo + private GitHub remote for personal repo only.
+	# Org repos require explicit: aidevops init-routines --org <name>
+	_time_step "setup_routines" _setup_run_noncritical_stage_bounded "Routine setup" "${AIDEVOPS_SETUP_ROUTINES_TIMEOUT:-120}" setup_routines
+	# Install/refresh the privacy-guard pre-push hook in every initialized
+	# repo so TODO/todo/README/ISSUE_TEMPLATE pushes to public GitHub repos
+	# are scanned for private slug leaks (t1968).
+	_time_step "setup_privacy_guard" setup_privacy_guard
+	# Install/refresh the complexity-regression pre-push hook in every
+	# initialized repo so pushes that introduce new function-complexity,
+	# nesting-depth, or file-size violations are caught before CI (t2198).
+	_time_step "setup_complexity_guard" setup_complexity_guard
+	# Install/refresh the canonical-on-main post-checkout hook in every
+	# initialized repo so branch switches away from main in the canonical
+	# directory are warned against (t1995). Complements pre-edit-check.sh's
+	# t1990 edit-time check by catching the branch switch itself.
+	_time_step "setup_canonical_guard" setup_canonical_guard
+	# Install/refresh the task-id collision guard commit-msg hook in every
+	# initialized repo so invented t-IDs in commit subjects are rejected
+	# at commit time (t2047). Belt-and-braces with the CI check in
+	# .github/workflows/task-id-collision-check.yml.
+	_time_step "setup_task_id_guard" setup_task_id_guard
+	# Apply Spotlight + Time Machine exclusions to every worktree across
+	# registered repos so the backup/index cascade triggered by node_modules
+	# copies doesn't burn CPU (t2885). Idempotent. macOS only — Linux
+	# indexers tracked separately.
+	_time_step "setup_worktree_exclusions" setup_worktree_exclusions
+	# Provision knowledge planes for repos where knowledge != "off" (idempotent).
+	_time_step "setup_knowledge_planes" setup_knowledge_planes
+	# Provision cases planes for repos where cases != "off" (idempotent).
+	_time_step "setup_cases_planes" setup_cases_planes
 	return 0
 }
 
@@ -811,6 +1152,7 @@ _setup_run_interactive() {
 	confirm_step "Check optional dependencies (bun, node, python)" && check_optional_deps
 	confirm_step "Check Python version (recommend upgrade if outdated)" && check_python_upgrade_available
 	confirm_step "Setup recommended tools (Tabby, Zed, etc.)" && setup_recommended_tools
+	confirm_step "Setup PIM tools (Reminders, Calendar, Contacts)" && setup_pim_tools
 	confirm_step "Setup MiniSim (iOS/Android emulator launcher)" && setup_minisim
 	confirm_step "Setup ClaudeBar (AI quota monitor in menu bar)" && setup_claudebar
 	confirm_step "Setup Git CLIs (gh, glab, tea)" && setup_git_clis
@@ -837,13 +1179,17 @@ _setup_run_interactive() {
 	confirm_step "Migrate pulse-repos.json into repos.json" && migrate_pulse_repos_to_repos_json
 	confirm_step "Cleanup deprecated agent paths" && cleanup_deprecated_paths
 	confirm_step "Migrate orphaned supervisor to pulse-wrapper" && migrate_orphaned_supervisor
+	confirm_step "Backfill GitHub issue relationships (blocked-by, sub-issues)" && backfill_issue_relationships
 	confirm_step "Cleanup deprecated MCP entries (hetzner, serper, etc.)" && cleanup_deprecated_mcps
 	confirm_step "Cleanup stale bun opencode install" && cleanup_stale_bun_opencode
+	# Silent one-shot migrations (idempotent, flag-guarded — no prompt needed).
+	cleanup_stale_health_issue_caches; cleanup_worktree_entries_in_repos_json; _cleanup_legacy_model_config
 	confirm_step "Validate and repair OpenCode config schema" && validate_opencode_config
 	confirm_step "Extract OpenCode prompts" && extract_opencode_prompts
 	confirm_step "Check OpenCode prompt drift" && check_opencode_prompt_drift
-	confirm_step "Deploy aidevops agents to ~/.aidevops/agents/" && deploy_aidevops_agents
+	confirm_step "Deploy aidevops agents to ~/.aidevops/agents/" && { deploy_aidevops_agents; _deploy_hotfix_config; }
 	confirm_step "Sync agents from private repositories" && sync_agent_sources
+	confirm_step "Set up routines repo (private repo for recurring operational jobs)" && setup_routines
 	is_feature_enabled safety_hooks 2>/dev/null && confirm_step "Install Claude Code safety hooks (block destructive commands)" && setup_safety_hooks
 	confirm_step "Initialize settings.json (canonical config file)" && init_settings_json
 	confirm_step "Setup multi-tenant credential storage" && setup_multi_tenant_credentials
@@ -852,17 +1198,18 @@ _setup_run_interactive() {
 	confirm_step "Check for skill updates from upstream" && check_skill_updates
 	confirm_step "Security scan imported skills" && scan_imported_skills
 	confirm_step "Inject agents reference into AI configs" && inject_agents_reference
+	confirm_step "Deploy aidevops agents to runtime agent directories" && deploy_agents_to_runtimes
 	confirm_step "Setup Python environment (DSPy, crawl4ai)" && setup_python_env
 	confirm_step "Setup Node.js environment" && setup_nodejs_env
 	confirm_step "Install MCP packages globally (fast startup)" && install_mcp_packages
 	confirm_step "Setup LocalWP MCP server" && setup_localwp_mcp
-	confirm_step "Setup Augment Context Engine MCP" && setup_augment_context_engine
 	confirm_step "Setup Beads task management" && setup_beads
 	confirm_step "Setup SEO integrations (curl subagents)" && setup_seo_mcps
 	confirm_step "Setup Google Analytics MCP" && setup_google_analytics_mcp
 	confirm_step "Setup QuickFile MCP (UK accounting)" && setup_quickfile_mcp
 	confirm_step "Setup browser automation tools" && setup_browser_tools
 	confirm_step "Setup AI orchestration frameworks info" && setup_ai_orchestration
+	confirm_step "Setup Ollama (local LLM for knowledge plane pii/sensitive/privileged tiers)" && setup_ollama_for_knowledge
 	confirm_step "Setup Google Workspace CLI (Gmail, Calendar, Drive)" && setup_google_workspace_cli
 	confirm_step "Setup OpenCode CLI (AI coding tool)" && setup_opencode_cli
 	confirm_step "Setup OpenCode plugins" && setup_opencode_plugins
@@ -875,14 +1222,107 @@ _setup_run_interactive() {
 	# Run AFTER Claude Code config so Codex/Cursor get equivalent setup
 	confirm_step "Update Codex configuration (MCPs, instructions)" && update_codex_config
 	confirm_step "Update Cursor configuration (MCPs)" && update_cursor_config
+	# Deploy slash commands to the other installed runtimes (Codex, Cursor,
+	# Droid, Gemini CLI, Continue, Kiro, Kimi, Qwen) via the unified generator.
+	# OpenCode and Claude Code are already handled by their update_*_config
+	# functions above. Closes GH#18106 / t15474.
+	confirm_step "Deploy slash commands to remaining runtimes" && deploy_commands_to_all_runtimes
 	# Run AFTER all MCP setup functions to ensure disabled state persists
 	confirm_step "Disable on-demand MCPs globally" && disable_ondemand_mcps
 	return 0
 }
 
 # Post-setup steps: schedulers, final instructions, optional tool update check.
+# Non-interactive scheduler installation. Extracted from
+# `_setup_post_setup_steps` (t2903) to keep the parent under the
+# function-complexity gate threshold. Each `_should_setup_noninteractive_*`
+# guard returns 0 when the corresponding scheduler is already installed
+# (regenerate on update) or first-time install is consented via config.
+_setup_noninteractive_schedulers() {
+	local os="$1"
+
+	# GH#22012: Wrap every scheduler step with _time_step so the stage-timing
+	# log ($HOME/.aidevops/logs/setup-stage-timings.log) covers post-deploy
+	# scheduler setup — the same visibility _setup_run_non_interactive has.
+
+	# Auto-update handles non-interactive internally (systemd detection fixed in GH#17861)
+	_time_step "setup_auto_update" setup_auto_update
+	if _should_setup_noninteractive_supervisor_pulse; then
+		_time_step "setup_supervisor_pulse" setup_supervisor_pulse "$os"
+	fi
+	# t2939: pulse-watchdog (independent revival mechanism). Always installed
+	# alongside the pulse — it is a no-op when pulse is disabled. Skipping the
+	# `_should_setup_noninteractive_*` guard intentionally: this is layered
+	# defense, the cost of installing it is one plist file, and the user opts
+	# in by enabling the pulse itself.
+	_time_step "setup_pulse_watchdog" setup_pulse_watchdog "${PULSE_ENABLED:-}"
+	# Regenerate other schedulers if already installed (GH#17695 Finding B).
+	# Stats wrapper is a pulse dependency — also install on first run when
+	# the supervisor pulse is consented (t2418, GH#20016).
+	if _should_setup_noninteractive_stats_wrapper; then
+		_time_step "setup_stats_wrapper" setup_stats_wrapper "${PULSE_ENABLED:-}"
+	fi
+	if _should_setup_noninteractive_scheduler "Failure miner" "sh.aidevops.routine-gh-failure-miner" "aidevops: gh-failure-miner" "aidevops-gh-failure-miner"; then
+		_time_step "setup_failure_miner" setup_failure_miner "${PULSE_ENABLED:-}"
+	fi
+	if _should_setup_noninteractive_scheduler "Process guard" "sh.aidevops.process-guard" "aidevops: process-guard" "aidevops-process-guard"; then
+		_time_step "setup_process_guard" setup_process_guard
+	fi
+	if _should_setup_noninteractive_scheduler "Memory pressure" "sh.aidevops.memory-pressure-monitor" "aidevops: memory-pressure-monitor" "aidevops-memory-pressure-monitor"; then
+		_time_step "setup_memory_pressure_monitor" setup_memory_pressure_monitor
+	fi
+	if _should_setup_noninteractive_scheduler "Screen time" "sh.aidevops.screen-time-snapshot" "aidevops: screen-time-snapshot" "aidevops-screen-time-snapshot"; then
+		_time_step "setup_screen_time_snapshot" setup_screen_time_snapshot
+	fi
+	if _should_setup_noninteractive_scheduler "Contribution watch" "sh.aidevops.contribution-watch" "aidevops: contribution-watch" "aidevops-contribution-watch"; then
+		_time_step "setup_contribution_watch" setup_contribution_watch
+	fi
+	# t2903 (#21049): complexity scan — extracted from pulse dispatch preflight
+	if _should_setup_noninteractive_scheduler "Complexity scan" "sh.aidevops.complexity-scan" "aidevops: complexity-scan" "aidevops-complexity-scan"; then
+		_time_step "setup_complexity_scan" setup_complexity_scan
+	fi
+	# t2862 (GH#20919): pulse merge routine — fast 120s standalone merge pass.
+	# t3036 (GH#21616): use the pulse-dependency escape hatch instead of the
+	# generic chicken-and-egg gate so the routine installs on existing systems
+	# whenever the supervisor pulse is consented.
+	if _should_setup_noninteractive_pulse_merge_routine; then
+		_time_step "setup_pulse_merge_routine" _setup_run_noncritical_stage_bounded "Pulse merge routine setup" "${AIDEVOPS_SETUP_PULSE_MERGE_ROUTINE_TIMEOUT:-30}" setup_pulse_merge_routine
+	fi
+	# t2932 (GH#21125): peer productivity monitor — adaptive cross-runner
+	# dispatch coordination, runs every 30 min.
+	if _should_setup_noninteractive_scheduler "Peer productivity monitor" "sh.aidevops.peer-productivity-monitor" "aidevops: peer-productivity-monitor" "aidevops-peer-productivity-monitor"; then
+		_time_step "setup_peer_productivity_monitor" setup_peer_productivity_monitor
+	fi
+	# Repo sync handles non-interactive mode internally (systemd detection fixed in GH#17861)
+	_time_step "setup_repo_sync" setup_repo_sync
+	# r914 repo-aidevops-health — daily drift keeper (t2366)
+	_time_step "setup_repo_aidevops_health" setup_repo_aidevops_health
+	if _should_setup_noninteractive_scheduler "Profile README" "sh.aidevops.profile-readme-update" "aidevops: profile-readme-update" "aidevops-profile-readme-update"; then
+		_time_step "setup_profile_readme" setup_profile_readme
+	fi
+	if _should_setup_noninteractive_scheduler "OAuth token refresh" "sh.aidevops.token-refresh" "aidevops: token-refresh" "aidevops-token-refresh"; then
+		_time_step "setup_oauth_token_refresh" setup_oauth_token_refresh
+	fi
+	# opencode DB maintenance (r913, t2183). Helper self-noops on missing
+	# DB — safe to install unconditionally in non-interactive mode too.
+	_time_step "setup_opencode_db_maintenance" setup_opencode_db_maintenance
+	# Migrate cron entries to systemd after schedulers are installed (GH#17695 Finding D)
+	_time_step "migrate_cron_to_systemd" migrate_cron_to_systemd
+	_time_step "setup_tabby" setup_tabby
+	return 0
+}
+
 _setup_post_setup_steps() {
 	local os="$1"
+
+	# Non-interactive mode still has post-deploy scheduler and pulse-restart
+	# work to do. Do not print the human "Setup complete!" marker until those
+	# bounded postflight steps and the final child-process drain have finished;
+	# callers treat that line as a completion signal.
+	if [[ "$NON_INTERACTIVE" == "true" ]]; then
+		_setup_noninteractive_schedulers "$os"
+		return 0
+	fi
 
 	# Print setup summary before final success message (GH#5240)
 	print_setup_summary
@@ -890,27 +1330,38 @@ _setup_post_setup_steps() {
 	echo ""
 	print_success "Setup complete!"
 
-	# Non-interactive mode: deploy + migrations only — skip schedulers,
-	# services, and optional post-setup work (CI/agent shells don't need them).
-	# Tabby profile sync runs in both modes (has its own non-interactive path).
-	if [[ "$NON_INTERACTIVE" == "true" ]]; then
-		setup_tabby
-		return 0
+	# Cache client request format constants if CLI is installed (~50ms)
+	if command -v claude &>/dev/null && [[ -x "${INSTALL_DIR}/.agents/scripts/cch-extract.sh" ]]; then
+		"${INSTALL_DIR}/.agents/scripts/cch-extract.sh" --cache >/dev/null 2>&1 || true
+	else
+		echo ""
+		echo -e "${YELLOW}[TIP]${NC} Install Claude CLI for automatic request format alignment:"
+		echo "      npm install -g @anthropic-ai/claude-code"
 	fi
 
 	# Post-setup: auto-update, schedulers, final instructions (GH#5793)
 	setup_auto_update
 	setup_supervisor_pulse "$os"
+	# t2939: pulse-watchdog — independent revival mechanism, layered defense.
+	setup_pulse_watchdog "${PULSE_ENABLED:-}"
 	setup_stats_wrapper "${PULSE_ENABLED:-}"
 	setup_failure_miner "${PULSE_ENABLED:-}"
 	setup_repo_sync
+	# r914 repo-aidevops-health — daily drift keeper (t2366)
+	setup_repo_aidevops_health
 	setup_process_guard
 	setup_memory_pressure_monitor
 	setup_screen_time_snapshot
 	setup_contribution_watch
+	setup_complexity_scan
+	setup_pulse_merge_routine
+	setup_peer_productivity_monitor
 	setup_draft_responses
 	setup_profile_readme
 	setup_oauth_token_refresh
+	setup_opencode_db_maintenance
+	# Migrate cron entries to systemd after schedulers are installed (GH#17695 Finding D)
+	migrate_cron_to_systemd
 	setup_tabby
 	print_final_instructions
 
@@ -921,6 +1372,68 @@ _setup_post_setup_steps() {
 	fi
 
 	setup_onboarding_prompt
+	return 0
+}
+
+_setup_restart_pulse_if_running() {
+	# t2579: restart pulse if running, so newly-deployed scripts take effect.
+	# t3491/GH#22418: then call idempotent start so a release deploy also
+	# recovers a stopped pulse instead of leaving dispatch dead until manual
+	# intervention. Honour AIDEVOPS_SKIP_PULSE_RESTART=1 for both operations.
+	# Uses the deployed helper (not the repo-local one) so the restart runs
+	# against the agents directory setup.sh just populated.
+	# GH#22012: bounded 120 s timeout prevents setup.sh hanging here when the
+	# pulse helper takes unusually long to stop a stalled instance. Falls back
+	# to an unbounded call on platforms without timeout(1) (old macOS w/o
+	# coreutils, embedded shells).
+	if [[ "${AIDEVOPS_SKIP_PULSE_RESTART:-0}" == "1" ]]; then
+		return 0
+	fi
+
+	local _pulse_helper="${HOME}/.aidevops/agents/scripts/pulse-lifecycle-helper.sh"
+	if [[ -x "$_pulse_helper" ]]; then
+		if command -v timeout >/dev/null 2>&1; then
+			timeout 120 "$_pulse_helper" restart-if-running || print_warning "Pulse restart failed (non-fatal)"
+			timeout 120 "$_pulse_helper" start || print_warning "Pulse start failed (non-fatal)"
+		else
+			"$_pulse_helper" restart-if-running || print_warning "Pulse restart failed (non-fatal)"
+			"$_pulse_helper" start || print_warning "Pulse start failed (non-fatal)"
+		fi
+	fi
+	return 0
+}
+
+_setup_print_noninteractive_success() {
+	# Ensure every tracked or discovered child has either exited or been
+	# intentionally terminated before emitting the caller-visible success line.
+	_setup_cleanup_noninteractive_children
+	print_setup_summary
+	echo ""
+	print_success "Setup complete!"
+	return 0
+}
+
+# Print the completion sentinel. This is the canonical "setup.sh finished all
+# phases" marker — any caller that needs to detect silent early-termination
+# (e.g., t2022-class bugs where a sourced helper's set -e propagates a
+# readonly assignment failure and kills the parent) should grep log output
+# for the literal "[SETUP_COMPLETE]" prefix.
+#
+# Format is intentionally stable and parseable. Do NOT add human-readable
+# decoration or move this function without updating:
+#   .agents/scripts/verify-setup-log.sh       (the consumer)
+#   tests/test-setup-completion-sentinel.sh   (the contract guard)
+#
+# GH#18492 / t2026.
+print_setup_complete_sentinel() {
+	local _version="unknown"
+	if [[ -r "${INSTALL_DIR}/VERSION" ]]; then
+		_version="$(head -n1 "${INSTALL_DIR}/VERSION" 2>/dev/null || printf 'unknown')"
+	fi
+	local _mode="non-interactive"
+	[[ "${NON_INTERACTIVE:-false}" != "true" ]] && _mode="interactive"
+	printf '[SETUP_COMPLETE] aidevops setup.sh v%s finished all phases (mode=%s)\n' \
+		"$_version" "$_mode"
 	return 0
 }
 
@@ -945,7 +1458,16 @@ main() {
 		exit 1
 	fi
 
+	if [[ "$NON_INTERACTIVE" == "true" ]]; then
+		_setup_acquire_noninteractive_setup_lock "$@" || exit $?
+	fi
+
 	_setup_print_header
+
+	# GH#18950 (t2087): bash 3.2 → modern bash upgrade check. Runs before
+	# the main setup flow so the user sees the prompt early. Fail-open —
+	# never blocks setup even if bash install fails.
+	_setup_check_bash_upgrade
 
 	if [[ "$NON_INTERACTIVE" == "true" ]]; then
 		_setup_run_non_interactive
@@ -954,6 +1476,19 @@ main() {
 	fi
 
 	_setup_post_setup_steps "$_os"
+
+	_setup_restart_pulse_if_running
+
+	if [[ "$NON_INTERACTIVE" == "true" ]]; then
+		_setup_print_noninteractive_success
+	fi
+
+	# GH#18492 / t2026: completion sentinel. Must be the last output of a
+	# successful run — any silent early-termination will leave this absent
+	# from the log. Consumed by .agents/scripts/verify-setup-log.sh and
+	# enforced as the regression contract by
+	# tests/test-setup-completion-sentinel.sh.
+	print_setup_complete_sentinel
 
 	return 0
 }

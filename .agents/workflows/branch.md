@@ -3,14 +3,14 @@ description: Git branch creation and management workflow
 mode: subagent
 tools:
   read: true
-  write: false
-  edit: false
   bash: true
   glob: true
   grep: true
-  webfetch: false
   task: true
 ---
+
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
 # Branch Workflow
 
@@ -18,9 +18,10 @@ tools:
 
 ## Quick Reference
 
-- **Before building**: Check for existing WIP branch (`git branch -a | grep -E "(feature|bugfix|hotfix|refactor|chore|experiment)/"`)
-- **Continue WIP**: `git checkout <branch>` and resume
-- **New work**: Create branch from updated `main`, using type below
+- Resume existing work first: `git worktree list` or `wt list`
+- Start from canonical repo on `main`: `wt switch -c {type}/{name}`
+- Fallback: `worktree-helper.sh add {type}/{name}`
+- Keep `~/Git/{repo}/` on `main`; do task work in the linked worktree path
 
 | Task Type | Branch Prefix | Subagent |
 |-----------|---------------|----------|
@@ -32,59 +33,48 @@ tools:
 | Spike, POC | `experiment/` | `branch/experiment.md` |
 | Version release | `release/` | `branch/release.md` |
 
-**Branch naming**: `{type}/{short-description}` — lowercase, hyphens, max ~50 chars (e.g., `feature/user-dashboard`, `bugfix/123-login-timeout`). Release branches use semver: `release/1.2.0`.
-
-**Mandatory start**:
-
-```bash
-git checkout main && git pull origin main && git checkout -b {type}/{description}
-```
-
-**Task status**: Move task to `## In Progress`, add `started:` timestamp, then `beads-sync-helper.sh push`.
-
-**Lifecycle**: Create → Develop → Preflight → Version → Push → PR → Review → Merge → Release → Postflight → Cleanup
-
-**Task lifecycle**:
-
-```text
-Ready/Backlog → In Progress → In Review → Done
-   (branch)       (develop)      (PR)     (merge/release)
-```
+- Branch names: `{type}/{short-description}` — lowercase, hyphenated, ~50 chars max. Examples: `feature/user-dashboard`, `bugfix/123-login-timeout`; releases use semver (`release/1.2.0`).
+- Planning tasks: move to `## In Progress`, add `started:<ISO>`, then `beads-sync-helper.sh push`.
 
 <!-- AI-CONTEXT-END -->
 
-**Before creating branches**: Read `workflows/git-workflow.md` for issue URL handling, fork detection, and new repo initialization.
-
-**Branch names from planning files**: Slugify task descriptions — lowercase, spaces→hyphens, remove special chars. See `git-workflow.md` for full rules.
+Before creating a branch, read `workflows/git-workflow.md` (issue URLs, fork detection, commit/PR rules) and `workflows/worktree.md` (creation, cleanup). Pre-slugify branch names: lowercase, spaces→hyphens, special chars removed. Worktree paths auto-slugified by `generate_worktree_path()` (`/` → `-`, lowercased).
 
 ## Branch Lifecycle
 
-| Stage | Action | Command / Agent | Required |
-|-------|--------|-----------------|----------|
-| 1. Create | Branch from `main` | `git checkout main && git pull origin main && git checkout -b {type}/{desc}` | Yes |
-| 2. Develop | Conventional commits | `branch/{type}.md`, domain agents | Yes |
-| 3. Preflight | Local quality checks | `.agents/scripts/linters-local.sh --fast` → `workflows/preflight.md` | Yes |
-| 4. Version | Bump for releases | `.agents/scripts/version-manager.sh bump [major\|minor\|patch]` → `workflows/version-bump.md` | Releases only |
-| 5. Push | Remote backup | `git push -u origin HEAD` | Yes |
-| 6. PR | Create PR/MR | `gh pr create --fill` / `glab mr create --fill` → `workflows/pr.md` | Yes |
-| 7. Review | Address feedback | `git add . && git commit -m "fix: ..." && git push` → `workflows/code-audit-remote.md` | Yes |
-| 8. Merge | Squash merge | `gh pr merge --squash --delete-branch` | Yes |
-| 9. Release | Tag and publish | `.agents/scripts/version-manager.sh release [major\|minor\|patch]` → `workflows/release.md` | Releases only |
-| 10. Postflight | Verify CI/CD | `gh run watch $(gh run list --limit=1 --json databaseId -q '.[0].databaseId') --exit-status` → `workflows/postflight.md` | Releases only |
-| 11. Cleanup | Delete branch | `git branch -d {name}` / `git push origin --delete {name}` (if not auto-deleted) | Yes |
+Commits: conventional (`feat:` `fix:` `refactor:` `docs:` `chore:` `test:`). Include issue refs when the repo workflow requires them.
 
-**Task status update on branch create**: Move task from `## Ready`/`## Backlog` to `## In Progress`, add `started:<ISO>`, then `beads-sync-helper.sh push`.
+| Stage | Command / Agent | Notes |
+|-------|-----------------|-------|
+| Create | `wt switch -c {type}/{desc}` or `worktree-helper.sh add {type}/{desc}` | Linked worktree from `main` |
+| Develop | `branch/{type}.md`, domain agents | Use conventional commits |
+| Preflight | `.agents/scripts/linters-local.sh --fast` → `workflows/preflight.md` | Required before push |
+| Version | `.agents/scripts/version-manager.sh bump [major\|minor\|patch]` → `workflows/version-bump.md` | Releases only |
+| Push | `git push -u origin HEAD` | Remote backup |
+| PR | `gh pr create --fill` / `glab mr create --fill` → `workflows/pr.md` | Required |
+| Review | `git add . && git commit -m "fix: ..." && git push` → `workflows/code-audit-remote.md` | Address feedback |
+| Merge | `gh pr merge --squash` | Required |
+| Release | `.agents/scripts/version-manager.sh release [major\|minor\|patch]` → `workflows/release.md` | Releases only |
+| Postflight | `gh run watch $(gh run list --limit=1 --json databaseId -q '.[0].databaseId') --exit-status` → `workflows/postflight.md` | Releases only |
+| Cleanup | `worktree-helper.sh remove {type}/{desc}` / `git push origin --delete {name}` | Remove merged worktree; delete branch if needed |
+
+## Worktree Rules
+
+- Prefer worktrees over `git checkout -b`; the next session must inherit `main`, not a task branch.
+- Reference the worktree path (`~/Git/{repo}-{type}-{slug}/`), not "switching the main repo to a branch".
+- After switching to a worktree, re-read files at the worktree path before editing.
+- Never remove a worktree you did not create unless the user explicitly asked.
 
 ## Keeping Branch Updated
 
 ```bash
-git checkout main && git pull origin main && git checkout your-branch && git merge main
-# Resolve conflicts if any — see tools/git/conflict-resolution.md
+git fetch origin main && git merge origin/main
+# Rebase if required; conflicts → tools/git/conflict-resolution.md
 ```
 
 ## Safety: Protecting Uncommitted Work
 
-Before destructive operations (reset, clean, rebase, checkout with changes):
+Before reset, clean, rebase, or checkout with local changes:
 
 ```bash
 git stash --include-untracked -m "safety: before [operation]"
@@ -92,24 +82,16 @@ git stash --include-untracked -m "safety: before [operation]"
 git stash pop   # or: git stash show -p to review on conflict
 ```
 
-`git restore` only recovers tracked files — untracked new files are permanently lost without stash.
-
-## Commit Message Standards
-
-```text
-type: brief description
-
-Detailed explanation if needed.
-Fixes #123
-```
-
-Types: `feat:` `fix:` `refactor:` `docs:` `chore:` `test:`
+`git restore` only recovers tracked files — untracked files are permanently lost without stash.
 
 ## Related Workflows
 
-- `workflows/git-workflow.md` — complete git workflow (issue URLs, fork detection, new repos)
-- `workflows/pr.md` — PR creation and review
-- `workflows/preflight.md` — quality checks before push
-- `workflows/version-bump.md`, `workflows/changelog.md` — versioning
-- `workflows/release.md`, `workflows/postflight.md` — release and verification
-- `workflows/code-audit-remote.md` — code review
+| Workflow | Purpose |
+|----------|---------|
+| `workflows/git-workflow.md` | Issue URLs, commit/PR rules, repo setup |
+| `workflows/worktree.md` | Worktree creation, ownership, cleanup |
+| `workflows/pr.md` | PR creation and review |
+| `workflows/preflight.md` | Quality checks before push |
+| `workflows/version-bump.md`, `workflows/changelog.md` | Versioning |
+| `workflows/release.md`, `workflows/postflight.md` | Release verification |
+| `workflows/code-audit-remote.md` | Code review |

@@ -1,8 +1,13 @@
-# Patterns & Use Cases
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
+# API Shield — Patterns & Use Cases
+
+Practical patterns for securing APIs with Cloudflare API Shield. See `api-shield.md` for concepts and `api-shield-gotchas.md` for known issues.
 
 ## Protect API with Schema + JWT
 
-```bash
+```http
 # 1. Upload OpenAPI schema
 POST /zones/{zone_id}/api_gateway/user_schemas
 
@@ -20,9 +25,9 @@ PUT /zones/{zone_id}/api_gateway/settings/schema_validation
 
 ## Progressive Rollout
 
-1. **Log mode** — Schema + JWT action = Log; observe false positives
-2. **Block subset** — Change critical endpoint actions to Block; monitor firewall events
-3. **Full enforcement** — Default action = Block; handle fallthrough with custom rule
+1. **Log mode** — action = Log; observe false positives
+2. **Block subset** — critical endpoints → Block; monitor firewall events
+3. **Full enforcement** — default action = Block; handle fallthrough with custom rule
 
 ## Fallthrough Detection (Zombie APIs)
 
@@ -45,43 +50,17 @@ PUT /zones/{zone_id}/api_gateway/settings/schema_validation
 
 ## Architecture Patterns
 
-### Public API (High Security)
+| Pattern | Edge Stack |
+|---------|------------|
+| **Public API** (high security) | Discovery → Schema Validation → JWT → Rate Limiting → Bot Management → Origin |
+| **Partner API** (mTLS + schema) | mTLS → Schema Validation → Sequence Mitigation → Origin |
+| **Internal API** (discovery + monitoring) | Discovery → Schema Learning → Auth Posture → Origin |
 
-```
-Cloudflare Edge
-├── API Discovery (identify endpoints)
-├── Schema Validation (enforce OpenAPI)
-├── JWT Validation (verify tokens)
-├── Rate Limiting (per-user)
-├── Bot Management (filter abuse)
-└── Origin → API server
-```
-
-### Partner API (mTLS + Schema)
-
-```
-Cloudflare Edge
-├── mTLS (verify client certs)
-├── Schema Validation (validate payloads)
-├── Sequence Mitigation (enforce order)
-└── Origin → API server
-```
-
-### Internal API (Discovery + Monitoring)
-
-```
-Cloudflare Edge
-├── API Discovery (map shadow APIs)
-├── Schema Learning (auto-generate specs)
-├── Authentication Posture (audit coverage)
-└── Origin → API server
-```
-
-## OWASP API Security Top 10 Mapping
+## OWASP API Top 10 Mapping
 
 | OWASP Issue | API Shield Solutions |
 |-------------|---------------------|
-| Broken Object Level Authorization | BOLA detection, Sequence mitigation, Schema, JWT, Rate Limiting |
+| Broken Object Level Auth | BOLA detection, Sequence, Schema, JWT, Rate Limiting |
 | Broken Authentication | Auth Posture, mTLS, JWT, Credential Checks, Bot Management |
 | Broken Object Property Auth | Schema validation, JWT validation |
 | Unrestricted Resource | Rate Limiting, Sequence, Bot Management, GraphQL protection |
@@ -94,21 +73,9 @@ Cloudflare Edge
 
 ## Monitoring
 
-**Security Events:** Security > Events — Filter: Action = block, Service = API Shield
-
-**Firewall Analytics:** Analytics > Security — Filter by `cf.api_gateway.*` fields
-
-**Logpush fields:**
-
-```json
-{
-  "APIGatewayAuthIDPresent": true,
-  "APIGatewayRequestViolatesSchema": false,
-  "APIGatewayFallthroughDetected": false,
-  "JWTValidationResult": "valid",
-  "ClientCertFingerprint": "abc123..."
-}
-```
+- **Security Events**: Security > Events — Action=block, Service=API Shield
+- **Firewall Analytics**: Analytics > Security — `cf.api_gateway.*` fields
+- **Logpush**: `APIGatewayAuthIDPresent`, `APIGatewayRequestViolatesSchema`, `APIGatewayFallthroughDetected`, `JWTValidationResult`, `ClientCertFingerprint`
 
 ## Availability
 
@@ -122,6 +89,4 @@ Cloudflare Edge
 | Sequence Mitigation | Enterprise (closed beta) |
 | BOLA Detection | Enterprise (add-on) |
 | Volumetric Abuse | Enterprise (add-on) |
-| Full Suite | Enterprise add-on |
-
-Enterprise: 10K ops (contact for higher); non-contract preview available.
+| Full Suite | Enterprise add-on; 10K ops (contact for higher); non-contract preview available |

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # headless-runtime-helper.sh - Model-aware OpenCode wrapper for pulse/workers
 #
@@ -7,892 +9,157 @@
 #   - Persists OpenCode session IDs per provider + session key
 #   - Records backoff state per model (rate limits) or per provider (auth errors)
 #   - Clears backoff automatically when auth changes or retry windows expire
-#   - Supports opencode/* gateway models when explicitly configured
+#   - NOTE: opencode/* gateway models are NOT used (per-token billing, too expensive)
+#
+# Stable utility functions (state DB, provider auth, backoff, output parsing,
+# metrics, sandbox, contract, watchdog, model choice, cmd builders) live in
+# headless-runtime-lib.sh — sourced below. This file is the thin orchestrator.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)" || exit
-# shellcheck source=shared-constants.sh
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./shared-constants.sh
 source "${SCRIPT_DIR}/shared-constants.sh"
+# shellcheck source=./worker-lifecycle-common.sh
+source "${SCRIPT_DIR}/worker-lifecycle-common.sh"
 
+# SSH agent integration for commit signing (t1882)
+# Source persisted agent.env so workers can sign commits without passphrase prompts.
+if [[ -f "$HOME/.ssh/agent.env" ]]; then
+	# shellcheck source=/dev/null
+	. "$HOME/.ssh/agent.env" >/dev/null 2>&1 || true
+fi
+
+# Absolute fallback when both pool and routing table are unavailable (GH#17769)
 readonly DEFAULT_HEADLESS_MODELS="anthropic/claude-sonnet-4-6"
 readonly STATE_DIR="${AIDEVOPS_HEADLESS_RUNTIME_DIR:-${HOME}/.aidevops/.agent-workspace/headless-runtime}"
 readonly STATE_DB="${STATE_DIR}/state.db"
 readonly OPENCODE_BIN_DEFAULT="${OPENCODE_BIN:-opencode}"
 readonly SANDBOX_EXEC_HELPER="${SCRIPT_DIR}/sandbox-exec-helper.sh"
 readonly DISPATCH_LEDGER_HELPER="${SCRIPT_DIR}/dispatch-ledger-helper.sh"
+readonly OAUTH_POOL_HELPER="${SCRIPT_DIR}/oauth-pool-helper.sh"
 readonly HEADLESS_SANDBOX_TIMEOUT_DEFAULT="${AIDEVOPS_HEADLESS_SANDBOX_TIMEOUT:-3600}"
 readonly OPENCODE_AUTH_FILE="${HOME}/.local/share/opencode/auth.json"
 readonly LOCK_DIR="${STATE_DIR}/locks"
+readonly METRICS_DIR="${HOME}/.aidevops/logs"
+readonly METRICS_FILE="${METRICS_DIR}/headless-runtime-metrics.jsonl"
+readonly RESOURCE_METRICS_HELPER="${SCRIPT_DIR}/resource-metrics-helper.sh"
+readonly RESOURCE_METRICS_FILE="${METRICS_DIR}/resource-metrics.jsonl"
 
-# _register_dispatch_ledger: register this dispatch in the in-flight ledger (GH#6696).
-# Extracts issue number from session_key (pattern: "issue-NNN") and registers
-# the dispatch so the pulse can detect in-flight workers before they create PRs.
-#
-# Args: $1 = session_key, $2 = work_dir (used to resolve repo slug)
-_register_dispatch_ledger() {
-	local ledger_session_key="$1"
-	local ledger_work_dir="$2"
+# Runtime temp paths owned by this helper. The worker EXIT trap also calls the
+# cleanup function below so prompt/auth dirs are removed after normal exits,
+# watchdog kills, and retry-path failures. Kept newline-delimited for bash 3.2.
+_HEADLESS_RUNTIME_TEMP_PATHS=""
+_HEADLESS_RUN_PROMPT_ARG=""
+_HEADLESS_RUN_PROMPT_FILE=""
+_HEADLESS_CLAUDE_STDIN_FILE=""
 
-	[[ -x "$DISPATCH_LEDGER_HELPER" ]] || return 0
-
-	local ledger_issue=""
-	local ledger_repo=""
-
-	# Extract issue number from session key (e.g., "issue-42" -> "42")
-	if [[ "$ledger_session_key" =~ ^issue-([0-9]+)$ ]]; then
-		ledger_issue="${BASH_REMATCH[1]}"
-	fi
-
-	# Resolve repo slug from work_dir via git remote
-	if [[ -n "$ledger_work_dir" && -d "$ledger_work_dir" ]]; then
-		ledger_repo=$(git -C "$ledger_work_dir" remote get-url origin 2>/dev/null | sed -E 's|.*[:/]([^/]+/[^/]+)(\.git)?$|\1|' || true)
-	fi
-
-	local ledger_args=(register --session-key "$ledger_session_key" --pid "$$")
-	[[ -n "$ledger_issue" ]] && ledger_args+=(--issue "$ledger_issue")
-	[[ -n "$ledger_repo" ]] && ledger_args+=(--repo "$ledger_repo")
-
-	"$DISPATCH_LEDGER_HELPER" "${ledger_args[@]}" 2>/dev/null || true
-	return 0
-}
-
-# _update_dispatch_ledger: mark a dispatch as completed or failed (GH#6696).
-# Args: $1 = session_key, $2 = status ("completed" or "failed")
-_update_dispatch_ledger() {
-	local ledger_session_key="$1"
-	local ledger_status="$2"
-
-	[[ -x "$DISPATCH_LEDGER_HELPER" ]] || return 0
-
-	"$DISPATCH_LEDGER_HELPER" "$ledger_status" --session-key "$ledger_session_key" 2>/dev/null || true
-	return 0
-}
-
-# _acquire_session_lock: prevent duplicate workers for the same session-key (GH#6538).
-#
-# Creates a PID lock file at $LOCK_DIR/<session_key>.pid. If a lock file
-# already exists with a live PID, returns 1 (duplicate — caller should exit).
-# If the PID is dead, cleans up the stale lock and acquires a new one.
-#
-# Args: $1 = session_key
-# Returns: 0 = lock acquired, 1 = duplicate detected (live process exists)
-_acquire_session_lock() {
-	local lock_session_key="$1"
-	mkdir -p "$LOCK_DIR" 2>/dev/null || true
-
-	# Sanitise session key for use as filename (replace / and spaces)
-	local safe_key
-	safe_key=$(printf '%s' "$lock_session_key" | tr '/ ' '__')
-	local lock_file="${LOCK_DIR}/${safe_key}.pid"
-
-	if [[ -f "$lock_file" ]]; then
-		local existing_pid
-		existing_pid=$(cat "$lock_file" 2>/dev/null) || existing_pid=""
-		if [[ -n "$existing_pid" ]] && [[ "$existing_pid" =~ ^[0-9]+$ ]]; then
-			if kill -0 "$existing_pid" 2>/dev/null; then
-				# Live process exists — duplicate dispatch
-				print_warning "Duplicate dispatch blocked: session-key '${lock_session_key}' already has active worker PID ${existing_pid} (GH#6538)"
-				return 1
-			fi
-			# PID is dead — stale lock, clean up and proceed
-		fi
-		rm -f "$lock_file"
-	fi
-
-	# Write our PID to the lock file
-	printf '%s' "$$" >"$lock_file"
-	return 0
-}
-
-# _release_session_lock: remove the PID lock file for a session-key.
-# Only removes if the lock file contains our own PID (safety against races).
-#
-# Args: $1 = session_key
-_release_session_lock() {
-	local lock_session_key="$1"
-	local safe_key
-	safe_key=$(printf '%s' "$lock_session_key" | tr '/ ' '__')
-	local lock_file="${LOCK_DIR}/${safe_key}.pid"
-
-	if [[ -f "$lock_file" ]]; then
-		local stored_pid
-		stored_pid=$(cat "$lock_file" 2>/dev/null) || stored_pid=""
-		if [[ "$stored_pid" == "$$" ]]; then
-			rm -f "$lock_file"
-		fi
-	fi
-	return 0
-}
-
-build_sandbox_passthrough_csv() {
-	local names=()
-	local seen_names=" "
-	local name
-
-	while IFS='=' read -r name _; do
-		case "$name" in
-		# OPENCODE_PID is the pulse's own opencode process PID. Passing it to
-		# workers causes them to attach to the pulse's session instead of
-		# creating independent sessions (GH#6668). Exclude it explicitly.
-		OPENCODE_PID) ;;
-		AIDEVOPS_* | PULSE_* | GH_* | GITHUB_* | OPENAI_* | ANTHROPIC_* | GOOGLE_* | OPENCODE_* | CLAUDE_* | XDG_* | REAL_HOME | TMPDIR | TMP | TEMP | RTK_* | VERIFY_*)
-			if [[ "$seen_names" == *" ${name} "* ]]; then
-				continue
-			fi
-			seen_names+="${name} "
-			names+=("$name")
-			;;
-		esac
-	done < <(env)
-
-	local IFS=,
-	printf '%s' "${names[*]}"
-	return 0
-}
-
-init_state_db() {
-	mkdir -p "$STATE_DIR" 2>/dev/null || true
-	sqlite3 "$STATE_DB" <<'SQL' >/dev/null 2>&1
-PRAGMA journal_mode=WAL;
-PRAGMA busy_timeout=5000;
-
-CREATE TABLE IF NOT EXISTS provider_backoff (
-    provider       TEXT PRIMARY KEY,
-    reason         TEXT NOT NULL,
-    retry_after    TEXT DEFAULT '',
-    auth_signature TEXT DEFAULT '',
-    details        TEXT DEFAULT '',
-    updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
-CREATE TABLE IF NOT EXISTS provider_sessions (
-    provider     TEXT NOT NULL,
-    session_key  TEXT NOT NULL,
-    session_id   TEXT NOT NULL,
-    model        TEXT NOT NULL,
-    updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    PRIMARY KEY (provider, session_key)
-);
-
-CREATE TABLE IF NOT EXISTS provider_rotation (
-    role         TEXT PRIMARY KEY,
-    last_provider TEXT NOT NULL,
-    updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-SQL
-	return 0
-}
-
-db_query() {
-	local query="$1"
-	sqlite3 -cmd ".timeout 5000" "$STATE_DB" "$query" 2>/dev/null
-	return $?
-}
-
-sql_escape() {
-	local value="$1"
-	printf '%s' "${value//\'/\'\'}"
-	return 0
-}
-
-trim_spaces() {
-	local value="$1"
-	value="${value#"${value%%[![:space:]]*}"}"
-	value="${value%"${value##*[![:space:]]}"}"
-	printf '%s' "$value"
-	return 0
-}
-
-extract_provider() {
-	local model="$1"
-	if [[ "$model" == */* ]]; then
-		printf '%s' "${model%%/*}"
-		return 0
-	fi
-	return 1
-}
-
-provider_signature_override_var() {
-	local provider="$1"
-	case "$provider" in
-	anthropic) printf '%s' "AIDEVOPS_HEADLESS_AUTH_SIGNATURE_ANTHROPIC" ;;
-	openai) printf '%s' "AIDEVOPS_HEADLESS_AUTH_SIGNATURE_OPENAI" ;;
-	*) printf '%s' "" ;;
-	esac
-	return 0
-}
-
-sha256_text() {
-	local value="$1"
-	if command -v shasum >/dev/null 2>&1; then
-		printf '%s' "$value" | shasum -a 256 | awk '{print $1}'
-		return 0
-	fi
-	if command -v sha256sum >/dev/null 2>&1; then
-		printf '%s' "$value" | sha256sum | awk '{print $1}'
-		return 0
-	fi
-	print_error "sha256_text requires 'shasum' or 'sha256sum'"
-	return 1
-}
-
-file_mtime() {
+_register_headless_runtime_temp_path() {
 	local path="$1"
-	if [[ ! -e "$path" ]]; then
-		printf '%s' "missing"
-		return 0
-	fi
-	# Linux first (stat -c), then macOS (stat -f). On Linux, stat -f '%m'
-	# returns filesystem metadata (free blocks), not file mtime — causing
-	# auth signatures to change between calls and clearing backoff state.
-	stat -c '%Y' "$path" 2>/dev/null || stat -f '%m' "$path" 2>/dev/null || printf '%s' "unknown"
+	[[ -n "$path" ]] || return 0
+	_HEADLESS_RUNTIME_TEMP_PATHS="${_HEADLESS_RUNTIME_TEMP_PATHS}${path}
+"
 	return 0
 }
 
-get_auth_signature() {
-	local provider="$1"
-	local override_var
-	override_var=$(provider_signature_override_var "$provider")
-	if [[ -n "$override_var" && -n "${!override_var:-}" ]]; then
-		printf '%s' "${!override_var}"
-		return 0
-	fi
-
-	local auth_material="provider=${provider}"
-	case "$provider" in
-	anthropic)
-		local auth_status auth_mtime
-		auth_status=$(timeout_sec 10 "$OPENCODE_BIN_DEFAULT" auth status 2>/dev/null || true)
-		auth_mtime=$(file_mtime "$OPENCODE_AUTH_FILE")
-		auth_material="${auth_material}|status=${auth_status}|mtime=${auth_mtime}"
-		;;
-	openai)
-		if [[ -n "${OPENAI_API_KEY:-}" ]]; then
-			auth_material="${auth_material}|env=$(sha256_text "$OPENAI_API_KEY")"
-		else
-			# OpenAI can also be authenticated via OpenCode OAuth (no direct API key needed).
-			# Include the OAuth auth status in the signature so backoff clears on re-auth.
-			local auth_status auth_mtime
-			auth_status=$(timeout_sec 10 "$OPENCODE_BIN_DEFAULT" auth status 2>/dev/null || true)
-			auth_mtime=$(file_mtime "$OPENCODE_AUTH_FILE")
-			auth_material="${auth_material}|status=${auth_status}|mtime=${auth_mtime}|env=missing"
-		fi
-		;;
-	opencode)
-		# Gateway models use OpenCode's OAuth session
-		local auth_mtime
-		auth_mtime=$(file_mtime "$OPENCODE_AUTH_FILE")
-		auth_material="${auth_material}|mtime=${auth_mtime}"
-		;;
-	*)
-		auth_material="${auth_material}|unknown=true"
-		;;
-	esac
-
-	sha256_text "$auth_material"
-	return 0
-}
-
-get_configured_models() {
-	local configured="${AIDEVOPS_HEADLESS_MODELS:-$DEFAULT_HEADLESS_MODELS}"
-	local allowlist_raw="${AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST:-}"
-	local -a allowlist=()
-	local -a raw_models=()
-	local -a models=()
-	local item provider
-
-	if [[ -n "$allowlist_raw" ]]; then
-		IFS=',' read -r -a allowlist <<<"$allowlist_raw"
-	fi
-
-	IFS=',' read -r -a raw_models <<<"$configured"
-	for item in "${raw_models[@]}"; do
-		item=$(trim_spaces "$item")
-		[[ -z "$item" ]] && continue
-		provider=$(extract_provider "$item" 2>/dev/null || printf '%s' "")
-		[[ -z "$provider" ]] && continue
-		if [[ ${#allowlist[@]} -gt 0 ]]; then
-			local allowed=false
-			local allowed_provider
-			for allowed_provider in "${allowlist[@]}"; do
-				allowed_provider=$(trim_spaces "$allowed_provider")
-				if [[ "$allowed_provider" == "$provider" ]]; then
-					allowed=true
-					break
-				fi
-			done
-			[[ "$allowed" == "true" ]] || continue
-		fi
-		models+=("$item")
-	done
-
-	if [[ ${#models[@]} -eq 0 ]]; then
-		return 1
-	fi
-
-	printf '%s\n' "${models[@]}"
-	return 0
-}
-
-get_last_provider() {
-	local role="$1"
-	db_query "SELECT last_provider FROM provider_rotation WHERE role = '$(sql_escape "$role")';"
-	return 0
-}
-
-set_last_provider() {
-	local role="$1"
-	local provider="$2"
-	db_query "
-INSERT INTO provider_rotation (role, last_provider, updated_at)
-VALUES ('$(sql_escape "$role")', '$(sql_escape "$provider")', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-ON CONFLICT(role) DO UPDATE SET
-    last_provider = excluded.last_provider,
-    updated_at = excluded.updated_at;
-" >/dev/null
-	return 0
-}
-
-get_session_id() {
-	local provider="$1"
-	local session_key="$2"
-	db_query "SELECT session_id FROM provider_sessions WHERE provider = '$(sql_escape "$provider")' AND session_key = '$(sql_escape "$session_key")';"
-	return 0
-}
-
-clear_session_id() {
-	local provider="$1"
-	local session_key="$2"
-	db_query "DELETE FROM provider_sessions WHERE provider = '$(sql_escape "$provider")' AND session_key = '$(sql_escape "$session_key")';" >/dev/null
-	return 0
-}
-
-store_session_id() {
-	local provider="$1"
-	local session_key="$2"
-	local session_id="$3"
-	local model="$4"
-	db_query "
-INSERT INTO provider_sessions (provider, session_key, session_id, model, updated_at)
-VALUES (
-    '$(sql_escape "$provider")',
-    '$(sql_escape "$session_key")',
-    '$(sql_escape "$session_id")',
-    '$(sql_escape "$model")',
-    strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-)
-ON CONFLICT(provider, session_key) DO UPDATE SET
-    session_id = excluded.session_id,
-    model = excluded.model,
-    updated_at = excluded.updated_at;
-" >/dev/null
-	return 0
-}
-
-clear_provider_backoff() {
-	local provider="$1"
-	db_query "DELETE FROM provider_backoff WHERE provider = '$(sql_escape "$provider")';" >/dev/null
-	return 0
-}
-
-parse_retry_after_seconds() {
-	local file_path="$1"
-	python3 - "$file_path" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-text = Path(sys.argv[1]).read_text(errors="ignore").lower()
-patterns = [
-    (r"retry after\s+(\d+)\s*(second|seconds|sec|secs|s)\b", 1),
-    (r"retry after\s+(\d+)\s*(minute|minutes|min|mins|m)\b", 60),
-    (r"retry after\s+(\d+)\s*(hour|hours|hr|hrs|h)\b", 3600),
-    (r"retry after\s+(\d+)\s*(day|days|d)\b", 86400),
-    (r"try again in\s+(\d+)\s*(second|seconds|sec|secs|s)\b", 1),
-    (r"try again in\s+(\d+)\s*(minute|minutes|min|mins|m)\b", 60),
-    (r"try again in\s+(\d+)\s*(hour|hours|hr|hrs|h)\b", 3600),
-    (r"try again in\s+(\d+)\s*(day|days|d)\b", 86400),
-]
-for pattern, multiplier in patterns:
-    match = re.search(pattern, text)
-    if match:
-        print(int(match.group(1)) * multiplier)
-        sys.exit(0)
-
-numeric = re.search(r"\b429\b", text)
-if numeric:
-    print(900)
-    sys.exit(0)
-
-print(0)
-PY
-	return 0
-}
-
-record_provider_backoff() {
-	local provider="$1"
-	local reason="$2"
-	local details_file="$3"
-	local model="${4:-$provider}"
-	local details retry_seconds auth_signature retry_after backoff_key
-
-	# Auth errors back off at provider level (shared credentials).
-	# Rate limits and provider errors back off at model level so that
-	# other models from the same provider remain available as fallbacks.
-	if [[ "$reason" == "auth_error" ]]; then
-		backoff_key="$provider"
-	else
-		backoff_key="$model"
-	fi
-
-	details=$(
-		python3 - "$details_file" <<'PY'
-from pathlib import Path
-import sys
-text = Path(sys.argv[1]).read_text(errors="ignore")
-text = " ".join(text.split())
-print(text[:400])
-PY
-	)
-	auth_signature=$(get_auth_signature "$provider")
-	retry_seconds=$(parse_retry_after_seconds "$details_file")
-	if [[ "$retry_seconds" -le 0 ]]; then
-		case "$reason" in
-		rate_limit) retry_seconds=900 ;;
-		auth_error) retry_seconds=3600 ;;
-		*) retry_seconds=300 ;;
-		esac
-	fi
-	retry_after=$(date -u -v+"${retry_seconds}"S '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "+${retry_seconds} seconds" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf '%s' "")
-	db_query "
-INSERT INTO provider_backoff (provider, reason, retry_after, auth_signature, details, updated_at)
-VALUES (
-    '$(sql_escape "$backoff_key")',
-    '$(sql_escape "$reason")',
-    '$(sql_escape "$retry_after")',
-    '$(sql_escape "$auth_signature")',
-    '$(sql_escape "$details")',
-    strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-)
-ON CONFLICT(provider) DO UPDATE SET
-    reason = excluded.reason,
-    retry_after = excluded.retry_after,
-    auth_signature = excluded.auth_signature,
-    details = excluded.details,
-    updated_at = excluded.updated_at;
-" >/dev/null
-	return 0
-}
-
-backoff_active_for_key() {
-	local key="$1"
-	local provider="$2"
-	local row stored_retry_after stored_signature current_signature
-	row=$(db_query "SELECT reason || '|' || retry_after || '|' || auth_signature FROM provider_backoff WHERE provider = '$(sql_escape "$key")';")
-	if [[ -z "$row" ]]; then
-		return 1
-	fi
-
-	IFS='|' read -r stored_reason stored_retry_after stored_signature <<<"$row"
-	current_signature=$(get_auth_signature "$provider")
-	if [[ -n "$stored_signature" && -n "$current_signature" && "$stored_signature" != "$current_signature" ]]; then
-		clear_provider_backoff "$key"
-		return 1
-	fi
-
-	if [[ -n "$stored_retry_after" ]]; then
-		local now_epoch retry_epoch
-		now_epoch=$(date -u '+%s')
-		retry_epoch=$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$stored_retry_after" '+%s' 2>/dev/null || date -u -d "$stored_retry_after" '+%s' 2>/dev/null || printf '%s' "0")
-		if [[ "$retry_epoch" -le "$now_epoch" ]]; then
-			clear_provider_backoff "$key"
-			return 1
-		fi
-	fi
-
-	return 0
-}
-
-model_backoff_active() {
-	local model="$1"
-	local provider
-	provider=$(extract_provider "$model" 2>/dev/null || printf '%s' "")
-
-	# Check model-level backoff (rate limits, provider errors)
-	if backoff_active_for_key "$model" "$provider"; then
-		return 0
-	fi
-
-	# Check provider-level backoff (auth errors affect all models)
-	if [[ -n "$provider" && "$provider" != "$model" ]]; then
-		if backoff_active_for_key "$provider" "$provider"; then
-			return 0
-		fi
-	fi
-
-	return 1
-}
-
-# Legacy wrapper — kept for backward compatibility with cmd_backoff CLI
-provider_backoff_active() {
-	local provider="$1"
-	backoff_active_for_key "$provider" "$provider"
-	return $?
-}
-
-provider_auth_available() {
-	local provider="$1"
-	case "$provider" in
-	anthropic)
-		# Anthropic: API key env var OR OpenCode OAuth session
-		if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
-			return 0
-		fi
-		if [[ -f "$OPENCODE_AUTH_FILE" ]]; then
-			return 0
-		fi
-		return 1
-		;;
-	openai)
-		# OpenAI: API key env var OR OpenCode OAuth session (OAuth subscription includes Codex)
-		if [[ -n "${OPENAI_API_KEY:-}" ]]; then
-			return 0
-		fi
-		if [[ -f "$OPENCODE_AUTH_FILE" ]]; then
-			return 0
-		fi
-		return 1
-		;;
-	opencode)
-		# OpenCode gateway models use OpenCode's OAuth session
-		if [[ -f "$OPENCODE_AUTH_FILE" ]]; then
-			return 0
-		fi
-		return 1
-		;;
-	local)
-		# Local provider is always considered available (no auth needed)
-		return 0
-		;;
-	*)
-		# Unknown provider: assume available (don't silently drop unknown providers)
-		return 0
-		;;
-	esac
-}
-
-classify_failure_reason() {
-	local file_path="$1"
-	local lowered
-	lowered=$(
-		python3 - "$file_path" <<'PY'
-from pathlib import Path
-import sys
-print(Path(sys.argv[1]).read_text(errors="ignore").lower())
-PY
-	)
-	if [[ "$lowered" == *"rate limit"* ]] || [[ "$lowered" == *"429"* ]] || [[ "$lowered" == *"too many requests"* ]]; then
-		printf '%s' "rate_limit"
-		return 0
-	fi
-	if [[ "$lowered" =~ (unauthorized|401|invalid\ api\ key|authentication|token\ refresh\ failed|invalid_grant|invalid\ refresh\ token) ]] || [[ "$lowered" == *"auth"* && "$lowered" == *"failed"* ]]; then
-		printf '%s' "auth_error"
-		return 0
-	fi
-	printf '%s' "provider_error"
-	return 0
-}
-
-extract_session_id_from_output() {
-	local file_path="$1"
-	python3 - "$file_path" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-session_id = ""
-for line in Path(sys.argv[1]).read_text(errors="ignore").splitlines():
-    line = line.strip()
-    if not line or not line.startswith("{"):
-        continue
-    try:
-        obj = json.loads(line)
-    except Exception:
-        continue
-    if obj.get("sessionID"):
-        session_id = obj["sessionID"]
-        break
-    part = obj.get("part") or {}
-    if part.get("sessionID"):
-        session_id = part["sessionID"]
-        break
-print(session_id)
-PY
-	return 0
-}
-
-output_has_activity() {
-	local file_path="$1"
-	python3 - "$file_path" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-activity = False
-for line in Path(sys.argv[1]).read_text(errors="ignore").splitlines():
-    line = line.strip()
-    if not line or not line.startswith("{"):
-        continue
-    try:
-        obj = json.loads(line)
-    except Exception:
-        continue
-    event_type = obj.get("type", "")
-    if event_type in {"text", "tool", "tool-invocation", "tool-result", "step-start", "step_finish", "reasoning"}:
-        activity = True
-        break
-
-print("1" if activity else "0")
-PY
-	return 0
-}
-
-# _choose_model_explicit: validate and return an explicitly-requested model.
-# Returns 0 on success (prints model), 1 on bad format, 75 if backed off.
-_choose_model_explicit() {
-	local explicit_model="$1"
-	local provider
-	provider=$(extract_provider "$explicit_model" 2>/dev/null || printf '%s' "")
-	if [[ -z "$provider" ]]; then
-		print_error "Model must use provider/model format: $explicit_model"
-		return 1
-	fi
-	if model_backoff_active "$explicit_model"; then
-		print_warning "$explicit_model is currently backed off"
-		return 75
-	fi
-	printf '%s' "$explicit_model"
-	return 0
-}
-
-# _choose_model_tier_downgrade: check pattern history for a cheaper tier.
-# Prints the downgraded model name if one is recommended; prints nothing otherwise.
-# Non-blocking — any failure falls through silently.
-_choose_model_tier_downgrade() {
-	local current_model="$1"
-	local downgrade_task_type="${AIDEVOPS_TIER_DOWNGRADE_TASK_TYPE:-}"
-	[[ -n "$downgrade_task_type" ]] || return 0
-
-	local current_tier=""
-	case "$current_model" in
-	*opus*) current_tier="opus" ;;
-	*sonnet*) current_tier="sonnet" ;;
-	*haiku*) current_tier="haiku" ;;
-	*flash*) current_tier="flash" ;;
-	*pro*) current_tier="pro" ;;
-	esac
-	[[ -n "$current_tier" ]] || return 0
-
-	local pattern_helper="${SCRIPT_DIR}/archived/pattern-tracker-helper.sh"
-	if [[ ! -x "$pattern_helper" ]]; then
-		pattern_helper="${HOME}/.aidevops/agents/scripts/archived/pattern-tracker-helper.sh"
-	fi
-	[[ -x "$pattern_helper" ]] || return 0
-
-	local lower_tier
-	lower_tier=$("$pattern_helper" tier-downgrade-check \
-		--requested-tier "$current_tier" \
-		--task-type "$downgrade_task_type" \
-		--min-samples "${AIDEVOPS_TIER_DOWNGRADE_MIN_SAMPLES:-3}" \
-		2>/dev/null || true)
-	[[ -n "$lower_tier" ]] || return 0
-
-	local lower_model
-	lower_model=$(resolve_model_tier "$lower_tier" 2>/dev/null || true)
-	if [[ -n "$lower_model" && "$lower_model" != "$current_model" ]]; then
-		print_info "Model for dispatch: pattern data recommends ${lower_tier} over ${current_tier} (TIER_DOWNGRADE_OK, task_type=${downgrade_task_type})"
-		printf '%s' "$lower_model"
-	fi
-	return 0
-}
-
-# _choose_model_auto: select the next available model via round-robin rotation.
-# Skips models that are backed off or have no auth. Returns 75 if all are backed off.
-_choose_model_auto() {
-	local role="$1"
-	local -a models=()
-	local current_model
-	while IFS= read -r current_model; do
-		models+=("$current_model")
-	done < <(get_configured_models)
-	if [[ ${#models[@]} -eq 0 ]]; then
-		print_error "No direct provider models configured for headless runtime"
-		return 1
-	fi
-
-	local last_provider start_index i idx current_provider
-	last_provider=$(get_last_provider "$role")
-	start_index=0
-	if [[ -n "$last_provider" ]]; then
-		for i in "${!models[@]}"; do
-			current_provider=$(extract_provider "${models[$i]}")
-			if [[ "$current_provider" == "$last_provider" ]]; then
-				start_index=$(((i + 1) % ${#models[@]}))
-				break
-			fi
-		done
-	fi
-
-	for ((i = 0; i < ${#models[@]}; i++)); do
-		idx=$(((start_index + i) % ${#models[@]}))
-		current_model="${models[$idx]}"
-		current_provider=$(extract_provider "$current_model")
-		# Skip providers with no auth configured — silent skip, no backoff recorded.
-		# This keeps Codex in the default list for users with OpenAI OAuth while
-		# being invisible to users who have no OpenAI auth at all.
-		if ! provider_auth_available "$current_provider"; then
-			continue
-		fi
-		# Check model-level backoff (rate limits) and provider-level (auth errors)
-		if model_backoff_active "$current_model"; then
-			continue
-		fi
-		set_last_provider "$role" "$current_provider"
-
-		# Pattern-driven tier downgrade (t5148): non-blocking check.
-		local downgraded
-		downgraded=$(_choose_model_tier_downgrade "$current_model")
-		if [[ -n "$downgraded" ]]; then
-			printf '%s' "$downgraded"
-			return 0
-		fi
-
-		printf '%s' "$current_model"
-		return 0
-	done
-
-	print_warning "All configured models are currently backed off"
-	return 75
-}
-
-choose_model() {
-	local role="$1"
-	local explicit_model="${2:-}"
-
-	if [[ -n "$explicit_model" ]]; then
-		_choose_model_explicit "$explicit_model"
-		return $?
-	fi
-
-	_choose_model_auto "$role"
-	return $?
-}
-
-cmd_select() {
-	local role="worker"
-	local model_override=""
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		--role)
-			role="${2:-}"
-			shift 2
-			;;
-		--model)
-			model_override="${2:-}"
-			shift 2
+_cleanup_headless_runtime_temp_paths() {
+	local path=""
+	local tmp_root="${TMPDIR:-/tmp}"
+	while IFS= read -r path; do
+		[[ -n "$path" ]] || continue
+		case "$path" in
+		"$tmp_root"/aidevops-* | /tmp/aidevops-* | /var/folders/*/T/*/aidevops-*)
+			rm -rf "$path" 2>/dev/null || true
 			;;
 		*)
-			print_error "Unknown option for select: $1"
-			return 1
+			print_warning "[lifecycle] refusing to cleanup unexpected temp path: $path"
 			;;
 		esac
-	done
-
-	local selected
-	selected=$(choose_model "$role" "$model_override") || return $?
-	printf '%s\n' "$selected"
+	done <<EOF
+$_HEADLESS_RUNTIME_TEMP_PATHS
+EOF
+	_HEADLESS_RUNTIME_TEMP_PATHS=""
 	return 0
 }
 
-cmd_backoff() {
-	local action="${1:-status}"
-	shift || true
-	case "$action" in
-	status)
-		db_query "SELECT provider || '|' || reason || '|' || retry_after || '|' || updated_at FROM provider_backoff ORDER BY provider;"
+_prepare_runtime_prompt_transport() {
+	local runtime="$1"
+	local prompt_text="$2"
+	local threshold="${HEADLESS_PROMPT_FILE_THRESHOLD_BYTES:-8192}"
+	_HEADLESS_RUN_PROMPT_ARG="$prompt_text"
+	_HEADLESS_RUN_PROMPT_FILE=""
+	_HEADLESS_CLAUDE_STDIN_FILE=""
+
+	[[ "$threshold" =~ ^[0-9]+$ ]] || threshold=8192
+	[[ "${#prompt_text}" -ge "$threshold" ]] || return 0
+
+	local prompt_dir=""
+	prompt_dir=$(mktemp -d "${TMPDIR:-/tmp}/aidevops-headless-prompt.XXXXXX") || return 0
+	_register_headless_runtime_temp_path "$prompt_dir"
+
+	local prompt_path="${prompt_dir}/seed-prompt.md"
+	if ! printf '%s' "$prompt_text" >"$prompt_path"; then
+		rm -rf "$prompt_dir" 2>/dev/null || true
 		return 0
+	fi
+
+	case "$runtime" in
+	claude)
+		# Claude Code -p reads the prompt from stdin when no prompt argument is
+		# supplied; keep the large seed out of argv while preserving content.
+		_HEADLESS_RUN_PROMPT_ARG=""
+		_HEADLESS_CLAUDE_STDIN_FILE="$prompt_path"
 		;;
-	clear)
-		local key="${1:-}"
-		[[ -n "$key" ]] || {
-			print_error "Usage: backoff clear <provider-or-model>"
-			return 1
-		}
-		clear_provider_backoff "$key"
-		return 0
-		;;
-	set)
-		local key="${1:-}"
-		local reason="${2:-provider_error}"
-		local retry_seconds="${3:-300}"
-		[[ -n "$key" ]] || {
-			print_error "Usage: backoff set <provider-or-model> <reason> [retry_seconds]"
-			return 1
-		}
-		local provider
-		provider=$(extract_provider "$key" 2>/dev/null || printf '%s' "$key")
-		local tmp_file
-		tmp_file=$(mktemp)
-		printf 'manual backoff %s %s %s\n' "$key" "$reason" "$retry_seconds" >"$tmp_file"
-		record_provider_backoff "$provider" "$reason" "$tmp_file" "$key"
-		if [[ "$retry_seconds" != "300" ]]; then
-			if [[ ! "$retry_seconds" =~ ^[0-9]+$ ]]; then
-				print_error "retry_seconds must be an integer"
-				return 1
-			fi
-			local retry_after
-			retry_after=$(date -u -v+"${retry_seconds}"S '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d "+${retry_seconds} seconds" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf '%s' "")
-			db_query "UPDATE provider_backoff SET retry_after = '$(sql_escape "$retry_after")' WHERE provider = '$(sql_escape "$key")';" >/dev/null
-		fi
-		rm -f "$tmp_file"
-		return 0
-		;;
-	*)
-		print_error "Unknown backoff action: $action"
-		return 1
+	opencode | *)
+		# OpenCode has no stdin prompt mode in `opencode run --help`; attach the
+		# seed file and pass a short instruction, avoiding process-table bloat.
+		_HEADLESS_RUN_PROMPT_ARG="Read and execute the complete seed prompt attached as seed-prompt.md. Treat the attached file as the user prompt for this headless run."
+		_HEADLESS_RUN_PROMPT_FILE="$prompt_path"
 		;;
 	esac
+
+	return 0
 }
 
-cmd_session() {
-	local action="${1:-status}"
-	shift || true
-	case "$action" in
-	status)
-		db_query "SELECT provider || '|' || session_key || '|' || session_id || '|' || model || '|' || updated_at FROM provider_sessions ORDER BY provider, session_key;"
-		return 0
-		;;
-	clear)
-		local provider="${1:-}"
-		local session_key="${2:-}"
-		[[ -n "$provider" && -n "$session_key" ]] || {
-			print_error "Usage: session clear <provider> <session_key>"
-			return 1
-		}
-		db_query "DELETE FROM provider_sessions WHERE provider = '$(sql_escape "$provider")' AND session_key = '$(sql_escape "$session_key")';" >/dev/null
-		return 0
-		;;
-	*)
-		print_error "Unknown session action: $action"
-		return 1
-		;;
-	esac
-}
+# Source the stable utility library (t2013 split).
+# All state DB, provider auth, backoff, output parsing, metrics, sandbox,
+# worker contract, watchdog, DB merge, dispatch ledger, failure reporting,
+# canary, model choice, and cmd builder functions live here.
+# shellcheck source=./headless-runtime-lib.sh
+source "${SCRIPT_DIR}/headless-runtime-lib.sh"
+
+# CLI subcommand handlers (cmd_select, cmd_backoff, cmd_session, cmd_metrics).
+# Extracted to reduce orchestrator line count below the file-size-debt threshold.
+# shellcheck source=./headless-runtime-helper-cmds.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via $SCRIPT_DIR
+source "${SCRIPT_DIR}/headless-runtime-helper-cmds.sh"
+
+# Orphan-recovery helpers: _attempt_orphan_recovery_pr used by _handle_worker_branch_orphan
+# shellcheck source=./shared-claim-lifecycle.sh
+source "${SCRIPT_DIR}/shared-claim-lifecycle.sh"
+
+# Worker lifecycle helpers (auth rotation, rate-limit monitor, Claude invocation,
+# output preservation, orphan recovery, run prepare/finish, detach, stall cap).
+# Extracted to keep this orchestrator below the file-size-debt threshold.
+# shellcheck source=./headless-runtime-worker.sh
+# shellcheck disable=SC1091  # sub-library resolved at runtime via $SCRIPT_DIR
+source "${SCRIPT_DIR}/headless-runtime-worker.sh"
+
+# Activity watchdog timeout — used by _invoke_opencode and the inline watchdog fallback.
+# Keep this aligned with worker-activity-watchdog.sh and headless-runtime-lib.sh.
+# OpenAI/GPT-5.x workers can spend several minutes reasoning without emitting
+# additional JSON/log output; 300s caused false no-output kills before workers
+# reached implementation/PR creation (GH#22248).
+HEADLESS_ACTIVITY_TIMEOUT_SECONDS="${HEADLESS_ACTIVITY_TIMEOUT_SECONDS:-600}"
+
+# =============================================================================
+# Run argument parsing and validation
+# =============================================================================
 
 # _parse_run_args: parse cmd_run flags into caller-scoped variables.
 # Caller must declare: role session_key work_dir title prompt prompt_file
-#                      model_override agent_name extra_args
+#                      model_override initial_model tier_override variant_override agent_name extra_args
 # Returns 1 on unknown flag.
 _parse_run_args() {
 	while [[ $# -gt 0 ]]; do
@@ -925,13 +192,34 @@ _parse_run_args() {
 			model_override="${2:-}"
 			shift 2
 			;;
+		--initial-model)
+			initial_model="${2:-}"
+			shift 2
+			;;
+		--tier)
+			tier_override="${2:-}"
+			shift 2
+			;;
+		--variant)
+			variant_override="${2:-}"
+			shift 2
+			;;
 		--agent)
 			agent_name="${2:-}"
+			shift 2
+			;;
+		--runtime)
+			# Explicit runtime override: "opencode" (default), "claude", etc.
+			headless_runtime="${2:-}"
 			shift 2
 			;;
 		--opencode-arg)
 			extra_args+=("${2:-}")
 			shift 2
+			;;
+		--detach)
+			detach=1
+			shift
 			;;
 		*)
 			print_error "Unknown option for run: $1"
@@ -971,45 +259,231 @@ _validate_run_args() {
 	return 0
 }
 
-# _build_run_cmd: build the opencode command array for a run attempt.
-# Args: selected_model work_dir prompt title agent_name persisted_session
-#       extra_args (remaining positional args)
-# Outputs: space-separated command (caller must eval or use array assignment).
-# Returns: 0 always.
-_build_run_cmd() {
-	local selected_model="$1"
-	local work_dir="$2"
-	local prompt="$3"
-	local title="$4"
-	local agent_name="$5"
-	local persisted_session="$6"
-	shift 6
+# _ensure_valid_launch_cwd: recover from callers whose inherited cwd was deleted.
+#
+# OpenCode validates the process cwd before it processes --dir. When the pulse
+# starts a worker from a worktree that cleanup removed, OpenCode exits with
+# "The current working directory was deleted" before reading the launch prompt.
+# Move the helper itself into the worker worktree early so canary, sandbox, and
+# runtime startup all inherit a valid cwd.
+_ensure_valid_launch_cwd() {
+	local work_dir_value="$1"
+	local fallback_dir="${HOME:-/tmp}"
 
-	# Emit base command args as null-delimited tokens (bash 3.2 compat: no local -a in subshell)
-	printf '%s\0' "$OPENCODE_BIN_DEFAULT" run "$prompt" --dir "$work_dir" -m "$selected_model" --title "$title" --format json
-	if [[ -n "$agent_name" ]]; then
-		printf '%s\0' --agent "$agent_name"
+	if pwd -P >/dev/null 2>&1; then
+		return 0
 	fi
-	if [[ -n "$persisted_session" ]]; then
-		printf '%s\0' --session "$persisted_session" --continue
+
+	if [[ -n "$work_dir_value" && -d "$work_dir_value" ]]; then
+		if cd "$work_dir_value" 2>/dev/null; then
+			print_warning "Recovered deleted launch cwd by switching to worker directory: $work_dir_value"
+			return 0
+		fi
 	fi
-	# Emit any extra args passed as positional parameters
-	while [[ $# -gt 0 ]]; do
-		printf '%s\0' "$1"
-		shift
-	done
+
+	if [[ -d "$fallback_dir" ]] && cd "$fallback_dir" 2>/dev/null; then
+		print_warning "Recovered deleted launch cwd by switching to fallback directory: $fallback_dir"
+		return 0
+	fi
+
+	print_error "[fatal] launch cwd is deleted and no valid fallback directory is available"
+	return 1
+}
+
+# _run_looks_like_issue_worker: detect issue-scoped worker dispatches from
+# independent caller-owned signals. The env contract is only mandatory for
+# issue workers; pulse/non-issue runs keep the historical path.
+_run_looks_like_issue_worker() {
+	local role_value="$1"
+	local session_key_value="$2"
+	local title_value="$3"
+	local prompt_value="$4"
+
+	[[ "$role_value" == "worker" ]] || return 1
+	if [[ "$session_key_value" =~ ^issue-[0-9]+$ ]]; then
+		return 0
+	fi
+	if [[ "$title_value" =~ ^Issue[[:space:]]+#[0-9]+ ]]; then
+		return 0
+	fi
+	if [[ "$prompt_value" =~ [Ii]ssue[[:space:]]*#?[0-9]+ ]]; then
+		return 0
+	fi
+
+	return 1
+}
+
+# _validate_issue_worker_env_contract: fail before canary/model launch when an
+# issue worker lacks the dispatcher-precreated worktree contract.
+_validate_issue_worker_env_contract() {
+	local role_value="$1"
+	local session_key_value="$2"
+	local work_dir_value="$3"
+	local title_value="$4"
+	local prompt_value="$5"
+
+	if ! _run_looks_like_issue_worker "$role_value" "$session_key_value" "$title_value" "$prompt_value"; then
+		return 0
+	fi
+
+	if [[ -z "${WORKER_ISSUE_NUMBER:-}" ]]; then
+		print_error "[fatal] WORKER_ISSUE_NUMBER unset — issue worker env contract missing; aborting before model launch"
+		return 1
+	fi
+	if [[ -z "${WORKER_WORKTREE_PATH:-}" ]]; then
+		print_error "[fatal] WORKER_WORKTREE_PATH unset — issue worker env contract missing; aborting before model launch"
+		return 1
+	fi
+	if [[ ! -d "${WORKER_WORKTREE_PATH:-}" ]]; then
+		print_error "[fatal] WORKER_WORKTREE_PATH does not exist: ${WORKER_WORKTREE_PATH:-<unset>}"
+		return 1
+	fi
+
+	local env_worktree_real=""
+	local work_dir_real=""
+	env_worktree_real=$(cd "$WORKER_WORKTREE_PATH" 2>/dev/null && pwd -P) || env_worktree_real=""
+	work_dir_real=$(cd "$work_dir_value" 2>/dev/null && pwd -P) || work_dir_real=""
+	if [[ -z "$env_worktree_real" || -z "$work_dir_real" || "$env_worktree_real" != "$work_dir_real" ]]; then
+		print_error "[fatal] worker --dir does not match WORKER_WORKTREE_PATH; aborting before model launch"
+		return 1
+	fi
+
+	if [[ -n "${WORKER_REPO_SLUG:-}" ]]; then
+		local remote_url=""
+		local actual_slug=""
+		remote_url=$(git -C "$WORKER_WORKTREE_PATH" remote get-url origin 2>/dev/null) || remote_url=""
+		actual_slug=$(printf '%s' "$remote_url" | sed 's|.*github\.com[:/]||;s|\.git$||') || actual_slug=""
+		if [[ -z "$actual_slug" || "$actual_slug" != "$WORKER_REPO_SLUG" ]]; then
+			print_error "[fatal] worker worktree repo mismatch: expected ${WORKER_REPO_SLUG}, got ${actual_slug:-<unknown>}"
+			return 1
+		fi
+	fi
+
 	return 0
 }
+
+# _recover_deleted_cwd_before_launch: ensure runtime launch starts from a real cwd.
+# A parent shell can dispatch a worker after its current directory has been
+# removed (for example after worktree cleanup). OpenCode fails before reading the
+# prompt in that state, even when --dir points at a valid worker worktree.
+_recover_deleted_cwd_before_launch() {
+	local work_dir_value="$1"
+	local reason_value="${2:-prelaunch}"
+	local recovery_dir=""
+
+	if pwd -P >/dev/null 2>&1; then
+		return 0
+	fi
+
+	if [[ -n "${WORKER_WORKTREE_PATH:-}" && -d "${WORKER_WORKTREE_PATH:-}" ]]; then
+		recovery_dir="$WORKER_WORKTREE_PATH"
+	elif [[ -n "$work_dir_value" && -d "$work_dir_value" ]]; then
+		recovery_dir="$work_dir_value"
+	fi
+
+	if [[ -z "$recovery_dir" ]]; then
+		print_error "[lifecycle] deleted_cwd_recovery_failed reason=$reason_value target=none"
+		return 1
+	fi
+
+	if ! cd "$recovery_dir"; then
+		print_error "[lifecycle] deleted_cwd_recovery_failed reason=$reason_value target=$recovery_dir"
+		return 1
+	fi
+
+	print_warning "[lifecycle] recovered_deleted_cwd reason=$reason_value dir=$recovery_dir"
+	return 0
+}
+
+# =============================================================================
+# Runtime invocation — OpenCode and Claude CLI
+# =============================================================================
 
 # _invoke_opencode: run the opencode command (with or without sandbox) and capture output.
 # Args: output_file exit_code_file cmd_args (null-delimited, read from stdin via process sub)
 # Caller passes the cmd array elements as positional args after the two file args.
 # Returns: 0 always (exit code written to exit_code_file).
+#
+# Includes an activity watchdog. The timeout is a recovery backstop, not a
+# success/failure policy: output-active, CPU-active, and CI-wait states are
+# allowed to continue until the hard elapsed cap, while explicit provider
+# failures still recover promptly. Default is 600s because OpenAI/GPT-5.x
+# workers can spend several minutes reasoning before emitting more JSON/log
+# output; 300s caused false no-output kills before implementation/PR creation.
 _invoke_opencode() {
 	local output_file="$1"
 	local exit_code_file="$2"
 	shift 2
 	local -a cmd=("$@")
+
+	# t3050: expose exit_code_file to the EXIT trap so it can read the
+	# .wait_status sentinel persisted below. Pattern matches the existing
+	# _WORKER_ISOLATED_DB_PATH global at line ~515. Cleared at function
+	# end alongside _WORKER_ISOLATED_DB_PATH so a post-cleanup EXIT firing
+	# does not see a stale path.
+	_WORKER_EXIT_CODE_FILE="$exit_code_file"
+
+	# Auth isolation for headless workers: each worker gets its own copy of
+	# auth.json via XDG_DATA_HOME redirection. opencode uses
+	# $XDG_DATA_HOME/opencode/auth.json for OAuth tokens. Without isolation,
+	# headless workers share the interactive session's auth file — when ANY
+	# worker's opencode process refreshes an expired access token, it writes
+	# a new token to the shared file, invalidating the interactive session's
+	# in-flight request and crashing it.
+	#
+	# IMPORTANT: XDG_DATA_HOME redirection moves the ENTIRE opencode data dir,
+	# including the session database. We set OPENCODE_DB to point back to the
+	# shared DB so worker sessions are visible to stats/session-time queries
+	# while auth remains isolated.
+	#
+	# The isolated dir is per-PID and cleaned up after the worker exits.
+	local isolated_data_dir=""
+	if [[ "${AIDEVOPS_HEADLESS_AUTH_ISOLATION:-1}" == "1" ]]; then
+		# t2758: Reuse pre-warmed isolated DB dir if the dispatcher already ran
+		# opencode --version against it to trigger migration + skill-dedup.
+		# Falls back to a fresh mktemp when pre-warming was skipped or failed.
+		if [[ -n "${AIDEVOPS_WORKER_PREWARM_DIR:-}" && -d "${AIDEVOPS_WORKER_PREWARM_DIR:-}" ]]; then
+			isolated_data_dir="$AIDEVOPS_WORKER_PREWARM_DIR"
+			print_info "[lifecycle] opencode_warm_done dir=$isolated_data_dir (reusing pre-warmed dir) pid=$$"
+		else
+			isolated_data_dir=$(mktemp -d "${TMPDIR:-/tmp}/aidevops-worker-auth.XXXXXX")
+		fi
+		_register_headless_runtime_temp_path "$isolated_data_dir"
+		mkdir -p "${isolated_data_dir}/opencode"
+		# Copy the current auth.json so the worker has valid tokens at startup
+		if [[ -f "$OPENCODE_AUTH_FILE" ]]; then
+			copy_scoped_opencode_auth "$OPENCODE_AUTH_FILE" "${isolated_data_dir}/opencode/auth.json" "${_invoke_provider:-}"
+		fi
+		# GH#17549: Each worker gets its OWN SQLite DB (no shared OPENCODE_DB).
+		# Previously we set OPENCODE_DB back to the shared DB for session stats,
+		# but concurrent workers with busy_timeout=0 cause SQLITE_BUSY which
+		# silently kills streaming connections — workers stall at step_start
+		# with zero API errors. Session stats are sacrificed for reliability.
+		export XDG_DATA_HOME="$isolated_data_dir"
+		# GH#20564: Expose isolated DB path to exit trap classifier so
+		# classify_worker_exit can check for sessions even when the EXIT trap
+		# fires while _invoke_opencode is still waiting for the worker.
+		_WORKER_ISOLATED_DB_PATH="${isolated_data_dir}/opencode/opencode.db"
+		print_info "[lifecycle] db_isolated dir=$isolated_data_dir pid=$$"
+
+		# t2249: Pre-dispatch OAuth pool check. If the account copied into the
+		# isolated auth.json is in cooldown per shared pool metadata (recorded
+		# by a prior worker's mark-failure), rotate the isolated file to a
+		# healthy account BEFORE opencode spawns. Best-effort: failure here
+		# must not block dispatch — opencode will then retry via its normal
+		# backoff path. Only runs when isolation is active (XDG_DATA_HOME is
+		# set above), so this cannot corrupt a shared interactive auth.json.
+		#
+		# Provider is resolved from the caller's selected_model (set on
+		# _invoke_provider by _execute_run_attempt). Hardcoding "anthropic"
+		# here would skip rotation for openai/google/cursor workers, so they
+		# would still burn dispatches on cooldown-marked accounts in those
+		# pools. Defaulting to "anthropic" keeps legacy callers (tests,
+		# diagnostics) working when _invoke_provider is unset.
+		if [[ -f "${isolated_data_dir}/opencode/auth.json" ]]; then
+			_maybe_rotate_isolated_auth "${isolated_data_dir}/opencode/auth.json" "${_invoke_provider:-anthropic}"
+		fi
+	fi
 
 	# Run in subshell to avoid fragile set +e/set -e toggling (GH#4225).
 	# Subshell localises errexit so main shell state is never modified.
@@ -1018,32 +492,181 @@ _invoke_opencode() {
 	# way to separate tee output from the exit code in a single $()).
 	(
 		set +e
+		# Inject --print-logs for headless workers so opencode's internal Go logs
+		# (API errors, model resolution, DB writes) appear in the worker log.
+		# This is critical for diagnosing silent exits — the JSON event stream
+		# shows step_start then nothing, but the Go logs show the actual error.
+		local -a _oc_cmd=("${cmd[@]}")
+		if [[ "${HEADLESS:-}" == "1" ]]; then
+			# Insert --print-logs after the 'run' subcommand
+			local -a _new_cmd=()
+			local _inserted=0
+			for _arg in "${_oc_cmd[@]}"; do
+				_new_cmd+=("$_arg")
+				if [[ "$_arg" == "run" && "$_inserted" -eq 0 ]]; then
+					_new_cmd+=("--print-logs" "--log-level" "WARN")
+					_inserted=1
+				fi
+			done
+			_oc_cmd=("${_new_cmd[@]}")
+		fi
 		if [[ -x "$SANDBOX_EXEC_HELPER" && "${AIDEVOPS_HEADLESS_SANDBOX_DISABLED:-}" != "1" ]]; then
-			# Pass cmd array elements as separate arguments after --.
-			# Previous code used printf -v to build a single escaped string,
-			# which the sandbox received as one argument and passed to env as
-			# a single executable path — causing "No such file or directory".
-			# Bash 3.2 compat: no local -a in subshells, no printf -v tricks.
 			local passthrough_csv
-			passthrough_csv="$(build_sandbox_passthrough_csv)"
+			passthrough_csv="$(build_sandbox_passthrough_csv "${_invoke_provider:-}")"
+			# --stream-stdout: let child stdout flow through the pipe to tee
+			# so the activity watchdog can monitor output in real-time
+			# (GH#15180 bug #4). Without this, the sandbox captures stdout to
+			# a temp file and replays it after exit — the watchdog sees nothing
+			# and kills every sandboxed worker at ~93s.
 			if [[ -n "$passthrough_csv" ]]; then
-				"$SANDBOX_EXEC_HELPER" run --timeout "$HEADLESS_SANDBOX_TIMEOUT_DEFAULT" --allow-secret-io --passthrough "$passthrough_csv" -- "${cmd[@]}" 2>&1 | tee "$output_file"
+				"$SANDBOX_EXEC_HELPER" run --timeout "$HEADLESS_SANDBOX_TIMEOUT_DEFAULT" --allow-secret-io --stream-stdout --passthrough "$passthrough_csv" -- "${_oc_cmd[@]}" 2>&1 | tee "$output_file"
 			else
-				"$SANDBOX_EXEC_HELPER" run --timeout "$HEADLESS_SANDBOX_TIMEOUT_DEFAULT" --allow-secret-io -- "${cmd[@]}" 2>&1 | tee "$output_file"
+				"$SANDBOX_EXEC_HELPER" run --timeout "$HEADLESS_SANDBOX_TIMEOUT_DEFAULT" --allow-secret-io --stream-stdout -- "${_oc_cmd[@]}" 2>&1 | tee "$output_file"
 			fi
 			printf '%s' "${PIPESTATUS[0]}" >"$exit_code_file"
 		else
-			"${cmd[@]}" 2>&1 | tee "$output_file"
+			if [[ "${AIDEVOPS_HEADLESS_SANDBOX_DISABLED:-}" == "1" ]]; then
+				print_info "AIDEVOPS_HEADLESS_SANDBOX_DISABLED=1 — using bare timeout (no privilege isolation) (GH#20146 audit)"
+			fi
+			timeout "$HEADLESS_SANDBOX_TIMEOUT_DEFAULT" "${_oc_cmd[@]}" 2>&1 | tee "$output_file"
 			printf '%s' "${PIPESTATUS[0]}" >"$exit_code_file"
 		fi
-	) || true
+	) &
+	local worker_pid=$!
+
+	# Activity watchdog: monitor the output file for LLM activity.
+	# If no activity appears within the timeout, the provider is likely
+	# rate-limited and the worker will hang indefinitely. Kill it so the
+	# retry loop in cmd_run can rotate to the next provider.
+	#
+	# GH#17648: Launch as a STANDALONE process via nohup, not a backgrounded
+	# function. The previous `_run_activity_watchdog ... &` died silently when
+	# nohup changed the subshell's process group — stalled workers sat forever.
+	# The standalone script has its own process lifecycle, independent of the
+	# worker subshell.
+	local _watchdog_script="${SCRIPT_DIR}/worker-activity-watchdog.sh"
+	local watchdog_pid=""
+	local _stall_timeout="${HEADLESS_ACTIVITY_TIMEOUT_SECONDS:-600}"
+	[[ "$_stall_timeout" =~ ^[0-9]+$ ]] || _stall_timeout=600
+	local _phase1_timeout="${HEADLESS_PHASE1_TIMEOUT_SECONDS:-180}"
+	[[ "$_phase1_timeout" =~ ^[0-9]+$ ]] || _phase1_timeout=180
+
+	if [[ -x "$_watchdog_script" ]]; then
+		nohup "$_watchdog_script" \
+			--output-file "$output_file" \
+			--worker-pid "$worker_pid" \
+			--exit-code-file "$exit_code_file" \
+			--session-key "${_invoke_session_key:-}" \
+			--repo-slug "${DISPATCH_REPO_SLUG:-}" \
+			--worktree-path "${_WORKER_WORKTREE_PATH:-}" \
+			--stall-timeout "$_stall_timeout" \
+			--phase1-timeout "$_phase1_timeout" \
+			</dev/null >/dev/null 2>&1 &
+		watchdog_pid=$!
+		print_info "[lifecycle] activity_watchdog_started pid=$watchdog_pid worker=$worker_pid stall_timeout=${_stall_timeout}s"
+	else
+		# Fallback: use inline function if standalone script is missing
+		# (should not happen in normal deployment)
+		print_warning "[lifecycle] standalone watchdog not found at $_watchdog_script — falling back to inline"
+		_run_activity_watchdog "$output_file" "$worker_pid" "$exit_code_file" "$_invoke_session_key" &
+		watchdog_pid=$!
+	fi
+
+	# GH#21578 / t3021: Rate-limit fast-exit monitor.
+	# Detects 429/overload patterns within the first 30s and kills the worker
+	# cleanly, preventing the 20-min zombie that forms when opencode silently
+	# retries a first-call 429 for the full HEADLESS_SANDBOX_TIMEOUT lifetime.
+	# Only fires when no LLM activity has been produced (dead-on-arrival pattern).
+	local _rl_monitor_pid=""
+	local _rl_window="${HEADLESS_RATE_LIMIT_DETECT_SECONDS:-30}"
+	if [[ "$_rl_window" =~ ^[0-9]+$ && "$_rl_window" -gt 0 ]]; then
+		_rl_monitor_pid=$(_launch_rate_limit_fast_monitor "$output_file" "$worker_pid" "$exit_code_file" "$_rl_window")
+		print_info "[lifecycle] rate_limit_fast_monitor_started pid=${_rl_monitor_pid:-none} worker=$worker_pid window=${_rl_window}s"
+	fi
+
+	# Wait for the worker to finish (watchdog will kill it if stalled)
+	print_info "[lifecycle] waiting_for_worker pid=$worker_pid watchdog=$watchdog_pid"
+	local _wait_status=0
+	wait "$worker_pid" 2>/dev/null || _wait_status=$?
+	# t3050: persist worker wait_status so the EXIT trap can classify signal
+	# kills correctly. Without this, the EXIT trap reads $? at script exit —
+	# always 0 after the wrapper's clean post-wait cleanup — and emits
+	# reason=clean for SIGTERM/SIGKILL'd workers (canonical: GH#21707).
+	if [[ -n "${exit_code_file:-}" ]]; then
+		printf '%s' "$_wait_status" >"${exit_code_file}.wait_status" 2>/dev/null || true
+	fi
+	# t3063: classify kill_reason on the same line as wait_status so Phase 2
+	# log aggregation does not need to JOIN by PID across scripts. classifier
+	# inspects sentinel files written next to exit_code_file by kill sites
+	# (worker-activity-watchdog hard/soft kill, rate_limit_fast monitor) and
+	# the forward-compatible .kill_reason sentinel for new kill paths.
+	local _kill_reason
+	_kill_reason=$(classify_worker_kill_reason "$exit_code_file" "$_wait_status")
+	print_info "[lifecycle] worker_exited pid=$worker_pid wait_status=$_wait_status kill_reason=$_kill_reason"
+
+	# Clean up the watchdog — it should exit on its own when it detects
+	# the worker PID is gone, but kill it explicitly to be safe.
+	if [[ -n "$watchdog_pid" ]]; then
+		kill "$watchdog_pid" 2>/dev/null || true
+		# Timeout the wait to prevent indefinite blocking if watchdog is stuck
+		# on a network call (gh api for kill comment/unlock)
+		local _watchdog_wait_start _watchdog_wait_elapsed
+		_watchdog_wait_start=$(date +%s)
+		while kill -0 "$watchdog_pid" 2>/dev/null; do
+			_watchdog_wait_elapsed=$(( $(date +%s) - _watchdog_wait_start ))
+			if [[ "$_watchdog_wait_elapsed" -gt 30 ]]; then
+				print_warning "[lifecycle] watchdog_wait_timeout pid=$watchdog_pid elapsed=${_watchdog_wait_elapsed}s — sending SIGKILL"
+				kill -9 "$watchdog_pid" 2>/dev/null || true
+				break
+			fi
+			sleep 1
+		done
+		wait "$watchdog_pid" 2>/dev/null || true
+	fi
+	print_info "[lifecycle] watchdog_cleaned pid=$watchdog_pid"
+
+	# Clean up the rate-limit fast-exit monitor (if launched).
+	# The monitor exits on its own when it detects the worker PID is gone,
+	# but kill it explicitly to avoid leaving orphans after a watchdog kill.
+	if [[ -n "${_rl_monitor_pid:-}" ]]; then
+		kill "$_rl_monitor_pid" 2>/dev/null || true
+		wait "$_rl_monitor_pid" 2>/dev/null || true
+	fi
+
+	# Merge worker session data back to shared DB, then clean up.
+	# Worker is done — no contention, single-writer merge is safe.
+	if [[ -n "$isolated_data_dir" && -d "$isolated_data_dir" ]]; then
+		if _merge_worker_db "$isolated_data_dir"; then
+			print_info "[lifecycle] db_merged dir=$isolated_data_dir pid=$$"
+		else
+			print_warning "[lifecycle] db_merge_failed dir=$isolated_data_dir pid=$$"
+		fi
+		rm -rf "$isolated_data_dir" 2>/dev/null || true
+		unset XDG_DATA_HOME
+		# GH#20564: Clear isolated DB path after cleanup so exit trap
+		# classifier falls back to shared DB if EXIT fires post-cleanup.
+		_WORKER_ISOLATED_DB_PATH=""
+		print_info "[lifecycle] db_cleanup dir=$isolated_data_dir pid=$$"
+	fi
+
+	# t3050: Clear exit_code_file path so a post-cleanup EXIT trap firing
+	# does not read a stale sentinel left over from a prior invocation.
+	# The .wait_status sentinel itself is short-lived (read-once-and-deleted
+	# by the EXIT trap), but the path variable is process-global until cleared.
+	_WORKER_EXIT_CODE_FILE=""
+
+	print_info "[lifecycle] invoke_opencode_returning pid=$$"
 	return 0
 }
+
+# =============================================================================
+# Result handling and run execution
+# =============================================================================
 
 # _handle_run_result: process output_file after opencode exits.
 # Args: exit_code output_file role provider session_key selected_model
 # Sets caller variable _run_failure_reason on failure.
-# Returns: 0 success, 75 no-activity backoff, non-zero on failure.
+# Returns: 0 success, 75 no-activity backoff, 77 premature exit, non-zero on failure.
 _handle_run_result() {
 	local exit_code="$1"
 	local output_file="$2"
@@ -1055,32 +678,320 @@ _handle_run_result() {
 	local discovered_session activity_detected
 	discovered_session=$(extract_session_id_from_output "$output_file")
 	activity_detected=$(output_has_activity "$output_file")
+	_run_activity_detected="$activity_detected"
+	_run_result_label="failed"
+	_run_provider_error_type=""
+	_run_provider_status=""
+	_run_runtime_error_type=""
+	_run_classification_source=""
+	_run_classification_pattern=""
 
 	if [[ "$exit_code" -eq 0 ]]; then
 		if [[ "$activity_detected" != "1" ]]; then
-			record_provider_backoff "$provider" "provider_error" "$output_file" "$selected_model"
-			rm -f "$output_file"
-			print_warning "$selected_model returned exit 0 without any model activity; backing off model"
+			_run_result_label="no_activity"
+			# Do NOT record provider backoff for no_activity. Exit 0 with no LLM
+			# output can be caused by local issues (bad prompt, sandbox problem,
+			# opencode bug) — not the provider's fault. Recording provider_error
+			# here falsely flags healthy providers as rate-limited, causing the
+			# pre-dispatch check to skip them and starve the worker pool.
+			# The activity watchdog (exit 124) handles genuine provider failures.
+			#
+			# t2119: preserve the output file for post-mortem forensics instead
+			# of deleting it. Workers that die in setup with exit 0 + no JSON
+			# events leave no other trace of WHY they died — not in observability
+			# DB (never reached the model), not in pulse.log, not in the
+			# session DB (never created one). The output file captured by tee is
+			# the only place plugin/runtime stderr lands. Moving it to a
+			# retention-capped diagnostics dir lets operators actually diagnose
+			# the residual 30s no_activity failures that the t2116-session
+			# plist-reload fix didn't fully resolve.
+			_preserve_no_activity_output "$output_file" "$session_key" "$selected_model"
+			print_warning "$selected_model returned exit 0 without any model activity (no backoff recorded — forensic copy preserved via t2119)"
 			return 75
 		fi
+		# Store session ID for potential continuation (before deleting output)
 		if [[ "$role" != "pulse" && -n "$discovered_session" ]]; then
 			store_session_id "$provider" "$session_key" "$discovered_session" "$selected_model"
 		fi
+
+		# GH#17436: Check for premature exit — worker produced activity (tool
+		# calls) but stopped without completing (no PR, no FULL_LOOP_COMPLETE,
+		# no BLOCKED). This is the #1 GPT-5.4 failure mode: reads issue, creates
+		# worktree, then exits without writing code. Previously classified as
+		# "success" which prevented fast-fail escalation from ever triggering.
+		#
+		# Only check implementation workers (session_key=issue-*), not pulse
+		# or triage sessions which don't produce PR completion signals.
+		if [[ "$role" == "worker" && "$session_key" == issue-* ]]; then
+			if ! output_has_completion_signal "$output_file"; then
+				# Diagnose empty tool results that may have caused the model to stop.
+				# Each is a closeable gap (wrong path, missing prefix, moved file).
+				_log_empty_result_gaps "$output_file" "$selected_model" "$session_key"
+
+				_run_result_label="premature_exit"
+				rm -f "$output_file"
+				print_warning "$selected_model worker exited with activity but no completion signal (premature exit — will attempt continuation)"
+				return 77
+			fi
+			if output_has_blocked_signal "$output_file"; then
+				_run_result_label="blocked"
+				_run_failure_reason="blocked"
+				_run_classification_source="model_blocked_signal"
+				rm -f "$output_file"
+				print_warning "$selected_model worker reported BLOCKED terminal state — recording blocked instead of success"
+				return 0
+			fi
+		fi
+
+		_run_result_label="success"
 		rm -f "$output_file"
 		return 0
 	fi
 
 	local failure_reason
-	failure_reason=$(classify_failure_reason "$output_file")
-	record_provider_backoff "$provider" "$failure_reason" "$output_file" "$selected_model"
+	# Exit code 124 = activity watchdog timeout (stall or dead runtime).
+	#
+	# GH#17648: Distinguish "stall with prior activity" from "dead on arrival".
+	# A mid-session stall (stream drop after the model was working) should try
+	# continuation — the model may have created a worktree, written files, etc.
+	# Killing and starting fresh wastes all that context.
+	#
+	# - 124 + activity + hard-kill sentinel → return 79 (watchdog_stall_killed)
+	#   to skip continuation entirely. The watchdog escalated to a proactive
+	#   kill because total elapsed ≥ WORKER_STALL_HARD_KILL_SECONDS — the slot
+	#   should be freed for re-dispatch instead of held through more stalls.
+	#   (t2956 / Issue #21231)
+	# - 124 + activity → return 78 (watchdog_stall_continue) so the retry loop
+	#   can resume the session with a continuation prompt before giving up.
+	# - 124 + startup output but no activity → return 78 so the retry loop can
+	#   try a bounded fresh continuation before provider backoff/rotation.
+	# - 124 + no output or explicit provider marker → rate_limit as before.
+	if [[ "$exit_code" -eq 124 ]]; then
+		failure_reason=$(classify_failure_reason "$output_file")
+		if [[ "$failure_reason" == "rate_limit" ]]; then
+			print_warning "$selected_model watchdog saw provider/rate-limit marker — classifying as rate_limit for rotation"
+		else
+			if [[ "$activity_detected" == "1" ]]; then
+				# Worker was making progress, then stalled (stream drop, hung connection).
+				# Store session ID for continuation before deleting output.
+				local discovered_session_for_continue
+				discovered_session_for_continue=$(extract_session_id_from_output "$output_file")
+				if [[ "$role" != "pulse" && -n "$discovered_session_for_continue" ]]; then
+					store_session_id "$provider" "$session_key" "$discovered_session_for_continue" "$selected_model"
+				fi
+				# t2956: Hard-kill path — proactive elapsed-time kill from the
+				# watchdog. Skip continuation, free the slot. The flag is set in
+				# _execute_run_attempt when the .watchdog_stall_killed sentinel
+				# was present alongside .watchdog_killed.
+				if [[ "${_run_watchdog_hard_killed:-0}" -eq 1 ]]; then
+					# Local to avoid duplicating the literal across the file
+					# (string-literal ratchet). The pre-existing per-session cap
+					# branch below uses the same label string.
+					local _hk_label="watchdog_stall_killed"
+					_run_result_label="$_hk_label"
+					_run_failure_reason="$_hk_label"
+					rm -f "$output_file"
+					print_warning "$selected_model watchdog hard-kill (elapsed ≥ WORKER_STALL_HARD_KILL_SECONDS) — slot freed for re-dispatch (no continuation)"
+					return 79
+				fi
+				_run_result_label="watchdog_stall_continue"
+				rm -f "$output_file"
+				print_warning "$selected_model watchdog stall with prior activity — will attempt session continuation"
+				return 78
+			fi
+			if [[ -s "$output_file" && "$role" != "pulse" ]]; then
+				_run_result_label="watchdog_startup_continue"
+				rm -f "$output_file"
+				print_warning "$selected_model watchdog startup stall without model activity — will attempt bounded continuation before provider backoff"
+				return 78
+			fi
+			failure_reason="rate_limit"
+			_failure_provider_error_type="rate_limit"
+			_failure_provider_status="429"
+			_failure_classification_source="watchdog_no_activity"
+			_failure_classification_pattern="watchdog_timeout_no_activity"
+			print_warning "$selected_model activity watchdog timeout (no activity) — classifying as rate_limit for rotation"
+		fi
+	else
+		failure_reason=$(classify_failure_reason "$output_file")
+	fi
+	_run_result_label="$failure_reason"
+	_run_provider_error_type="${_failure_provider_error_type:-}"
+	_run_provider_status="${_failure_provider_status:-}"
+	_run_runtime_error_type="${_failure_runtime_error_type:-}"
+	_run_classification_source="${_failure_classification_source:-}"
+	_run_classification_pattern="${_failure_classification_pattern:-}"
+
+	if attempt_pool_recovery "$provider" "$failure_reason" "$output_file"; then
+		_run_should_retry=1
+		rm -f "$output_file"
+		_run_failure_reason="$failure_reason"
+		return 76
+	fi
+
+	# Pulse supervisor failures must NOT block worker dispatch. The supervisor
+	# and workers may use different accounts (isolated auth) and the supervisor
+	# hitting a rate limit doesn't mean the provider is down for workers.
+	# Record pulse backoffs under a role-scoped key so the pre-dispatch check
+	# (which queries the model key) doesn't see them.
+	if [[ "$role" == "pulse" ]]; then
+		record_provider_backoff "$provider" "$failure_reason" "$output_file" "pulse/${selected_model}"
+	else
+		record_provider_backoff "$provider" "$failure_reason" "$output_file" "$selected_model"
+	fi
 	rm -f "$output_file"
 	_run_failure_reason="$failure_reason"
+	_run_should_retry=0
 	return "$exit_code"
 }
 
-# _execute_run_attempt: run one opencode invocation and handle the result.
-# Args: role session_key work_dir title prompt selected_model agent_name model_override
+# t3077: module-level marker — set to "1" by
+# _t3077_setup_fix_the_fixer_observability when the linked issue carries the
+# `fix-the-fixer` label. Read by the worker_started lifecycle emit so the
+# checkpoint records whether extra observability was applied for this run.
+_T3077_FIX_THE_FIXER="${_T3077_FIX_THE_FIXER:-0}"
+
+#######################################
+# t3077 — _t3077_setup_fix_the_fixer_observability
+#
+# Detect the `fix-the-fixer` label on the linked issue and, when present,
+# enable extra observability for this worker dispatch:
+#   - AIDEVOPS_VERBOSE_LIFECYCLE=1     — extra checkpoint emits in worker log
+#   - AIDEVOPS_WORKER_PREFLIGHT_SENTINEL=1 — fail-fast preflight check
+#   - HEADLESS_ACTIVITY_TIMEOUT_SECONDS=180 — tighter watchdog (vs 600s)
+#
+# Detection runs once at worker start (one extra REST hit, ~50ms). Fail-open
+# everywhere — missing args / API failure / unlabeled issue all fall through
+# without modifying the worker's environment. The deterministic t2819
+# detector (model:opus-4-7 elevation) remains the primary safety net.
+#
+# Args:
+#   $1 - issue number (from WORKER_ISSUE_NUMBER env, may be empty)
+#   $2 - repo slug (from DISPATCH_REPO_SLUG env, may be empty)
+# Returns: 0 always (fail-open contract)
+#######################################
+_t3077_setup_fix_the_fixer_observability() {
+	local issue_number="$1"
+	local repo_slug="$2"
+
+	# Fail-open guard: missing args = no detection, no observability changes.
+	if [[ -z "$issue_number" || -z "$repo_slug" ]]; then
+		return 0
+	fi
+	if [[ ! "$issue_number" =~ ^[0-9]+$ ]]; then
+		return 0
+	fi
+
+	# Best-effort label probe via dispatch-dedup-helper.sh (defined above).
+	# The helper itself is fail-conservative — its stdout is `labeled` on a
+	# match and any other token (or empty) on miss / API failure. We compare
+	# only against the positive token to keep the literal usage minimal
+	# (codebase ratchet flags repeated string literals).
+	local _t3077_match_token="labeled"
+	local label_state=""
+	if command -v dispatch-dedup-helper.sh >/dev/null 2>&1; then
+		label_state=$(dispatch-dedup-helper.sh has-fix-the-fixer-label \
+			"$issue_number" "$repo_slug" 2>/dev/null) || label_state=""
+	elif [[ -x "${SCRIPT_DIR}/dispatch-dedup-helper.sh" ]]; then
+		label_state=$("${SCRIPT_DIR}/dispatch-dedup-helper.sh" has-fix-the-fixer-label \
+			"$issue_number" "$repo_slug" 2>/dev/null) || label_state=""
+	fi
+
+	if [[ "$label_state" != "$_t3077_match_token" ]]; then
+		return 0
+	fi
+
+	# Label present — apply the observability triple.
+	export AIDEVOPS_VERBOSE_LIFECYCLE=1
+	export AIDEVOPS_WORKER_PREFLIGHT_SENTINEL=1
+	export HEADLESS_ACTIVITY_TIMEOUT_SECONDS=180
+	_T3077_FIX_THE_FIXER=1
+
+	print_info "[lifecycle] fix_the_fixer_observability_enabled issue=#${issue_number} repo=${repo_slug} watchdog=180s pid=$$"
+	return 0
+}
+
+#######################################
+# t3077 — _t3077_write_preflight_sentinel
+#
+# When AIDEVOPS_WORKER_PREFLIGHT_SENTINEL=1, write a sentinel file before
+# the model is invoked. Verifies that the worker's filesystem is writable —
+# a sandbox/FD-broken environment that fails this write would otherwise
+# burn tokens on a session that cannot persist work.
+#
+# Sentinel path: ~/.aidevops/cache/worker-preflight/<pid>.txt
+# On write failure, returns 1 — caller aborts dispatch with exit code 11.
+# When AIDEVOPS_WORKER_PREFLIGHT_SENTINEL is unset/empty, returns 0 (no-op).
+#
+# Returns: 0 success or no-op, 1 on write failure (caller aborts)
+#######################################
+_t3077_write_preflight_sentinel() {
+	if [[ "${AIDEVOPS_WORKER_PREFLIGHT_SENTINEL:-}" != "1" ]]; then
+		return 0
+	fi
+
+	local sentinel_dir="${HOME}/.aidevops/cache/worker-preflight"
+	local sentinel_path="${sentinel_dir}/$$.txt"
+
+	if ! mkdir -p "$sentinel_dir" 2>/dev/null; then
+		return 1
+	fi
+
+	if ! printf 'pid=%s\nstarted_at=%s\nissue=%s\nrepo=%s\n' \
+		"$$" \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')" \
+		"${WORKER_ISSUE_NUMBER:-unknown}" \
+		"${DISPATCH_REPO_SLUG:-unknown}" \
+		>"$sentinel_path" 2>/dev/null; then
+		return 1
+	fi
+
+	# Verify the write actually persisted (catches silent FD failures).
+	[[ -s "$sentinel_path" ]] || return 1
+	return 0
+}
+
+#######################################
+# Preserve a small worker output excerpt for failure-metric forensics.
+#
+# Args:
+#   $1 - output file path
+#   $2 - session key
+# stdout: excerpt path, or empty on failure/no file
+# Returns: 0 always (observability must fail open)
+#######################################
+_metric_failure_excerpt_path() {
+	local output_file="$1"
+	local session_key="$2"
+	if [[ -z "$output_file" || ! -f "$output_file" ]]; then
+		return 0
+	fi
+	local excerpt_dir="${HOME}/.aidevops/logs/worker-failure-excerpts"
+	mkdir -p "$excerpt_dir" 2>/dev/null || return 0
+	local safe_key timestamp excerpt_path
+	safe_key=$(printf '%s' "$session_key" | tr -c 'A-Za-z0-9._-' '_')
+	timestamp=$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || printf '%s' "unknown")
+	excerpt_path="${excerpt_dir}/${safe_key:-unknown}-${timestamp}-$$.log"
+	python3 - "$output_file" "$excerpt_path" <<'PY' >/dev/null 2>&1 || return 0
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+try:
+    with open(src, "rb") as f:
+        data = f.read()[-65536:]
+    with open(dst, "wb") as f:
+        f.write(data)
+except OSError:
+    sys.exit(0)
+PY
+	[[ -s "$excerpt_path" ]] && printf '%s' "$excerpt_path"
+	return 0
+}
+
+# _execute_run_attempt: run one headless invocation and handle the result.
+# Dispatches to OpenCode (default) or Claude CLI (when --runtime claude specified).
+# Args: role session_key work_dir title prompt selected_model variant_override agent_name
 #       extra_args (array passed as remaining positional args after the named ones)
+# Reads caller variable headless_runtime (set by _parse_run_args --runtime flag).
 # Prints the discovered session ID to stdout on success (may be empty).
 # Returns: 0 success, 75 no-activity backoff, non-zero on failure.
 # Sets caller variable _run_failure_reason on failure.
@@ -1091,17 +1002,33 @@ _execute_run_attempt() {
 	local title="$4"
 	local prompt="$5"
 	local selected_model="$6"
-	local agent_name="$7"
-	local model_override="$8"
+	local variant_override="$7"
+	local agent_name="$8"
 	shift 8
 	local -a extra_args=("$@")
+
+	_recover_deleted_cwd_before_launch "$work_dir" "execute_run_attempt" || return 1
+
+	# Determine which runtime to use. Default is opencode unless explicitly overridden.
+	local runtime="${headless_runtime:-opencode}"
+	local prompt_arg="$prompt"
+	local prompt_file_arg=""
+	local claude_stdin_file=""
+	_prepare_runtime_prompt_transport "$runtime" "$prompt"
+	prompt_arg="$_HEADLESS_RUN_PROMPT_ARG"
+	prompt_file_arg="$_HEADLESS_RUN_PROMPT_FILE"
+	claude_stdin_file="$_HEADLESS_CLAUDE_STDIN_FILE"
+	if [[ -n "$prompt_file_arg" ]]; then
+		extra_args+=(--file "$prompt_file_arg")
+	fi
+	_HEADLESS_CLAUDE_STDIN_FILE="$claude_stdin_file"
 
 	local provider persisted_session=""
 	provider=$(extract_provider "$selected_model")
 	if [[ "$role" == "pulse" ]]; then
 		# Pulse runs must start from the current pre-fetched state each cycle.
-		# Reusing a prior OpenCode session contaminates later /pulse runs with
-		# stale conversational context, which leads to idle watchdog kills and an
+		# Reusing a prior session contaminates later /pulse runs with stale
+		# conversational context, which leads to idle watchdog kills and an
 		# empty worker pool. Workers still keep session reuse.
 		clear_session_id "$provider" "$session_key"
 	else
@@ -1109,23 +1036,342 @@ _execute_run_attempt() {
 	fi
 
 	local -a cmd=()
-	while IFS= read -r -d '' arg; do
-		cmd+=("$arg")
-	done < <(_build_run_cmd "$selected_model" "$work_dir" "$prompt" "$title" \
-		"$agent_name" "$persisted_session" "${extra_args[@]+"${extra_args[@]}"}")
+	case "$runtime" in
+	claude)
+		if ! type -P claude >/dev/null 2>&1; then
+			print_error "Claude CLI not found in PATH (requested via --runtime claude)"
+			return 1
+		fi
+		while IFS= read -r -d '' arg; do
+			cmd+=("$arg")
+		done < <(_build_claude_cmd "$selected_model" "$work_dir" "$prompt_arg" "$title" \
+			"$agent_name" "${extra_args[@]+"${extra_args[@]}"}")
+		;;
+	opencode | *)
+		while IFS= read -r -d '' arg; do
+			cmd+=("$arg")
+		done < <(_build_run_cmd "$selected_model" "$work_dir" "$prompt_arg" "$title" \
+			"$variant_override" "$agent_name" "$persisted_session" "${extra_args[@]+"${extra_args[@]}"}")
+		;;
+	esac
+
+	# GH#17549: Claim guard — verify a DISPATCH_CLAIM exists for this runner
+	# before launching a worker for an issue. This prevents pulse LLMs from
+	# bypassing dispatch_with_dedup() by calling headless-runtime-helper directly.
+	# GH#17549: Export repo slug for _release_dispatch_claim on failure.
+	# The claim guard was removed — it checked for DISPATCH_CLAIM nonce= comments
+	# but dispatch_with_dedup posts "Dispatching worker" comments instead (GH#15317).
+	# The mismatch caused the guard to reject every legitimate dispatch, creating
+	# a claim→reject→release→reclaim loop. dispatch_with_dedup is the authoritative
+	# dedup layer; a second check here adds no safety and causes false rejections.
+	# GH#20542: DISPATCH_REPO_SLUG export moved to _cmd_run_prepare (called
+	# before the EXIT trap is armed) so _release_dispatch_claim always has a
+	# non-empty slug. The role+session_key guard here is no longer needed —
+	# _cmd_run_prepare sets the slug for all roles unconditionally.
 
 	local output_file exit_code_file exit_code
+	local start_ms end_ms duration_ms
+	local resource_stop_file resource_result_file resource_sampler_pid
+	start_ms=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null || printf '%s' "0")
 	output_file=$(mktemp)
 	exit_code_file=$(mktemp)
+	resource_stop_file=$(mktemp)
+	resource_result_file=$(mktemp)
+	rm -f "$resource_stop_file" 2>/dev/null || true
+	rm -f "$resource_result_file" 2>/dev/null || true
+	resource_sampler_pid=""
 	exit_code=0
 
-	_invoke_opencode "$output_file" "$exit_code_file" "${cmd[@]}"
+	# GH#17549: expose session_key to _invoke_opencode → watchdog → _watchdog_kill
+	# so claim release can identify the issue. Module-level var avoids changing
+	# _invoke_opencode's interface which is shared with _invoke_claude.
+	_invoke_session_key="$session_key"
+	# t2249: expose provider to _invoke_opencode → _maybe_rotate_isolated_auth
+	# so non-anthropic workers (openai/cursor/google) also benefit from pre-
+	# dispatch rotation against their own pool entries. Same rationale as
+	# _invoke_session_key above: keep _invoke_opencode's arg list stable.
+	_invoke_provider="$provider"
+
+	# t3077: expose session_key to the verbose lifecycle emitter via the
+	# convention WORKER_SESSION_KEY (read by _emit_verbose_checkpoint).
+	export WORKER_SESSION_KEY="$session_key"
+
+	# t3077 — Fix-the-fixer detection + observability setup.
+	#
+	# When the linked issue carries the `fix-the-fixer` label (applied by
+	# pulse-fix-the-fixer-detector.sh), enable extra observability for THIS
+	# worker:
+	#   - AIDEVOPS_VERBOSE_LIFECYCLE=1   — extra checkpoints in worker log
+	#   - HEADLESS_ACTIVITY_TIMEOUT_SECONDS=180  — tighter watchdog (vs 600s)
+	#   - AIDEVOPS_WORKER_PREFLIGHT_SENTINEL=1  — fail-fast preflight check
+	#
+	# Detection runs once at worker start. Best-effort gh API call (one
+	# extra REST hit per worker, ~50ms). On failure, falls through with
+	# default settings — the deterministic t2819 detector remains the
+	# primary safety net.
+	_t3077_setup_fix_the_fixer_observability "${WORKER_ISSUE_NUMBER:-}" "${DISPATCH_REPO_SLUG:-}" || true
+
+	# t3077 — preflight sentinel write.
+	# When AIDEVOPS_WORKER_PREFLIGHT_SENTINEL=1 (set by the helper above
+	# when fix-the-fixer is labeled), write a sentinel file before the
+	# model is invoked. If the write does not complete, abort the dispatch
+	# immediately with exit code 11 — the worker would otherwise burn
+	# tokens on a sandbox/FD-broken environment.
+	if ! _t3077_write_preflight_sentinel; then
+		print_error "[lifecycle] preflight_abort reason=sentinel_write_blocked pid=$$ session=$session_key"
+		printf '11' >"$exit_code_file" 2>/dev/null || true
+		exit_code=11
+		return 11
+	fi
+
+	# t3077 — emit canonical worker_started lifecycle marker.
+	# Replaces the legacy print_info worker_start emit; the legacy line
+	# format is preserved as a fallback when verbose mode is disabled so
+	# existing log parsers continue to work.
+	_emit_verbose_checkpoint worker_started \
+		"model=${selected_model} runtime=${runtime} fix_the_fixer=${_T3077_FIX_THE_FIXER:-0}"
+	print_info "[lifecycle] worker_start session=$session_key model=$selected_model runtime=$runtime pid=$$"
+	if [[ -x "$RESOURCE_METRICS_HELPER" ]]; then
+		"$RESOURCE_METRICS_HELPER" sample \
+			--pid "$$" \
+			--role "$role" \
+			--session-key "$session_key" \
+			--repo "${DISPATCH_REPO_SLUG:-}" \
+			--issue "${WORKER_ISSUE_NUMBER:-}" \
+			--result-file "$resource_result_file" \
+			--out "$RESOURCE_METRICS_FILE" \
+			--stop-file "$resource_stop_file" \
+			--interval "${AIDEVOPS_RESOURCE_SAMPLE_INTERVAL_SECONDS:-30}" >/dev/null 2>&1 &
+		resource_sampler_pid="$!"
+	fi
+
+	# t3077 — spawn the verbose lifecycle watcher (background subshell).
+	# Fail-open: returns silently if AIDEVOPS_VERBOSE_LIFECYCLE != 1.
+	local _t3077_watcher_pid=""
+	_t3077_watcher_pid=$(_start_verbose_lifecycle_watcher "$output_file" "$$" 2>/dev/null) || true
+	if [[ -n "$_t3077_watcher_pid" ]]; then
+		print_info "[lifecycle] verbose_watcher_started pid=${_t3077_watcher_pid} worker=$$ log=${output_file}"
+	fi
+
+	case "$runtime" in
+	claude) _invoke_claude "$output_file" "$exit_code_file" "$work_dir" "${cmd[@]}" ;;
+	*) _invoke_opencode "$output_file" "$exit_code_file" "${cmd[@]}" ;;
+	esac
+
+	# t3077 — clean up the verbose lifecycle watcher (if any).
+	_cleanup_verbose_lifecycle_watcher "$$" 2>/dev/null || true
+	print_info "[lifecycle] invoke_returned session=$session_key pid=$$ exit_code_file_exists=$(test -f "$exit_code_file" && echo yes || echo no)"
 	exit_code=$(cat "$exit_code_file" 2>/dev/null) || exit_code=1
+	print_info "[lifecycle] exit_code_read session=$session_key exit_code=$exit_code"
+
+	# Activity watchdog race fix: the watchdog writes a marker file when it
+	# kills a stalled worker. The dying subshell may overwrite exit_code_file
+	# with its own exit code (0 or 143), losing the watchdog's 124. The marker
+	# file is authoritative — if it exists, this was a watchdog kill.
+	if [[ -f "${exit_code_file}.watchdog_killed" ]]; then
+		exit_code=124
+		rm -f "${exit_code_file}.watchdog_killed"
+	fi
+	# t2956 / Issue #21231: Hard-kill sentinel — set when the watchdog
+	# escalated from passive (78 / continue) to proactive (79 / killed)
+	# because the worker had been stalling for ≥ WORKER_STALL_HARD_KILL_SECONDS
+	# total elapsed. _handle_run_result reads this flag (via the function-
+	# scope variable) and returns 79 to short-circuit the continuation loop.
+	_run_watchdog_hard_killed=0
+	local _stall_killed_marker="${exit_code_file}.watchdog_stall_killed"
+	if [[ -f "$_stall_killed_marker" ]]; then
+		_run_watchdog_hard_killed=1
+		rm -f "$_stall_killed_marker"
+	fi
+	# GH#21578 / t3021: Save rate_limit_fast sentinel path BEFORE deleting
+	# exit_code_file — the sentinel lives at ${exit_code_file}.rate_limit_fast
+	# and must be checked after the stale-session retry block.
+	local _rl_fast_sentinel="${exit_code_file}.rate_limit_fast"
 	rm -f "$exit_code_file"
 
-	_handle_run_result "$exit_code" "$output_file" "$role" "$provider" "$session_key" "$selected_model"
-	return $?
+	# GH#16978 Bug B: Stale session ID causes "Session not found" on OpenCode.
+	# When a persisted session ID is stale (e.g., from a previous OpenCode version
+	# or a different machine), OpenCode exits non-zero with "Session not found"
+	# instead of creating a new session. Detect this, clear the stale ID, and
+	# retry once without --session so a fresh session is created.
+	if [[ "$exit_code" -ne 0 && "$runtime" != "claude" && -n "$persisted_session" ]]; then
+		local output_text=""
+		output_text=$(cat "$output_file" 2>/dev/null || true)
+		if [[ "$output_text" == *"Session not found"* ]]; then
+			print_warning "Stale session ID detected for ${session_key} — clearing and retrying without --session (GH#16978)"
+			clear_session_id "$provider" "$session_key"
+			persisted_session=""
+			rm -f "$output_file"
+			output_file=$(mktemp)
+			exit_code_file=$(mktemp)
+			exit_code=0
+			# Rebuild command without the stale --session flag
+			cmd=()
+			while IFS= read -r -d '' arg; do
+				cmd+=("$arg")
+			done < <(_build_run_cmd "$selected_model" "$work_dir" "$prompt_arg" "$title" \
+				"$variant_override" "$agent_name" "$persisted_session" "${extra_args[@]+"${extra_args[@]}"}")
+			_invoke_opencode "$output_file" "$exit_code_file" "${cmd[@]}"
+			exit_code=$(cat "$exit_code_file" 2>/dev/null) || exit_code=1
+			if [[ -f "${exit_code_file}.watchdog_killed" ]]; then
+				exit_code=124
+				rm -f "${exit_code_file}.watchdog_killed"
+			fi
+			# t2956: Hard-kill sentinel must also be re-checked on the retry path.
+			local _retry_stall_killed_marker="${exit_code_file}.watchdog_stall_killed"
+			if [[ -f "$_retry_stall_killed_marker" ]]; then
+				_run_watchdog_hard_killed=1
+				rm -f "$_retry_stall_killed_marker"
+			fi
+			rm -f "$exit_code_file"
+		fi
+	fi
+
+	# GH#21578 / t3021: Rate-limit fast-exit check.
+	# _launch_rate_limit_fast_monitor writes this sentinel when it detects
+	# 429/overload patterns within the first 30s and kills the worker cleanly.
+	# Route as exit 80 so cmd_run can release the dispatch claim without
+	# incrementing the fast-fail counter or triggering NMR backoff on the issue.
+	if [[ -f "$_rl_fast_sentinel" ]]; then
+		local _rl_metric_output_file="" _rl_metric_session_id=""
+		if [[ -f "$output_file" ]]; then
+			_rl_metric_session_id=$(extract_session_id_from_output "$output_file" 2>/dev/null || true)
+			_rl_metric_output_file=$(_metric_failure_excerpt_path "$output_file" "$session_key")
+		fi
+		rm -f "$_rl_fast_sentinel" "$output_file" 2>/dev/null || true
+		# One literal here; _cmd_run_finish elif is a second. Keeping total at 2
+		# avoids the repeated-string-literal ratchet gate (threshold: >=3).
+		_run_result_label="rate_limit_fast"
+		_run_failure_reason="$_run_result_label"
+		_run_provider_error_type="rate_limit"
+		_run_provider_status="429"
+		_run_runtime_error_type=""
+		_run_classification_source="rate_limit_fast_monitor"
+		_run_classification_pattern="rate_limit_fast_sentinel"
+		local _rl_end_ms
+		_rl_end_ms=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null || printf '%s' "0")
+		local _rl_duration_ms=0
+		if [[ "$_rl_end_ms" =~ ^[0-9]+$ && "$start_ms" =~ ^[0-9]+$ && "$_rl_end_ms" -ge "$start_ms" ]]; then
+			_rl_duration_ms=$((_rl_end_ms - start_ms))
+		fi
+		print_info "[lifecycle] rate_limit_fast_exit session=$session_key model=$selected_model duration_ms=${_rl_duration_ms}"
+		if [[ -n "$resource_sampler_pid" ]]; then
+			printf '%s\n' "$_run_result_label" >"$resource_result_file" 2>/dev/null || true
+			printf 'done\n' >"$resource_stop_file" 2>/dev/null || true
+			wait "$resource_sampler_pid" 2>/dev/null || true
+			rm -f "$resource_stop_file" "$resource_result_file" 2>/dev/null || true
+		fi
+		append_runtime_metric "$role" "$session_key" "$selected_model" "$provider" "$_run_result_label" "0" "$_run_failure_reason" "0" "$_rl_duration_ms" \
+			"${WORKER_ISSUE_NUMBER:-}" "${DISPATCH_REPO_SLUG:-}" "$work_dir" "$_rl_metric_output_file" "$_rl_metric_session_id" \
+			"${_run_provider_error_type:-}" "${_run_provider_status:-}" "${_run_runtime_error_type:-}" "${_run_classification_source:-}" "${_run_classification_pattern:-}"
+		return 80
+	fi
+
+	# GH#17549: Post-exit worker diagnostics — log exit code, signal, and
+	# session state to the output file so the worker log captures it.
+	# OpenCode exits silently on API errors; this is our only visibility.
+	# Extract session ID BEFORE the append block to avoid SC2094 (read+write same file).
+	local _diag_session_id="" _diag_incomplete_msgs="0" _metric_session_id="" _metric_output_file=""
+	if [[ -f "$output_file" ]]; then
+		_metric_session_id=$(extract_session_id_from_output "$output_file" 2>/dev/null || true)
+		_metric_output_file=$(_metric_failure_excerpt_path "$output_file" "$session_key")
+	fi
+	if [[ "$exit_code" -eq 0 && -n "$_metric_session_id" ]]; then
+		_diag_session_id="$_metric_session_id"
+		if [[ -n "$_diag_session_id" ]]; then
+			_diag_incomplete_msgs=$(sqlite3 ~/.local/share/opencode/opencode.db \
+				"SELECT count(*) FROM message WHERE session_id='${_diag_session_id}' AND json_extract(data, '$.role')='assistant' AND json_extract(data, '$.time.completed') IS NULL" 2>/dev/null || echo "0")
+		fi
+	fi
+	{
+		printf '\n[WORKER_EXIT_DIAGNOSTICS] exit_code=%s model=%s role=%s session_key=%s\n' \
+			"$exit_code" "$selected_model" "$role" "$session_key"
+		if [[ "$exit_code" -eq 124 ]]; then
+			printf '[WORKER_EXIT_DIAGNOSTICS] cause=watchdog_kill (no LLM activity within timeout)\n'
+		elif [[ "$exit_code" -eq 137 ]]; then
+			printf '[WORKER_EXIT_DIAGNOSTICS] cause=SIGKILL (OOM or external kill)\n'
+		elif [[ "$exit_code" -eq 143 ]]; then
+			printf '[WORKER_EXIT_DIAGNOSTICS] cause=SIGTERM (graceful termination)\n'
+		elif [[ "$exit_code" -eq 0 && "$_diag_incomplete_msgs" -gt 0 ]]; then
+			printf '[WORKER_EXIT_DIAGNOSTICS] cause=mid_turn_death (session %s has %s incomplete assistant messages — API likely dropped)\n' \
+				"$_diag_session_id" "$_diag_incomplete_msgs"
+		elif [[ "$exit_code" -ne 0 ]]; then
+			printf '[WORKER_EXIT_DIAGNOSTICS] cause=unknown (exit_code=%s)\n' "$exit_code"
+		fi
+	} >>"$output_file" 2>/dev/null || true
+
+	print_info "[lifecycle] calling_handle_run_result session=$session_key exit_code=$exit_code output_size=$(wc -c <"$output_file" 2>/dev/null || echo 0)"
+	local handle_exit=0
+	if _handle_run_result "$exit_code" "$output_file" "$role" "$provider" "$session_key" "$selected_model"; then
+		handle_exit=0
+	else
+		handle_exit=$?
+	fi
+	print_info "[lifecycle] handle_run_result_returned session=$session_key handle_exit=$handle_exit result_label=${_run_result_label:-unknown}"
+	end_ms=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null || printf '%s' "0")
+	if [[ "$end_ms" =~ ^[0-9]+$ && "$start_ms" =~ ^[0-9]+$ && "$end_ms" -ge "$start_ms" ]]; then
+		duration_ms=$((end_ms - start_ms))
+	else
+		duration_ms=0
+	fi
+	if [[ -n "$resource_sampler_pid" ]]; then
+		printf '%s\n' "${_run_result_label:-failed}" >"$resource_result_file" 2>/dev/null || true
+		printf 'done\n' >"$resource_stop_file" 2>/dev/null || true
+		wait "$resource_sampler_pid" 2>/dev/null || true
+		rm -f "$resource_stop_file" "$resource_result_file" 2>/dev/null || true
+	fi
+	if [[ "${_run_result_label:-failed}" == "success" ]]; then
+		_metric_output_file=""
+	fi
+	append_runtime_metric "$role" "$session_key" "$selected_model" "$provider" "${_run_result_label:-failed}" "$handle_exit" "${_run_failure_reason:-}" "${_run_activity_detected:-0}" "$duration_ms" \
+		"${WORKER_ISSUE_NUMBER:-}" "${DISPATCH_REPO_SLUG:-}" "$work_dir" "$_metric_output_file" "$_metric_session_id" \
+		"${_run_provider_error_type:-}" "${_run_provider_status:-}" "${_run_runtime_error_type:-}" "${_run_classification_source:-}" "${_run_classification_pattern:-}"
+	return "$handle_exit"
 }
+
+# =============================================================================
+# Run lifecycle — prepare, finish, retry, detach
+# =============================================================================
+
+#######################################
+# _discover_actual_worktree_dir — find the worktree a worker actually used (t2982)
+#
+# Scans git worktree list --porcelain from the repo root of <work_dir> for a
+# worktree whose branch ref matches gh-?<issue_number>. Used to fix Mode B/C
+# worker misclassification (work_dir stuck on main after worker moved to own
+# worktree or merged its PR).
+#
+# Args: $1=work_dir  $2=issue_number
+# Echoes the discovered path if found and it is a directory; nothing otherwise.
+# Always returns 0 — caller falls back to work_dir on empty output.
+#######################################
+_discover_actual_worktree_dir() {
+	local work_dir="$1"
+	local issue_n="$2"
+	if [[ -z "$work_dir" || -z "$issue_n" ]]; then
+		return 0
+	fi
+	local repo_root=""
+	repo_root=$(git -C "$work_dir" rev-parse --show-toplevel 2>/dev/null) || repo_root="$work_dir"
+	local found_path=""
+	# Single-line awk keeps $2 refs inside the single-quote on the same line,
+	# preventing the positional-param ratchet from flagging awk field refs.
+	# shellcheck disable=SC2016
+	found_path=$(git -C "$repo_root" worktree list --porcelain 2>/dev/null \
+		| awk -v n="$issue_n" '/^worktree / { p=$2 } /^branch / && $2 ~ "gh-?" n { print p; exit }')
+	if [[ -n "$found_path" && -d "$found_path" ]]; then
+		printf '%s' "$found_path"
+	fi
+	return 0
+}
+
+# =============================================================================
+# Stall cap helper (GH#20681)
+# =============================================================================
+
+# =============================================================================
+# Main run orchestrator
+# =============================================================================
 
 cmd_run() {
 	local role="worker"
@@ -1135,96 +1381,313 @@ cmd_run() {
 	local prompt=""
 	local prompt_file=""
 	local model_override=""
+	local initial_model=""
+	local tier_override=""
+	local variant_override=""
 	local agent_name=""
+	local headless_runtime=""
+	local detach=0
 	local -a extra_args=()
 
 	_parse_run_args "$@" || return 1
 	_validate_run_args || return 1
+	_ensure_valid_launch_cwd "$work_dir" || return 1
+	_validate_issue_worker_env_contract "$role" "$session_key" "$work_dir" "$title" "$prompt" || return 1
+	_recover_deleted_cwd_before_launch "$work_dir" "cmd_run" || return 1
 
-	# GH#6538: Acquire a session-key lock to prevent duplicate workers.
-	# The pulse (or any caller) may dispatch the same session-key twice in
-	# rapid succession — before the first worker appears in process lists.
-	# The lock file acts as an immediate dedup guard: the second invocation
-	# sees the first's PID and exits without spawning a sandbox process.
-	if ! _acquire_session_lock "$session_key"; then
+	if [[ "$detach" -eq 1 ]]; then
+		_detach_worker "$session_key" "$@"
 		return 0
 	fi
-	# shellcheck disable=SC2064
-	trap "_release_session_lock '$session_key'; _update_dispatch_ledger '$session_key' 'fail'" EXIT
-
-	# GH#6696: Register this dispatch in the in-flight ledger so the pulse
-	# can detect workers that haven't created PRs yet. The ledger bridges
-	# the 10-15 minute gap between dispatch and PR creation.
-	_register_dispatch_ledger "$session_key" "$work_dir"
 
 	local selected_model
-	selected_model=$(choose_model "$role" "$model_override") || {
+	selected_model=$(choose_model "$role" "${model_override:-$initial_model}" "$tier_override") || {
 		local choose_exit=$?
-		_update_dispatch_ledger "$session_key" "fail"
-		_release_session_lock "$session_key"
-		trap - EXIT
+		_cmd_run_finish "$session_key" "fail"
 		return "$choose_exit"
 	}
 
+	# GH#17549: Version guard — runs on EVERY dispatch (not cached).
+	# Something keeps upgrading opencode to 1.3.17 between canary checks.
+	_enforce_opencode_version_pin
+	# GH#17549: Canary smoke test — verify OpenCode can start and complete
+	# an API call before committing to a full worker dispatch. Runs BEFORE
+	# _cmd_run_prepare so a canary failure never posts a dispatch claim or
+	# increments the fast-fail counter. Cached for CANARY_CACHE_TTL_SECONDS
+	# (default 30 min) so it runs at most once per pulse cycle.
+	if ! _run_canary_test "$selected_model"; then
+		print_warning "Canary failed — aborting dispatch for session $session_key (no claim posted)"
+		return 1
+	fi
+
+	if [[ "$role" == "worker" ]]; then
+		prompt=$(append_worker_headless_contract "$prompt")
+	fi
+
+	# GH#20542: DISPATCH_REPO_SLUG is now exported in _cmd_run_prepare (before
+	# the EXIT trap is armed) so it is always available to _release_dispatch_claim.
+	# _cmd_run_prepare is called immediately below; the export no longer needs to
+	# live in _execute_run_attempt (which runs after the trap is already set).
+	local prepare_exit=0
+	_cmd_run_prepare "$session_key" "$work_dir" || prepare_exit=$?
+	if [[ "$prepare_exit" -eq 2 ]]; then
+		return 0
+	fi
+	if [[ "$prepare_exit" -ne 0 ]]; then
+		return "$prepare_exit"
+	fi
+
+	if [[ -z "$variant_override" ]]; then
+		variant_override=$(resolve_headless_variant "$role" "$tier_override" "$selected_model")
+	fi
+
+	# GH#17436: Continuation retry configuration.
+	# When a worker exits prematurely (activity but no completion signal),
+	# resume the session with a "continue" prompt instead of starting fresh.
+	# This catches the GPT-5.4 failure mode of stopping after investigation/setup.
+	local max_continuation_retries="${HEADLESS_CONTINUATION_MAX_RETRIES:-10}"
+	local continuation_count=0
+	local original_prompt="$prompt"
+
+	# GH#17648: Watchdog stall continuation configuration.
+	# When the watchdog kills a worker that was making progress (stream drop,
+	# hung connection), try resuming the session before giving up. This
+	# preserves all work done so far (worktree, files, partial implementation)
+	# instead of starting fresh with a different provider.
+	local max_watchdog_continue_retries="${HEADLESS_WATCHDOG_CONTINUE_MAX_RETRIES:-2}"
+	local watchdog_continue_count=0
+
+	# GH#20681: Per-session stall caps — count and cumulative time.
+	# Prevents unbounded token burn from repeated stall-continue events.
+	# The stall_timeout_s is the watchdog's configured stall window, used to
+	# approximate cumulative stall time (one STALL_TIMEOUT per stall event).
+	local _stall_timeout_s="${HEADLESS_ACTIVITY_TIMEOUT_SECONDS:-600}"
+	[[ "$_stall_timeout_s" =~ ^[0-9]+$ ]] || _stall_timeout_s=600
+	local _stall_continue_max="${WORKER_STALL_CONTINUE_MAX:-3}"
+	[[ "$_stall_continue_max" =~ ^[0-9]+$ ]] || _stall_continue_max=3
+	local _stall_cumulative_max_s="${WORKER_STALL_CUMULATIVE_MAX_S:-1800}"
+	[[ "$_stall_cumulative_max_s" =~ ^[0-9]+$ ]] || _stall_cumulative_max_s=1800
+	local _session_stall_count=0
+	local _session_stall_cumulative_s=0
+
 	local attempt=1
-	local max_attempts=2
+	local max_attempts=3
+	local cmd_run_action="retry"
+	local cmd_run_next_model="$selected_model"
 	local _run_failure_reason=""
-	local run_exit=1
+	local _run_should_retry=0
+	local _run_result_label="failed"
+	local _run_activity_detected="0"
 	while [[ "$attempt" -le "$max_attempts" ]]; do
 		_run_failure_reason=""
-		_execute_run_attempt \
+		_run_should_retry=0
+		_run_result_label="failed"
+		_run_activity_detected="0"
+		local attempt_exit=0
+		if _execute_run_attempt \
 			"$role" "$session_key" "$work_dir" "$title" "$prompt" \
-			"$selected_model" "$agent_name" "$model_override" \
-			"${extra_args[@]+"${extra_args[@]}"}"
-		local attempt_exit=$?
+			"$selected_model" "$variant_override" "$agent_name" \
+			"${extra_args[@]+"${extra_args[@]}"}"; then
+			attempt_exit=0
+		else
+			attempt_exit=$?
+		fi
 
 		if [[ "$attempt_exit" -eq 0 ]]; then
-			_update_dispatch_ledger "$session_key" "complete"
-			_release_session_lock "$session_key"
-			trap - EXIT
+			# GH#20721: Pass work_dir so _cmd_run_finish can detect no-op exits.
+			_cmd_run_finish "$session_key" "complete" "$work_dir"
 			return 0
 		fi
 
-		# Only retry on auth errors when no explicit model was requested
-		# and we have attempts remaining.
-		if [[ -n "$model_override" || "$_run_failure_reason" != "auth_error" || "$attempt" -ge "$max_attempts" ]]; then
-			_update_dispatch_ledger "$session_key" "fail"
-			_release_session_lock "$session_key"
-			trap - EXIT
-			return "$attempt_exit"
+		# GH#21578 / t3021: Rate-limit fast-exit (exit 80).
+		# _execute_run_attempt sets this when the 30s monitor detected a 429 or
+		# provider-overload pattern before any LLM activity was produced.
+		# Metric already recorded by _execute_run_attempt with result=rate_limit_fast.
+		# Release the dispatch claim so the issue immediately re-queues on the
+		# next pulse cycle. Do NOT call _cmd_run_finish "fail" — that would
+		# increment the fast-fail counter and potentially apply NMR to the issue,
+		# which is wrong for a transient API condition.
+		if [[ "$attempt_exit" -eq 80 ]]; then
+			print_warning "$selected_model rate_limit_fast — API 429/overload within first ${HEADLESS_RATE_LIMIT_DETECT_SECONDS:-30}s (transient, no NMR backoff)"
+			# Pass _run_result_label (set to "rate_limit_fast" in _execute_run_attempt)
+			# rather than repeating the literal here — keeps distinct-literal count at 2
+			# (_execute_run_attempt assignment + _cmd_run_finish elif) and avoids the
+			# repeated-string-literal ratchet gate (threshold: >=3 distinct occurrences).
+			_cmd_run_finish "$session_key" "$_run_result_label"
+			return 0
 		fi
 
-		local provider next_model
-		provider=$(extract_provider "$selected_model")
-		next_model=$(choose_model "$role" "") || {
-			_update_dispatch_ledger "$session_key" "fail"
-			_release_session_lock "$session_key"
-			trap - EXIT
-			return "$attempt_exit"
-		}
-		print_warning "$provider auth failure detected at startup; retrying once with alternate provider model $next_model"
-		selected_model="$next_model"
+		# GH#17436: Handle premature exit (exit 77) — worker had activity but
+		# no completion signal. Resume the session with a continuation prompt
+		# instead of recording a provider failure and rotating.
+		if [[ "$attempt_exit" -eq 77 && "$continuation_count" -lt "$max_continuation_retries" ]]; then
+			continuation_count=$((continuation_count + 1))
+			print_warning "Premature exit detected — sending continuation prompt (attempt ${continuation_count}/${max_continuation_retries})"
+
+			# Swap to a continuation prompt that reinforces headless completion.
+			# The session ID is already stored; _execute_run_attempt will use
+			# --session <id> --continue to resume the existing conversation.
+			prompt="Continue through to completion. This is a headless session — no user is present and no user input is available to assist. You have set up the environment but have not yet completed the task. Check your todo list, implement the required code changes, commit, push, and create a PR. After PR creation, you MUST post the MERGE_SUMMARY comment (full-loop step 4.2.1) — the merge pass needs it for closing comments. Then continue through review, merge, and closing comments. Do not stop until the outcome is FULL_LOOP_COMPLETE or BLOCKED with evidence."
+
+			# Continuation retries don't consume provider-rotation attempts
+			# since the provider isn't at fault — the model stopped early.
+			continue
+		fi
+
+		# If we exhausted continuation retries, classify as a real failure
+		# so the fast-fail counter increments and tier escalation can trigger.
+		if [[ "$attempt_exit" -eq 77 ]]; then
+			_run_failure_reason="premature_exit"
+			_run_result_label="premature_exit"
+			print_warning "Exhausted ${max_continuation_retries} continuation retries — recording as premature_exit failure"
+			_cmd_run_finish "$session_key" "fail"
+			return 1
+		fi
+
+		# t2956 / Issue #21231: Handle watchdog hard-kill (exit 79).
+		# The watchdog escalated from passive (78 / continue) to proactive
+		# (79 / killed) because total elapsed reached
+		# WORKER_STALL_HARD_KILL_SECONDS while still stalled. Skip
+		# continuation, skip provider rotation — record the
+		# watchdog_stall_killed metric and free the slot for re-dispatch.
+		# This is the per-attempt analogue of the existing per-session cap
+		# (GH#20681) below: same outcome label, different trigger.
+		if [[ "$attempt_exit" -eq 79 ]]; then
+			# Accumulate per-session stall metrics so subsequent attempts
+			# (if the dispatcher re-runs this issue) see prior cost.
+			_session_stall_count=$((_session_stall_count + 1))
+			_session_stall_cumulative_s=$((_session_stall_cumulative_s + _stall_timeout_s))
+			print_warning "Watchdog hard-kill — recording watchdog_stall_killed (per-attempt elapsed cap, slot freed for re-dispatch)"
+			# _run_result_label and _run_failure_reason were already set to
+			# "watchdog_stall_killed" by _handle_run_result when it returned 79;
+			# reuse them here instead of re-declaring the literal so the
+			# repeated-string ratchet is not crossed.
+			local _ledger_fail="fail"
+			append_runtime_metric "$role" "$session_key" "$selected_model" \
+				"$(extract_provider "$selected_model")" \
+				"$_run_result_label" "79" "$_run_failure_reason" "1" "0"
+			_cmd_run_finish "$session_key" "$_ledger_fail"
+			return 1
+		fi
+
+		# GH#17648 / GH#20681: Handle watchdog stall with activity (exit 78).
+		# The worker was making progress but the connection/stream dropped.
+		# Track cumulative stall events per session and apply hard-kill caps
+		# before retrying — unbounded stall-continue burns tokens indefinitely.
+		if [[ "$attempt_exit" -eq 78 ]]; then
+			# Accumulate per-session stall metrics (one stall = one STALL_TIMEOUT).
+			_session_stall_count=$((_session_stall_count + 1))
+			_session_stall_cumulative_s=$((_session_stall_cumulative_s + _stall_timeout_s))
+
+			# GH#20681: Check session-level hard caps: count OR cumulative time.
+			# Either trigger → record watchdog_stall_killed and stop the session.
+			if _stall_session_cap_exceeded \
+				"$_session_stall_count" "$_session_stall_cumulative_s" \
+				"$_stall_continue_max" "$_stall_cumulative_max_s"; then
+				print_warning "Watchdog stall cap exceeded (stalls=${_session_stall_count}/${_stall_continue_max}, cumulative=${_session_stall_cumulative_s}s/${_stall_cumulative_max_s}s) — recording watchdog_stall_killed"
+				# t2956: Reuse the same local already declared earlier in this
+				# block so the literal "watchdog_stall_killed" stays under the
+				# repeated-string ratchet. The hard-kill (exit 79) and
+				# session-cap (exit 78 cap-exceeded) branches both record the
+				# same outcome label.
+				local _hk_label="watchdog_stall_killed"
+				_run_result_label="$_hk_label"
+				_run_failure_reason="$_hk_label"
+				append_runtime_metric "$role" "$session_key" "$selected_model" \
+					"$(extract_provider "$selected_model")" \
+					"$_run_result_label" "143" "$_run_failure_reason" "1" "0"
+				_cmd_run_finish "$session_key" "fail"
+				return 1
+			fi
+
+			# Within session cap: try per-attempt continuations first.
+			if [[ "$watchdog_continue_count" -lt "$max_watchdog_continue_retries" ]]; then
+				watchdog_continue_count=$((watchdog_continue_count + 1))
+				print_warning "Watchdog stall with activity — resuming session (attempt ${watchdog_continue_count}/${max_watchdog_continue_retries}, session stalls=${_session_stall_count}/${_stall_continue_max})"
+
+				# Resume with a prompt that explains the connection drop.
+				# Session ID was stored by _handle_run_result before returning 78.
+				prompt="Your previous connection dropped mid-session and the process was restarted. All your prior work (worktree, file changes, commits) is still on disk. Resume where you left off — check git status, your todo list, and continue through to completion. Do not restart from scratch. Do not stop until the outcome is FULL_LOOP_COMPLETE or BLOCKED with evidence."
+
+				# Watchdog continuations don't consume provider-rotation attempts.
+				continue
+			fi
+
+			# Exhausted per-attempt continuations — fall through to provider rotation.
+			print_warning "Exhausted ${max_watchdog_continue_retries} watchdog continuation retries — falling through to provider rotation (session stalls=${_session_stall_count}/${_stall_continue_max})"
+			# Don't return — let it fall through to _cmd_run_prepare_retry
+			# which will rotate to a different provider/model.
+		fi
+
+		_cmd_run_prepare_retry \
+			"$role" "$session_key" "$model_override" "$attempt" \
+			"$max_attempts" "$selected_model" "$attempt_exit" "$tier_override" || return $?
+		if [[ "$cmd_run_action" == "switch" ]]; then
+			selected_model="$cmd_run_next_model"
+		fi
 		attempt=$((attempt + 1))
 	done
 
-	# Unreachable: loop always executes (attempt starts at 1, max_attempts=2)
+	# Unreachable: loop always executes (attempt starts at 1, max_attempts=3)
 	# and every path inside returns explicitly. Kept as defensive fallback.
-	_update_dispatch_ledger "$session_key" "fail"
-	_release_session_lock "$session_key"
-	trap - EXIT
+	_cmd_run_finish "$session_key" "fail"
 	return 1
 }
 
+cmd_canary() {
+	local role="worker"
+	local model_override=""
+
+	while [[ $# -gt 0 ]]; do
+		local arg="$1"
+		case "$arg" in
+		--role)
+			role="${2:-}"
+			shift 2
+			;;
+		--model)
+			model_override="${2:-}"
+			shift 2
+			;;
+		--tier)
+			# Accepted for call-site clarity; the dispatcher resolves the
+			# concrete model before invoking this preflight.
+			shift 2
+			;;
+		*)
+			print_error "Unknown option for canary: $arg"
+			return 1
+			;;
+		esac
+	done
+
+	local selected_model
+	selected_model=$(choose_model "$role" "$model_override") || return $?
+	_enforce_opencode_version_pin
+	_run_canary_test "$selected_model"
+	return $?
+}
+
+# =============================================================================
+# Help and main entry point
+# =============================================================================
+
 show_help() {
 	cat <<'EOF'
-headless-runtime-helper.sh - Model-aware headless OpenCode runtime
+headless-runtime-helper.sh - Model-aware headless runtime (OpenCode default, Claude CLI opt-in)
 
 Usage:
   headless-runtime-helper.sh select [--role pulse|worker] [--model provider/model]
-  headless-runtime-helper.sh run --role pulse|worker --session-key KEY --dir PATH --title TITLE (--prompt TEXT | --prompt-file FILE) [--model provider/model] [--agent NAME] [--opencode-arg ARG]
+  headless-runtime-helper.sh canary [--role pulse|worker] [--model provider/model] [--tier haiku|sonnet|opus|...]
+  headless-runtime-helper.sh run --role pulse|worker --session-key KEY --dir PATH --title TITLE (--prompt TEXT | --prompt-file FILE) [--model provider/model | --initial-model provider/model] [--tier haiku|sonnet|opus|...] [--variant NAME] [--agent NAME] [--runtime opencode|claude] [--opencode-arg ARG] [--detach]
   headless-runtime-helper.sh backoff [status|set MODEL-OR-PROVIDER REASON [SECONDS]|clear MODEL-OR-PROVIDER]
   headless-runtime-helper.sh session [status|clear PROVIDER SESSION_KEY]
+  headless-runtime-helper.sh metrics [--role pulse|worker] [--hours N] [--model SUBSTRING] [--fast-threshold N]
   headless-runtime-helper.sh help
+
+Runtime selection:
+  Default runtime is OpenCode. Use --runtime claude to dispatch via Claude CLI.
+  Claude CLI headless uses `claude -p` with --agent build-plus (auto-detected).
 
 Backoff granularity:
   Rate limits and provider errors are recorded per model (e.g. anthropic/claude-sonnet-4-6).
@@ -1238,9 +1701,16 @@ Dedup guard (GH#6538):
   are cleaned up automatically. Lock files: $STATE_DIR/locks/<key>.pid
 
 Defaults:
-  AIDEVOPS_HEADLESS_MODELS defaults to anthropic/claude-sonnet-4-6,openai/gpt-4o
+  Model list is derived from routing table + auth availability (GH#17769).
+  Fallback: anthropic/claude-sonnet-4-6 if routing resolution fails.
+  AIDEVOPS_HEADLESS_MODELS is deprecated — respected as override for one release cycle.
   AIDEVOPS_HEADLESS_PROVIDER_ALLOWLIST can restrict selection to providers like: openai
-  Gateway models (opencode/*) are supported when explicitly configured.
+  AIDEVOPS_HEADLESS_VARIANT_SONNET / AIDEVOPS_HEADLESS_VARIANT_OPUS can set tier defaults.
+  GPT-5.5 sonnet-tier worker dispatch omits env-derived variants so OpenCode sends no explicit thinking override.
+  AIDEVOPS_HEADLESS_VARIANT sets an OpenCode model variant (for example: high, xhigh).
+  AIDEVOPS_HEADLESS_PULSE_VARIANT / AIDEVOPS_HEADLESS_WORKER_VARIANT override by role.
+  AIDEVOPS_HEADLESS_APPEND_CONTRACT=0 disables worker /full-loop contract injection
+  NOTE: opencode/* gateway models are NOT used — per-token billing is too expensive.
 EOF
 	return 0
 }
@@ -1258,12 +1728,20 @@ main() {
 		cmd_run "$@"
 		return $?
 		;;
+	canary)
+		cmd_canary "$@"
+		return $?
+		;;
 	backoff)
 		cmd_backoff "$@"
 		return $?
 		;;
 	session)
 		cmd_session "$@"
+		return $?
+		;;
+	metrics)
+		cmd_metrics "$@"
 		return $?
 		;;
 	passthrough-csv)

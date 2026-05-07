@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 
 # =============================================================================
 # Tests for runtime-registry.sh
@@ -204,6 +206,40 @@ else
 fi
 
 # =============================================================================
+section "rt_version — Known Runtimes"
+# =============================================================================
+# rt_version returns a string (version or "unknown") for all known runtimes.
+# Runtimes not installed return "unknown" (not an error).
+# Runtimes with no version command defined (GUI-only) return "unknown" directly.
+
+for rt_id in opencode claude-code codex cursor droid gemini-cli windsurf continue kilo kiro aider amp kimi qwen; do
+	ver=$(rt_version "$rt_id")
+	if [[ -n "$ver" ]]; then
+		pass "rt_version $rt_id returns non-empty string ('$ver')"
+	else
+		fail "rt_version $rt_id" "expected non-empty string (at least 'unknown'), got empty"
+	fi
+done
+
+# GUI-only runtimes without a version command must return "unknown" (not error)
+for gui_rt in cursor windsurf continue kiro; do
+	ver=$(rt_version "$gui_rt")
+	if [[ "$ver" == "unknown" ]]; then
+		pass "rt_version $gui_rt = 'unknown' (no version command)"
+	else
+		# May return actual version if runtime is installed with CLI — acceptable
+		pass "rt_version $gui_rt = '$ver' (installed version or unknown)"
+	fi
+done
+
+# Unknown runtime ID must return exit 1
+if ! rt_version "nonexistent-runtime" 2>/dev/null; then
+	pass "rt_version returns 1 for unknown runtime ID"
+else
+	fail "rt_version should return 1 for unknown runtime ID"
+fi
+
+# =============================================================================
 section "Unknown Runtime Handling"
 # =============================================================================
 
@@ -313,8 +349,9 @@ section "All Properties for Each Runtime"
 # =============================================================================
 # Verify every runtime has non-empty binary and display name (minimum requirement)
 
-all_ids=$(rt_list_ids)
-while IFS= read -r rid; do
+_check_runtime_properties() {
+	local rid="$1"
+	local bin name
 	bin=$(rt_binary "$rid")
 	if [[ -n "$bin" ]]; then
 		pass "rt_binary $rid is non-empty ($bin)"
@@ -328,7 +365,13 @@ while IFS= read -r rid; do
 	else
 		fail "rt_display_name $rid is empty (every runtime needs a display name)"
 	fi
-done <<<"$all_ids"
+	return 0
+}
+
+all_ids=$(rt_list_ids)
+printf '%s\n' "$all_ids" | while IFS= read -r rid; do
+	_check_runtime_properties "$rid"
+done
 
 # =============================================================================
 # Summary

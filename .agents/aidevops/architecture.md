@@ -11,6 +11,9 @@ tools:
   webfetch: false
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # AI DevOps Framework Context
 
 <!-- AI-CONTEXT-START -->
@@ -86,13 +89,18 @@ Implements proven patterns from Lance Martin (LangChain), validated across Claud
 | Session frequency | Most sessions | Occasional |
 | Statefulness | Persistent connection | Stateless REST |
 
-**Three-tier MCP strategy:**
+**Two-tier MCP strategy** (all MCPs use `eager: false` — lazy-loaded on first tool call):
 
-1. **Globally enabled** (~2K tokens each): augment-context-engine
-2. **Enabled, tools disabled** (zero context until invoked): amazon-order-history, chrome-devtools, claude-code-mcp, context7, google-analytics-mcp, gsc, outscraper, playwriter, quickfile, repomix, etc.
-3. **Replaced by curl subagent** (removed): hetzner, serper, dataforseo, ahrefs, hostinger
+1. **Globally callable** (`globallyEnabled: true`): playwriter — tools visible to all agents
+2. **Per-agent only** (`globallyEnabled: false`): all others — tools hidden globally, injected only for the agent that owns the MCP via `AGENT_MCP_TOOLS` in `agent-loader.mjs`
 
-Tier 2 pattern: MCP process runs but tools hidden from all agents except those that explicitly enable them via `opencode.json` agent tool overrides. Zero context overhead for non-using agents.
+**How it works:** `eager: false` means the MCP process starts on the first tool call, not at OpenCode launch. No idle processes, no context bloat for sessions that don't use the MCP. The plugin (`mcp-registry.mjs` + `agent-loader.mjs`) is the authoritative source — it runs on every OpenCode startup and writes `opencode.json`. Do not edit `opencode.json` MCP entries directly; they are overwritten.
+
+**Adding a new MCP requires two files** (both in `.agents/plugins/opencode-aidevops/`):
+1. `mcp-registry.mjs` — add entry to `getMcpRegistry()` with `name`, `command`/`url`, `eager: false`, `toolPattern`, `globallyEnabled: false`
+2. `agent-loader.mjs` — add `"agent-name": ["tool-pattern_*"]` to `AGENT_MCP_TOOLS`
+
+**Replaced by curl subagent** (removed): hetzner, serper, ahrefs, hostinger — simple REST, no persistent state needed.
 
 **Migrate MCP → curl subagent when:** simple REST with Bearer/Basic auth, <10 endpoints, no complex state, all patterns fit one markdown file. Saves ~2K context tokens permanently.
 
@@ -103,6 +111,14 @@ Full guide: `.agents/aidevops/extension.md`. Naming conventions: `tools/build-ag
 **Summary:** Helper scripts at `.agents/scripts/[service-name]-helper.sh`, config templates at `configs/[service-name]-config.json.txt`, docs at `.agents/[SERVICE-NAME].md`. Required functions: `check_dependencies`, `load_config`, `get_account_config`, `api_request`, `list_accounts`, `show_help`, `main`. Update `.gitignore`, `README.md`, `setup-wizard-helper.sh` after adding.
 
 **Security standards** (all services): API token validation, rate limiting awareness, secure credential storage, input validation, error message sanitization, audit logging, confirmation prompts for destructive operations.
+
+## Shell Helper Initialization
+
+All shell scripts under `.agents/scripts/**/*.sh` MUST follow the canonical shared-variable initialization pattern. Short rule: source `shared-constants.sh` OR guard fallbacks with `[[ -z "${VAR+x}" ]]`. Never declare `RED`, `GREEN`, `YELLOW`, `BLUE`, `PURPLE`, `CYAN`, `WHITE`, or `NC` at top level without a guard, and never `readonly` those names outside `shared-constants.sh` itself.
+
+Why the rule exists: PR #18728 fixed one instance of an unguarded re-assignment colliding with `readonly` in `shared-constants.sh`, which had killed `setup.sh` under `set -Eeuo pipefail` and broke auto-update for 4 days (GH#18702 primary, GH#18693 cascade victim). The same bug shape is latent in 18 other helpers today — this section exists to prevent the next occurrence.
+
+Full guide with Patterns A/B/C, banned patterns, audit data, and migration checklist: **`reference/shell-style-guide.md`**. CI enforcement ships in t2053 Phase 2 via `shell-init-pattern-check.sh`.
 
 ## Knowledge Organization Model
 
@@ -120,5 +136,19 @@ The `.agents/` directory organizes knowledge along two axes: **strategy** (what 
 **Scripts:** All scripts live flat in `scripts/` — shared utilities callable by any agent. Prefix naming (`email-*`, `seo-*`, `browser-*`) provides grouping. `*-helper.sh` = agent-callable; other `.sh` = framework infra.
 
 **Flat files over nested folders:** Prefer prefix-based names over subdirectories. Max depth from `.agents/`: 2 levels. See `tools/build-agent/build-agent.md`.
+
+## Top-Level Repository Layout Policy
+
+The repository root is a public contract, not a scratch space. New top-level files or directories must fit one of these classes and be added to `.agents/configs/repo-layout-policy.conf` with a one-line rationale before they are introduced:
+
+- **Public entrypoints:** user-facing commands and repo metadata such as `setup.sh`, `aidevops.sh`, `README.md`, `LICENSE`, `VERSION`, and governance docs.
+- **Framework internals:** implementation and source-of-truth framework assets such as `.agents/`, `configs/`, `templates/`, `tests/`, `setup-modules/`, and temporary root shell modules pending cleanup.
+- **Runtime and plugin surfaces:** runtime integration packages such as `.claude-plugin/`, `.opencode/`, and editor/runtime config files.
+- **Packaging surfaces:** distribution and package-manager assets such as `bin/`, `scripts/`, `homebrew/`, `package.json`, and lock/dependency files.
+- **Repo-local data planes:** underscore-prefixed local working areas such as `_knowledge/`, `_cases/`, `_campaigns/`, `_inbox/`, `_feedback/`, `_projects/`, and `_performance/`.
+- **Docs and planning:** documentation and task surfaces such as `.wiki/`, `docs/`, `todo/`, `TODO.md`, and model/reference docs.
+- **Generated or ignored tooling surfaces:** intentionally tracked tool config and generated-input files such as `.github/`, `.qlty/`, lint configs, Repomix configs, and scanner config.
+
+Run `.agents/scripts/repo-layout-audit-helper.sh --check` to audit tracked top-level drift. The audit is non-destructive: it reports unknown paths and recommends likely homes, but never moves files.
 
 **Ingested skills** retain the `-skill` suffix as a provenance marker for automated upstream update checks. On ingestion, upstream structure is transposed to `{name}-skill.md` + `{name}-skill/`. See `tools/build-agent/add-skill.md`.

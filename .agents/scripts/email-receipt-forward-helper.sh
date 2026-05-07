@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034
 
 # Email Receipt/Invoice Forwarding Helper with Phishing Protection
@@ -588,7 +590,8 @@ forward_to_accounts() {
 
 		# Build forwarding message with original email as attachment
 		local tmp_msg
-		tmp_msg=$(mktemp /tmp/receipt-forward-XXXXXX.json)
+		# t2997: drop .json — XXXXXX must be at end for BSD mktemp.
+		tmp_msg=$(mktemp /tmp/receipt-forward-XXXXXX)
 		# Ensure cleanup on exit
 		trap 'rm -f "$tmp_msg"' EXIT
 

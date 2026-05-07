@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034
 
 # GitHub CLI Helper Script
@@ -318,7 +320,7 @@ create_issue() {
 
 	print_info "Creating issue in $owner/$repo_name"
 
-	if gh issue create --repo "$owner/$repo_name" --title "$title" --body "$body"; then
+	if gh_create_issue --repo "$owner/$repo_name" --title "$title" --body "$body"; then
 		print_success "$SUCCESS_ISSUE_CREATED"
 	else
 		print_error "Failed to create issue"
@@ -425,12 +427,8 @@ create_pr() {
 		gh_args+=("--body" "$body")
 	fi
 
-	# Add session origin label (origin:worker or origin:interactive)
-	local origin_label
-	origin_label=$(session_origin_label)
-	gh_args+=("--label" "$origin_label")
-
-	if gh pr create "${gh_args[@]}"; then
+	# Origin label injected by gh_create_pr wrapper (t1756)
+	if gh_create_pr "${gh_args[@]}"; then
 		print_success "$SUCCESS_PR_CREATED"
 	else
 		print_error "Failed to create pull request"

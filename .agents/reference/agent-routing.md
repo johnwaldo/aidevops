@@ -1,37 +1,41 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Agent Routing
 
-Not every task is code. The framework has multiple primary agents, each with domain expertise. When dispatching workers (via `/pulse`, `/runners`, or `headless-runtime-helper.sh run`), route to the appropriate agent using `--agent <name>`.
+## Core rule
 
-## Available Primary Agents
+Dispatch workers with `headless-runtime-helper.sh run`, not bare runtime CLIs. The helper provides provider rotation, session persistence, backoff, and lifecycle reinforcement. Bare `claude run`, `claude`, `claude -p`, or similar commands can skip lifecycle reinforcement and stop after PR creation (GH#5096).
 
-Full index in `subagent-index.toon`.
+## Routing order
 
-| Agent | Use for |
-|-------|---------|
-| Build+ | Code: features, bug fixes, refactors, CI, PRs (default) |
-| Automate | Scheduling, dispatch, monitoring, background orchestration, pulse supervisor |
-| SEO | SEO audits, keyword research, GSC, schema markup |
-| Content | All media production and distribution: blog, video, audio, image, social, newsletters, AI video generation |
-| Marketing-Sales | Email campaigns, FluentCRM, Meta Ads, CRO, direct response copy, CRM pipeline, proposals, outreach |
-| Business | Company operations, financial ops, invoicing, receipts, runner configs, strategy |
-| Legal | Compliance, terms of service, privacy policy |
-| Research | Tech research, competitive analysis, market research |
-| Health | Health and wellness content |
+1. Read the task or issue description.
+2. If it is clearly code work (`implement`, `fix`, `refactor`, `CI`), use Build+ or omit `--agent`.
+3. If trigger words clearly match another domain, pass `--agent <name>` or load the matching skill/subagent before acting.
+4. If uncertain, default to Build+; it can load narrower docs on demand.
+5. **Bundle-aware routing (t1364.6):** project bundles can define `agent_routing` overrides. Check with `bundle-helper.sh get agent_routing <repo-path>`. An explicit `--agent` flag wins.
 
-## Routing Rules
+The selected agent changes the system prompt and domain knowledge loaded for the worker.
 
-- Read the task/issue description and match it to the domain above
-- If the task is clearly code (implement, fix, refactor, CI), use Build+ or omit `--agent`
-- If the task matches another domain, pass `--agent <name>` to `headless-runtime-helper.sh run`
-- When uncertain, default to Build+ — it can read subagent docs on demand
-- The agent choice affects which system prompt and domain knowledge the worker loads
-- **Bundle-aware routing (t1364.6):** Project bundles can define `agent_routing` overrides per task domain. For example, a content-site bundle routes `marketing` tasks to the Marketing-Sales agent. Check with `bundle-helper.sh get agent_routing <repo-path>`. Explicit `--agent` flags always override bundle defaults.
+## Primary agents
 
-## Headless Dispatch
+Full index: `subagent-index.toon`.
 
-ALWAYS use `headless-runtime-helper.sh run` for dispatching workers. This helper handles provider rotation, session persistence, backoff, and lifecycle reinforcement. NEVER use bare `claude run` for dispatch — workers launched that way miss lifecycle reinforcement and stop after PR creation (GH#5096). NEVER use `claude`, `claude -p`, or any other CLI.
+| Agent | Trigger words | Use for |
+|-------|---------------|---------|
+| Build+ | implement, fix, refactor, bug, CI, tests, PR | Code: features, bug fixes, refactors, CI, PRs (default) |
+| Automate | schedule, cron, dispatch, pulse, monitoring, routine | Scheduling, dispatch, monitoring, background orchestration, pulse supervisor |
+| SEO | SEO, ranking, keyword, schema, GSC, sitemap, backlinks | SEO audits, keyword research, GSC, schema markup |
+| Content | blog, video, script, social, newsletter, audio, image | Media production and distribution: blog, video, audio, image, social, newsletters, AI video generation |
+| Marketing-Sales | ads, CRO, email campaign, CRM, copy, outreach, funnel | Email campaigns, FluentCRM, Meta Ads, CRO, direct response copy, CRM pipeline, proposals, outreach |
+| Business | company ops, finance, invoice, receipts, strategy, runners | Company operations, financial ops, invoicing, receipts, runner configs, strategy |
+| Legal | legal, compliance, privacy policy, terms, contract, GDPR | Compliance, terms of service, privacy policy |
+| Research | research, compare, market, competitor, technical analysis | Tech research, competitive analysis, market research |
+| Health | health, wellness, nutrition, fitness, medical lifestyle | Health and wellness content |
 
-### Dispatch Example
+For narrower domains such as WordPress, Shopify, Cloudflare, Proxmox, Remotion, CalDAV, or browser/mobile work, read `reference/domain-index.md` and the relevant skill/subagent entry before defaulting to Build+.
+
+## Dispatch example
 
 ```bash
 AGENTS_DIR="$(aidevops config get paths.agents_dir)"

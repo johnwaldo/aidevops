@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC2155
 
 # Onboarding Helper - Interactive setup and service status for aidevops
@@ -105,9 +107,6 @@ is_cli_authenticated() {
 		;;
 	tea)
 		tea login list 2>/dev/null | grep -q "Name:" && return 0 || return 1
-		;;
-	auggie)
-		auggie token print &>/dev/null && return 0 || return 1
 		;;
 	*)
 		return 1
@@ -321,15 +320,7 @@ check_seo() {
 check_context_tools() {
 	echo -e "${BLUE}Context & Semantic Search${NC}"
 
-	if is_installed "auggie"; then
-		if is_cli_authenticated "auggie"; then
-			print_service "Augment Context Engine" "ready" "authenticated"
-		else
-			print_service "Augment Context Engine" "partial" "installed, needs login"
-		fi
-	else
-		print_service "Augment Context Engine" "needs-setup" "auggie not installed"
-	fi
+	print_service "Local search" "ready" "rg plus osgrep semantic search"
 
 	# Context7 is MCP-only, no auth needed
 	print_service "Context7" "ready" "MCP (no auth needed)"
@@ -638,6 +629,7 @@ check_orchestration() {
 
 	if [[ "$pulse_active" == "true" ]]; then
 		print_service "Supervisor Pulse" "ready" "dispatches workers, merges PRs every 2 min"
+		echo "    Runs 24/7 by default. Use 'aidevops pulse stop' for manual start/stop mode." >&2
 	else
 		print_service "Supervisor Pulse" "needs-setup" "see scripts/commands/runners.md for setup"
 	fi
@@ -753,7 +745,7 @@ show_recommendations() {
 		echo "Essential:"
 		echo "  • GitHub CLI (gh) - Repository management"
 		echo "  • OpenAI API - AI-powered coding assistance"
-		echo "  • Augment Context Engine - Semantic codebase search"
+		echo "  • Local search - rg plus osgrep semantic search"
 		echo "  • Playwright - Browser testing"
 		echo ""
 		echo "Recommended:"
@@ -807,10 +799,10 @@ show_recommendations() {
 		echo "Start with these core services:"
 		echo "  1. GitHub CLI (gh auth login)"
 		echo "  2. OpenAI or Anthropic API key"
-		echo "  3. Augment Context Engine (semantic search)"
+		echo "  3. Local semantic search (osgrep)"
 		echo ""
 		echo "Then add based on your needs:"
-		echo "  • Orchestration: supervisor-helper.sh cron install (autonomous workers)"
+		echo "  • Orchestration: aidevops pulse start (autonomous workers)"
 		echo "  • Hosting: Hetzner, Cloudflare, Coolify, Vercel"
 		echo "  • Quality: SonarCloud, Codacy, CodeRabbit"
 		echo "  • SEO: DataForSEO, Serper"
@@ -887,15 +879,6 @@ _guide_dataforseo() {
 	return 0
 }
 
-_guide_augment() {
-	echo -e "${BLUE}Augment Context Engine Setup${NC}"
-	echo ""
-	echo "1. Install: npm install -g @augmentcode/auggie@prerelease"
-	echo "2. Login: auggie login (opens browser)"
-	echo "3. Verify: auggie token print"
-	return 0
-}
-
 _guide_sonarcloud() {
 	echo -e "${BLUE}SonarCloud Setup${NC}"
 	echo ""
@@ -957,13 +940,13 @@ _guide_orchestration() {
 	echo "merging PRs, evaluating results, and self-improving."
 	echo ""
 	echo "1. Enable supervisor pulse (every 2 min):"
-	echo "   supervisor-helper.sh cron install"
+	echo "   aidevops pulse start"
 	echo ""
 	echo "2. Add tasks with auto-dispatch tag in TODO.md:"
 	echo "   - [ ] t001 Implement feature X #auto-dispatch ~2h"
 	echo ""
 	echo "3. Monitor progress:"
-	echo "   supervisor-helper.sh dashboard --batch <batch-id>"
+	echo "   aidevops pulse status"
 	echo ""
 	echo "Features included:"
 	echo "  - Worker dispatch: launches AI workers for tagged tasks"
@@ -992,7 +975,6 @@ show_guide() {
 	hetzner) _guide_hetzner ;;
 	cloudflare) _guide_cloudflare ;;
 	dataforseo) _guide_dataforseo ;;
-	augment | auggie) _guide_augment ;;
 	sonarcloud | sonar) _guide_sonarcloud ;;
 	openclaw) _guide_openclaw ;;
 	tailscale) _guide_tailscale ;;
@@ -1162,9 +1144,7 @@ _json_seo() {
 }
 
 _json_context() {
-	local aug_inst aug_auth sqlite_inst sqlite_fts5
-	is_installed "auggie" && aug_inst=true || aug_inst=false
-	is_cli_authenticated "auggie" && aug_auth=true || aug_auth=false
+	local sqlite_inst sqlite_fts5
 	sqlite_inst=false
 	sqlite_fts5=false
 	if is_installed "sqlite3"; then
@@ -1172,9 +1152,8 @@ _json_context() {
 		sqlite3 :memory: 'CREATE VIRTUAL TABLE t USING fts5(content);' &>/dev/null && sqlite_fts5=true
 	fi
 	jq -n \
-		--argjson ai "$aug_inst" --argjson aa "$aug_auth" \
 		--argjson si "$sqlite_inst" --argjson sf "$sqlite_fts5" \
-		'{"context":{"augment":{"installed":$ai,"authenticated":$aa},"sqlite3":{"installed":$si,"fts5":$sf}}}'
+		'{"context":{"sqlite3":{"installed":$si,"fts5":$sf}}}'
 	return 0
 }
 

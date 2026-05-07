@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Stream Gotchas
 
 Common errors, troubleshooting, limits, and security.
@@ -83,8 +86,8 @@ async function uploadWithErrorHandling(url: string, file: File) {
 
 ## In This Reference
 
-- [README.md](./README.md) — Overview and quick start
-- [patterns.md](./patterns.md) — Full-stack flows, best practices
+- [stream.md](./stream.md) — Overview and quick start
+- [stream-patterns.md](./stream-patterns.md) — Full-stack flows, best practices
 
 ## See Also
 

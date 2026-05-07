@@ -25,10 +25,28 @@
  *   - Google Generative AI API: https://ai.google.dev/api/rest
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
-import { join, dirname } from "path";
-import { homedir } from "os";
+import { join } from "path";
 import { getAccounts, ensureValidToken, patchAccount } from "./oauth-pool.mjs";
+import { jsonResponse, textResponse } from "./response-helpers.mjs";
+import { createProxyLifecycle, resolveProxyPort } from "./proxy-lifecycle.mjs";
+// Import + export: `export { … } from "./module"` is re-export only and
+// does NOT create a local binding. discoverGoogleModels and
+// persistGoogleProvider are both called locally below (see lines ~300 and
+// ~338), so they must be imported into this module's scope. Same class of
+// bug as the quality-hooks.mjs hotfix.
+import {
+  buildGoogleProviderModels,
+  registerGoogleProvider,
+  persistGoogleProvider,
+  discoverGoogleModels,
+} from "./google-proxy-config.mjs";
+
+export {
+  buildGoogleProviderModels,
+  registerGoogleProvider,
+  persistGoogleProvider,
+  discoverGoogleModels,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -43,7 +61,8 @@ import { getAccounts, ensureValidToken, patchAccount } from "./oauth-pool.mjs";
  * Port 32124 chosen to avoid collision with Cursor proxy (32123).
  * Override with GOOGLE_PROXY_PORT env var if needed.
  */
-const GOOGLE_PROXY_DEFAULT_PORT = parseInt(process.env.GOOGLE_PROXY_PORT || "32124", 10);
+const GOOGLE_PROXY_PORT_DEFAULT = 32124;
+const GOOGLE_PROXY_PORT_ENV = "GOOGLE_PROXY_PORT";
 
 const GOOGLE_API_BASE = "https://generativelanguage.googleapis.com";
 
@@ -54,14 +73,36 @@ const RATE_LIMIT_COOLDOWN_MS = 60_000;
 // State
 // ---------------------------------------------------------------------------
 
-/** @type {object | null} Bun.serve server instance */
+/**
+ * Lifecycle factory — owns probe / EADDRINUSE-adopt / retry state for
+ * the Google auth-translating proxy listener bind. The bind is now LAZY
+ * (post GH#21948): plugin init eagerly discovers models and registers
+ * the provider in opencode.json, but defers the `Bun.serve` listener
+ * bind to the first google/* request. Probes `/health` rather than
+ * `/v1/models` because the Google proxy's `/v1/...` paths forward
+ * straight upstream. See proxy-lifecycle.mjs for the full state
+ * machine.
+ */
+const googleLifecycle = createProxyLifecycle({
+  name: "Google",
+  defaultPort: GOOGLE_PROXY_PORT_DEFAULT,
+  envPortVar: GOOGLE_PROXY_PORT_ENV,
+  providerID: "google",
+  probePath: "/health",
+});
+
+/** @type {object | null} Bun.serve server instance — held for stop() */
 let proxyServer = null;
 
-/** @type {number | null} */
-let proxyPort = null;
-
-/** @type {boolean} */
-let proxyStarting = false;
+/**
+ * Cached model list discovered eagerly during plugin init. Currently
+ * informational only (the Google proxy forwards requests transparently
+ * rather than serving a `/v1/models` endpoint), but kept for symmetry
+ * with cursor-proxy.mjs and to support future model-picker refresh.
+ *
+ * @type {Array<{id: string, name: string}> | null}
+ */
+let cachedModels = null;
 
 // activeAccountEmail removed — each request now tracks its own email via
 // getAccessToken() return value to avoid concurrent-request misattribution.
@@ -154,72 +195,204 @@ async function rotateOnRateLimit(currentEmail) {
   return null;
 }
 
+// discoverGoogleModels — see ./google-proxy-config.mjs (re-exported above)
+
 // ---------------------------------------------------------------------------
-// Model discovery
+// Proxy server — request handler (module-level for complexity isolation)
 // ---------------------------------------------------------------------------
+
+// Hop-by-hop headers and API key header to strip when forwarding.
+const GOOGLE_PROXY_SKIP_HEADERS = new Set(["x-goog-api-key", "host", "connection", "transfer-encoding"]);
 
 /**
- * Discover available Gemini models from the Google Generative AI API.
- * Calls GET /v1beta/models with the OAuth token and returns model metadata.
- *
- * @param {string} accessToken - Valid OAuth access token
- * @returns {Promise<Array<{ id: string, name: string, contextWindow: number, maxTokens: number }>>}
+ * Build forwarded headers: strip API key / hop-by-hop, add Bearer auth.
+ * @param {Request} req
+ * @param {string} accessToken
+ * @returns {Headers}
  */
-export async function discoverGoogleModels(accessToken) {
-  const models = [];
+function buildGoogleForwardHeaders(req, accessToken) {
+  const forwardHeaders = new Headers();
+  for (const [key, value] of req.headers.entries()) {
+    if (!GOOGLE_PROXY_SKIP_HEADERS.has(key.toLowerCase())) {
+      forwardHeaders.set(key, value);
+    }
+  }
+  forwardHeaders.set("Authorization", `Bearer ${accessToken}`);
+  return forwardHeaders;
+}
 
+/**
+ * Retry a forwarded request with a rotated account token after a 429.
+ * Returns the retried Response, or null if no rotation is possible (caller uses original).
+ * @param {string} accountEmail
+ * @param {Headers} forwardHeaders
+ * @param {string} targetUrl
+ * @param {string} method
+ * @param {ArrayBuffer|null} body
+ * @returns {Promise<Response|null>}
+ */
+async function retryWithRotatedGoogleAccount(accountEmail, forwardHeaders, targetUrl, method, body) {
+  console.error("[aidevops] Google proxy: 429 from Google API, attempting rotation");
+  const rotated = await rotateOnRateLimit(accountEmail);
+  if (!rotated) return null;
+  forwardHeaders.set("Authorization", `Bearer ${rotated.token}`);
+  return fetch(targetUrl, { method, headers: forwardHeaders, body });
+}
+
+/**
+ * Forward a non-health-check request to the Google API with auth translation.
+ * @param {Request} req
+ * @param {URL} url
+ * @returns {Promise<Response>}
+ */
+async function forwardToGoogleApi(req, url) {
+  const targetUrl = `${GOOGLE_API_BASE}${url.pathname}${url.search}`;
+
+  let accessToken;
+  let accountEmail;
   try {
-    const resp = await fetch(`${GOOGLE_API_BASE}/v1beta/models`, {
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-      },
-    });
-
-    if (!resp.ok) {
-      console.error(`[aidevops] Google proxy: model discovery failed: HTTP ${resp.status}`);
-      return models;
-    }
-
-    const data = await resp.json();
-    if (!data.models || !Array.isArray(data.models)) {
-      return models;
-    }
-
-    for (const model of data.models) {
-      // Only include generateContent-capable models (chat/completion models)
-      const methods = model.supportedGenerationMethods || [];
-      if (!methods.includes("generateContent")) continue;
-
-      // Extract the model ID from the full name (e.g., "models/gemini-2.5-flash" → "gemini-2.5-flash")
-      const modelId = model.name?.replace(/^models\//, "") || "";
-      if (!modelId) continue;
-
-      // Skip embedding models, AQA models, and other non-chat models
-      if (modelId.includes("embedding") || modelId.includes("aqa") || modelId.includes("imagen")) continue;
-
-      models.push({
-        id: modelId,
-        name: model.displayName || modelId,
-        contextWindow: model.inputTokenLimit || 1048576,
-        maxTokens: model.outputTokenLimit || 65536,
-      });
-    }
-
-    console.error(`[aidevops] Google proxy: discovered ${models.length} models`);
+    const result = await getAccessToken();
+    accessToken = result.token;
+    accountEmail = result.email;
   } catch (err) {
-    console.error(`[aidevops] Google proxy: model discovery error: ${err.message}`);
+    return jsonResponse(
+      { error: { message: `Google proxy: ${err.message}`, status: "UNAVAILABLE" } },
+      { status: 503 },
+    );
   }
 
-  return models;
+  const forwardHeaders = buildGoogleForwardHeaders(req, accessToken);
+
+  // Buffer the request body up-front so the 429 retry can reuse it.
+  // req.body is a one-shot ReadableStream per the WHATWG Fetch spec —
+  // once consumed by the first fetch() call, it cannot be read again.
+  const body = (req.method !== "GET" && req.method !== "HEAD")
+    ? await req.arrayBuffer()
+    : null;
+
+  let response = await fetch(targetUrl, { method: req.method, headers: forwardHeaders, body });
+
+  if (response.status === 429) {
+    const rotated = await retryWithRotatedGoogleAccount(accountEmail, forwardHeaders, targetUrl, req.method, body);
+    if (rotated) response = rotated;
+  }
+
+  // Pipe the response back — preserves SSE streaming for streamGenerateContent
+  return textResponse(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+/**
+ * Top-level fetch handler for the Google proxy Bun.serve instance.
+ * @param {Request} req
+ * @returns {Promise<Response>}
+ */
+async function handleGoogleProxyFetch(req) {
+  const url = new URL(req.url);
+
+  if (url.pathname === "/health") {
+    return jsonResponse({ status: "ok", provider: "google" });
+  }
+
+  try {
+    return await forwardToGoogleApi(req, url);
+  } catch (err) {
+    console.error(`[aidevops] Google proxy: request error: ${err.message}`);
+    return jsonResponse(
+      { error: { message: `Google proxy error: ${err.message}`, status: "INTERNAL" } },
+      { status: 502 },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Proxy server
 // ---------------------------------------------------------------------------
 
+/** Bun.serve error handler for the Google proxy. */
+function handleGoogleProxyServerError(err) {
+  console.error(`[aidevops] Google proxy: server error: ${err.message}`);
+  return textResponse("Internal Server Error", { status: 500 });
+}
+
 /**
- * Start the Google auth-translating proxy.
- * Returns the proxy port and discovered models, or null if no Google accounts.
+ * Discover Google models via the upstream Generative Language API.
+ * Falls back to an empty list on any failure — the lazy listener bind
+ * still happens, but the model picker will be empty until a subsequent
+ * eager refresh succeeds.
+ *
+ * @returns {Promise<Array<{id: string, name: string}>>}
+ */
+async function discoverModelsForGoogleProxy() {
+  let initialToken;
+  try {
+    const result = await getAccessToken();
+    initialToken = result.token;
+  } catch (err) {
+    console.error(`[aidevops] Google proxy: failed to get token for discovery: ${err.message}`);
+    return [];
+  }
+
+  try {
+    return await discoverGoogleModels(initialToken);
+  } catch (err) {
+    console.error(`[aidevops] Google proxy: model discovery failed (${err.message}), using empty list`);
+    return [];
+  }
+}
+
+/**
+ * Eagerly prepare the Google auth-translating proxy: discover models
+ * and register the provider in opencode.json. Does NOT bind the
+ * `Bun.serve` listener — that's deferred to the first google/* request
+ * via `ensureGoogleProxyServer`. Returns `{port, models}` on success or
+ * `null` if no Google accounts are configured.
+ *
+ * Called once during plugin init (in index.mjs). Skips silently when
+ * the pool has no Google accounts; logs and continues on individual
+ * failures (model discovery, persist) so a partial degradation doesn't
+ * block other proxies from starting.
+ *
+ * Multi-instance is safe: every concurrent eager call resolves to the
+ * same deterministic port and the persist side effect is idempotent.
+ * The race-prone `Bun.serve` bind only happens lazily and is protected
+ * by the lifecycle helper's probe-first-then-adopt path.
+ *
+ * @param {any} _client - OpenCode SDK client (currently unused, kept
+ *   for parity with cursor-proxy startCursorProxy signature in case
+ *   future hooks need client access during eager phase)
+ * @returns {Promise<{ port: number, models: Array<{ id: string, name: string }> } | null>}
+ */
+// eslint-disable-next-line no-unused-vars
+export async function startGoogleProxy(_client) {
+  const accounts = getAccounts("google");
+  if (accounts.length === 0) return null;
+
+  cachedModels = await discoverModelsForGoogleProxy();
+
+  const port = resolveProxyPort(GOOGLE_PROXY_PORT_ENV, GOOGLE_PROXY_PORT_DEFAULT);
+
+  if (cachedModels.length > 0) {
+    try {
+      persistGoogleProvider(port, cachedModels);
+    } catch (err) {
+      console.error(`[aidevops] Google proxy: failed to persist provider to opencode.json: ${err.message}`);
+    }
+  }
+
+  return { port, models: cachedModels };
+}
+
+/**
+ * Lazily bind the Google proxy listener. Called from the composed
+ * `experimental.chat.system.transform` hook on the first request whose
+ * `model.providerID === "google"`. The shared lifecycle helper handles
+ * probe-first adoption (sibling OpenCode session already serving),
+ * EADDRINUSE → adopt-with-retry (sibling won the bind race), and
+ * idempotent re-entry (cached port returned without re-binding).
  *
  * The proxy:
  *   1. Accepts requests from @ai-sdk/google (which sends x-goog-api-key)
@@ -229,164 +402,34 @@ export async function discoverGoogleModels(accessToken) {
  *   5. Pipes response back (including SSE streams for streamGenerateContent)
  *   6. On 429, rotates to next pool account and retries once
  *
- * @param {any} client - OpenCode SDK client (for provider registration)
- * @returns {Promise<{ port: number, models: Array<{ id: string, name: string }> } | null>}
+ * @returns {Promise<{port: number, adopted: boolean} | null>}
  */
-export async function startGoogleProxy(client) {
-  const accounts = getAccounts("google");
-  if (accounts.length === 0) {
-    return null;
-  }
-
-  // Prevent concurrent startup
-  if (proxyStarting) {
-    console.error("[aidevops] Google proxy: startup already in progress");
-    return null;
-  }
-
-  if (proxyPort) {
-    console.error(`[aidevops] Google proxy: already running on port ${proxyPort}`);
-    return { port: proxyPort, models: [] };
-  }
-
-  proxyStarting = true;
-
-  try {
-    // Get an initial valid token for model discovery
-    const { token: initialToken } = await getAccessToken();
-
-    // Discover available models
-    let models;
-    try {
-      models = await discoverGoogleModels(initialToken);
-    } catch (err) {
-      console.error(`[aidevops] Google proxy: model discovery failed (${err.message}), using empty list`);
-      models = [];
-    }
-
-    // Start the HTTP proxy
-    proxyServer = Bun.serve({
-      port: GOOGLE_PROXY_DEFAULT_PORT,
-      hostname: "127.0.0.1",
-
-      async fetch(req) {
-        const url = new URL(req.url);
-
-        // Health check endpoint
-        if (url.pathname === "/health") {
-          return new Response(JSON.stringify({ status: "ok", provider: "google" }), {
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        // Forward all other requests to Google's API
-        try {
-          const targetUrl = `${GOOGLE_API_BASE}${url.pathname}${url.search}`;
-
-          // Get a valid pool token — returns {token, email} so the 429 handler
-          // can mark the correct account without relying on a shared global.
-          let accessToken;
-          let accountEmail;
-          try {
-            const result = await getAccessToken();
-            accessToken = result.token;
-            accountEmail = result.email;
-          } catch (err) {
-            return new Response(JSON.stringify({
-              error: { message: `Google proxy: ${err.message}`, status: "UNAVAILABLE" },
-            }), {
-              status: 503,
-              headers: { "Content-Type": "application/json" },
-            });
-          }
-
-          // Build forwarded headers — strip x-goog-api-key, add Bearer auth
-          const forwardHeaders = new Headers();
-          for (const [key, value] of req.headers.entries()) {
-            const lowerKey = key.toLowerCase();
-            // Skip hop-by-hop headers and the API key header
-            if (lowerKey === "x-goog-api-key") continue;
-            if (lowerKey === "host") continue;
-            if (lowerKey === "connection") continue;
-            if (lowerKey === "transfer-encoding") continue;
-            forwardHeaders.set(key, value);
-          }
-          forwardHeaders.set("Authorization", `Bearer ${accessToken}`);
-
-          // Buffer the request body up-front so the 429 retry can reuse it.
-          // req.body is a one-shot ReadableStream per the WHATWG Fetch spec —
-          // once consumed by the first fetch() call, it cannot be read again.
-          let body = null;
-          if (req.method !== "GET" && req.method !== "HEAD") {
-            body = await req.arrayBuffer();
-          }
-
-          let response = await fetch(targetUrl, {
-            method: req.method,
-            headers: forwardHeaders,
-            body,
-          });
-
-          // Handle 429 — rotate account and retry once with the buffered body
-          if (response.status === 429) {
-            console.error(`[aidevops] Google proxy: 429 from Google API, attempting rotation`);
-            const rotated = await rotateOnRateLimit(accountEmail);
-            if (rotated) {
-              forwardHeaders.set("Authorization", `Bearer ${rotated.token}`);
-              response = await fetch(targetUrl, {
-                method: req.method,
-                headers: forwardHeaders,
-                body,
-              });
-            }
-          }
-
-          // Pipe the response back — preserves SSE streaming for streamGenerateContent
-          return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers,
-          });
-        } catch (err) {
-          console.error(`[aidevops] Google proxy: request error: ${err.message}`);
-          return new Response(JSON.stringify({
-            error: { message: `Google proxy error: ${err.message}`, status: "INTERNAL" },
-          }), {
-            status: 502,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      },
-
-      error(err) {
-        console.error(`[aidevops] Google proxy: server error: ${err.message}`);
-        return new Response("Internal Server Error", { status: 500 });
-      },
-    });
-
-    proxyPort = proxyServer.port;
-    console.error(`[aidevops] Google proxy: started on port ${proxyPort}`);
-
-    // Persist Google provider + models to opencode.json
-    if (models.length > 0) {
-      try {
-        persistGoogleProvider(proxyPort, models);
-      } catch (err) {
-        console.error(`[aidevops] Google proxy: failed to persist provider to opencode.json: ${err.message}`);
-      }
-    }
-
-    return { port: proxyPort, models };
-  } catch (err) {
-    console.error(`[aidevops] Google proxy: failed to start: ${err.message}`);
-    return null;
-  } finally {
-    proxyStarting = false;
-  }
+export async function ensureGoogleProxyServer() {
+  return googleLifecycle.ensureStarted({
+    credentialsAvailable: () => getAccounts("google").length > 0,
+    launch: async () => {
+      const server = Bun.serve({
+        port: resolveProxyPort(GOOGLE_PROXY_PORT_ENV, GOOGLE_PROXY_PORT_DEFAULT),
+        hostname: "127.0.0.1",
+        fetch: handleGoogleProxyFetch,
+        error: handleGoogleProxyServerError,
+      });
+      proxyServer = server;
+      console.error(`[aidevops] Google proxy: started on port ${server.port}`);
+      return { port: server.port };
+    },
+  });
 }
 
 /**
- * Stop the Google proxy.
+ * Stop the Google proxy listener. Tears down the `Bun.serve` instance
+ * but does NOT clear the lifecycle helper's port cache — re-running
+ * `ensureGoogleProxyServer` after stop will probe, fail, and bind a
+ * fresh listener.
+ *
+ * Currently unused by the plugin (no shutdown hook calls into here);
+ * retained for future cleanup paths and parity with the Google proxy
+ * API surface.
  */
 export function stopGoogleProxy() {
   if (proxyServer) {
@@ -396,140 +439,17 @@ export function stopGoogleProxy() {
       // Server may already be stopped
     }
     proxyServer = null;
-    proxyPort = null;
     console.error("[aidevops] Google proxy: stopped");
   }
 }
 
 /**
- * Get the current proxy port, or null if not running.
+ * Get the current proxy port, or null if not yet bound.
  * @returns {number | null}
  */
 export function getGoogleProxyPort() {
-  return proxyPort;
+  return googleLifecycle.getPort();
 }
 
-// ---------------------------------------------------------------------------
-// Provider registration for OpenCode config
-// ---------------------------------------------------------------------------
-
-/**
- * Build OpenCode provider model entries from discovered Google models.
- * These entries tell OpenCode what models are available and where to route requests.
- *
- * @param {Array<{ id: string, name: string, contextWindow?: number, maxTokens?: number }>} models
- * @returns {Record<string, object>}
- */
-export function buildGoogleProviderModels(models) {
-  const entries = {};
-  for (const model of models) {
-    entries[model.id] = {
-      name: model.name,
-      attachment: true,
-      tool_call: true,
-      temperature: true,
-      reasoning: model.id.includes("thinking") || false,
-      modalities: { input: ["text", "image"], output: ["text"] },
-      cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-      limit: {
-        context: model.contextWindow || 1048576,
-        output: model.maxTokens || 65536,
-      },
-      family: "google",
-    };
-  }
-  return entries;
-}
-
-/**
- * Register the Google provider in OpenCode config with discovered models.
- * Called from the config hook after the proxy has started.
- *
- * @param {object} config - OpenCode config object (mutable)
- * @param {number} port - Proxy port
- * @param {Array<{ id: string, name: string, contextWindow?: number, maxTokens?: number }>} models
- * @returns {boolean} true if provider was registered/updated
- */
-export function registerGoogleProvider(config, port, models) {
-  if (!config.provider) config.provider = {};
-
-  const providerModels = buildGoogleProviderModels(models);
-  const baseURL = `http://127.0.0.1:${port}/v1beta`;
-
-  const newProvider = {
-    name: "Google (via aidevops proxy)",
-    npm: "@ai-sdk/google",
-    api: baseURL,
-    models: providerModels,
-  };
-
-  const existing = config.provider.google;
-  if (!existing || JSON.stringify(existing) !== JSON.stringify(newProvider)) {
-    config.provider.google = newProvider;
-    return true;
-  }
-
-  return false;
-}
-
-// ---------------------------------------------------------------------------
-// Persist Google provider to opencode.json on disk
-// ---------------------------------------------------------------------------
-
-const OPENCODE_CONFIG_PATH = join(homedir(), ".config", "opencode", "opencode.json");
-
-/**
- * Write the Google provider entry (with models) to opencode.json on disk.
- *
- * OpenCode reads opencode.json from disk for the model list — the config hook
- * only modifies the in-memory config. Without this, Google models don't appear
- * in the Ctrl+T model picker.
- *
- * The port is fixed (32124), so this only needs to run when models change.
- * We read-modify-write the JSON file atomically.
- *
- * @param {number} port - Proxy port
- * @param {Array<{ id: string, name: string, contextWindow?: number, maxTokens?: number }>} models
- */
-function persistGoogleProvider(port, models) {
-  // Start from an empty config on first run (ENOENT) so fresh setups get
-  // Google models registered even before opencode.json exists.
-  let config = {};
-  try {
-    const raw = readFileSync(OPENCODE_CONFIG_PATH, "utf-8");
-    config = JSON.parse(raw);
-  } catch (err) {
-    if (err.code !== "ENOENT") {
-      console.error(`[aidevops] Google proxy: cannot read opencode.json: ${err.message}`);
-      return;
-    }
-    // ENOENT — file doesn't exist yet; proceed with empty config
-  }
-
-  if (!config.provider) config.provider = {};
-
-  const providerModels = buildGoogleProviderModels(models);
-  const baseURL = `http://127.0.0.1:${port}/v1beta`;
-
-  config.provider.google = {
-    name: "Google (via aidevops proxy)",
-    npm: "@ai-sdk/google",
-    api: baseURL,
-    models: providerModels,
-  };
-
-  // Also set the placeholder API key env var to prevent SDK "missing key" error
-  // The proxy handles real auth — this is just to satisfy the SDK's key check
-  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY = "google-pool-proxy";
-  }
-
-  try {
-    // Ensure parent directory exists (e.g., ~/.config/opencode/ on first run)
-    mkdirSync(dirname(OPENCODE_CONFIG_PATH), { recursive: true });
-    writeFileSync(OPENCODE_CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
-    console.error(`[aidevops] Google proxy: persisted ${models.length} models to opencode.json (port ${port})`);
-  } catch (err) {
-    console.error(`[aidevops] Google proxy: failed to write opencode.json: ${err.message}`);
-  }
-}
+// Provider registration and config-persistence are in ./google-proxy-config.mjs
+// (re-exported above for backward compatibility with callers).

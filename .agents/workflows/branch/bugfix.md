@@ -10,9 +10,10 @@ tools:
   grep: true
 ---
 
-# Bugfix Branch
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
-<!-- AI-CONTEXT-START -->
+# Bugfix Branch
 
 | Aspect | Value |
 |--------|-------|
@@ -20,44 +21,31 @@ tools:
 | **Commit** | `fix: description` |
 | **Version** | Patch bump (1.0.0 → 1.0.1) |
 | **Create from** | `main` |
+| **Examples** | `bugfix/login-timeout`, `bugfix/123-null-pointer` |
 
 ```bash
 git checkout main && git pull origin main
 git checkout -b bugfix/{description}
 ```
 
-<!-- AI-CONTEXT-END -->
-
 ## When to Use
 
-- Non-urgent bug fixes
-- Issues that can wait for normal release cycle
-- Bugs found in development/staging
+- Non-urgent bug fixes (can wait for release cycle) or bugs found in dev/staging.
+- **Not for** urgent production issues (use `hotfix/`).
 
-**For urgent production issues**, use `hotfix/` instead.
+## Rules
 
-## Unique Guidance
+- **Regression test**: MANDATORY to prevent recurrence.
+- **Scope**: Minimal changes only — no new features or refactoring.
+- **Investigation**: See `workflows/bug-fixing.md`.
 
-**Always add a regression test** to prevent the bug from recurring.
+## Commit Format
 
-For detailed bug investigation patterns, see `workflows/bug-fixing.md`.
-
-## Examples
-
-```bash
-bugfix/login-timeout
-bugfix/123-null-pointer
-bugfix/api-response-parsing
 ```
-
-## Commit Example
-
-```bash
 fix: resolve login timeout on slow connections
 
 - Increase timeout from 5s to 30s
 - Add retry logic with exponential backoff
-- Improve error message for users
 
 Fixes #123
 ```

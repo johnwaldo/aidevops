@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
+# pulse-stats-helper.sh — Lightweight operational counter for pulse metrics (t2424, GH#20030)
+#
+# Persists named counters to ~/.aidevops/logs/pulse-stats.json using jq-based
+# atomic updates. Each counter records per-event timestamps so 24h rolling
+# windows can be computed without a separate cron sweep.
+#
+# Supported counters (initial set):
+#   pre_dispatch_aborts                — pre-dispatch eligibility gate aborted dispatch (all gates)
+#   pre_dispatch_aborts_recent_commit  — aborts caused by gate 4 (recent closing commit on default branch)
+#
+# The `aidevops status` command reads this file via `pulse_stats_get_24h`
+# to show operator-visible churn metrics.
+#
+# Usage (sourced from pre-dispatch-eligibility-helper.sh or pulse-dispatch-core.sh):
+#   pulse_stats_increment <counter_name>   — add one timestamp event
+#   pulse_stats_get_24h <counter_name>     — print count of events in last 24h
+#
+# Usage (standalone CLI):
+#   pulse-stats-helper.sh increment <counter_name>
+#   pulse-stats-helper.sh get-24h <counter_name>
+#   pulse-stats-helper.sh get-gauge <gauge_name>
+#   pulse-stats-helper.sh status           — human-readable summary
+#   pulse-stats-helper.sh reset <counter_name>  — clear a counter
+
+set -euo pipefail
+
+# Include guard — prevent double-sourcing (GH#22091).
+# pulse-stats-helper.sh is sourced by pulse-merge-stuck.sh,
+# pulse-rate-limit-circuit-breaker.sh, pre-dispatch-eligibility-helper.sh,
+# and pulse-dispatch-engine.sh. Without this guard every bootstrap cycle
+# re-runs the SCRIPT_DIR subprocess and the shared-constants.sh source
+# for each caller, stacking enough subprocess overhead to cause --dry-run
+# timeouts on slow filesystems.
+[[ -n "${_PULSE_STATS_HELPER_LOADED:-}" ]] && return 0
+_PULSE_STATS_HELPER_LOADED=1
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+
+# Source shared constants if available (provides color helpers etc.).
+# shellcheck source=shared-constants.sh
+if [[ -f "${SCRIPT_DIR}/shared-constants.sh" ]]; then
+	# shellcheck disable=SC1091
+	source "${SCRIPT_DIR}/shared-constants.sh"
+fi
+
+PULSE_STATS_FILE="${PULSE_STATS_FILE:-${HOME}/.aidevops/logs/pulse-stats.json}"
+LOGFILE="${LOGFILE:-${HOME}/.aidevops/logs/pulse.log}"
+
+#######################################
+# Ensure the stats file exists with a valid JSON structure.
+# Idempotent — safe to call multiple times.
+#######################################
+_pulse_stats_ensure_file() {
+	local dir
+	dir="$(dirname "$PULSE_STATS_FILE")"
+	if [[ ! -d "$dir" ]]; then
+		mkdir -p "$dir" 2>/dev/null || return 0
+	fi
+	if [[ ! -f "$PULSE_STATS_FILE" ]]; then
+		printf '{"counters":{}}\n' >"$PULSE_STATS_FILE" 2>/dev/null || return 0
+	fi
+	return 0
+}
+
+#######################################
+# Increment a named counter by adding the current Unix timestamp.
+# Uses jq to append to the counter's timestamp array atomically
+# (single write via temp file + mv).
+#
+# Args:
+#   $1 - counter_name (e.g. "pre_dispatch_aborts")
+#
+# Non-fatal: any jq/file failure is logged but does not propagate.
+#######################################
+pulse_stats_increment() {
+	local counter_name="${1:-unknown}"
+	local now_epoch
+	now_epoch=$(date +%s 2>/dev/null) || now_epoch=0
+
+	_pulse_stats_ensure_file || return 0
+
+	local tmp_file
+	# t2997: drop .json — XXXXXX must be at end for BSD mktemp.
+	tmp_file=$(mktemp "${TMPDIR:-/tmp}/pulse-stats-XXXXXX") || return 0
+
+	# Append timestamp to counter array; create counter if absent.
+	# jq -e fails if the input JSON is invalid → we fall back to no-op.
+	jq --arg name "$counter_name" --argjson ts "$now_epoch" \
+		'.counters[$name] += [$ts]' \
+		"$PULSE_STATS_FILE" >"$tmp_file" 2>/dev/null || { rm -f "$tmp_file"; return 0; }
+
+	mv "$tmp_file" "$PULSE_STATS_FILE" 2>/dev/null || rm -f "$tmp_file"
+	return 0
+}
+
+#######################################
+# Return the count of events for a counter in the last 24 hours.
+# Prints the count as a plain integer to stdout.
+#
+# Args:
+#   $1 - counter_name
+#
+# Output: integer (0 if file missing, counter absent, or any error)
+#######################################
+pulse_stats_get_24h() {
+	local counter_name="${1:-unknown}"
+
+	if [[ ! -f "$PULSE_STATS_FILE" ]]; then
+		printf '0\n'
+		return 0
+	fi
+
+	local cutoff
+	cutoff=$(( $(date +%s 2>/dev/null || printf '0') - 86400 ))
+
+	local count
+	count=$(jq -r --arg name "$counter_name" --argjson cutoff "$cutoff" \
+		'(.counters[$name] // []) | [.[] | select(. > $cutoff)] | length' \
+		"$PULSE_STATS_FILE" 2>/dev/null) || count=0
+
+	printf '%s\n' "${count:-0}"
+	return 0
+}
+
+#######################################
+# Print a human-readable summary of all counters (last 24h).
+#######################################
+pulse_stats_status() {
+	if [[ ! -f "$PULSE_STATS_FILE" ]]; then
+		echo "  No pulse stats recorded yet."
+		return 0
+	fi
+
+	local now_epoch
+	now_epoch=$(date +%s 2>/dev/null) || now_epoch=0
+	local cutoff=$(( now_epoch - 86400 ))
+
+	local names
+	names=$(jq -r '.counters | keys[]' "$PULSE_STATS_FILE" 2>/dev/null) || names=""
+
+	if [[ -z "$names" ]]; then
+		echo "  No counters recorded yet."
+		return 0
+	fi
+
+	local name count
+	while IFS= read -r name; do
+		[[ -z "$name" ]] && continue
+		count=$(jq -r --arg name "$name" --argjson cutoff "$cutoff" \
+			'(.counters[$name] // []) | [.[] | select(. > $cutoff)] | length' \
+			"$PULSE_STATS_FILE" 2>/dev/null) || count=0
+		printf '  %-40s %s (last 24h)\n' "${name}:" "${count:-0}"
+	done <<<"$names"
+
+	return 0
+}
+
+#######################################
+# Print a human-readable summary of all gauges.
+#######################################
+pulse_stats_gauge_status() {
+	if [[ ! -f "$PULSE_STATS_FILE" ]]; then
+		echo "  No pulse gauges recorded yet."
+		return 0
+	fi
+
+	local data
+	data=$(jq -r '
+		(.gauges // {}) as $gauges
+		| ($gauges | keys[]) as $name
+		| "\($name):\t\($gauges[$name].value // 0)\t\($gauges[$name].ts // 0)"
+	' "$PULSE_STATS_FILE") || {
+		printf 'Error: Failed to read pulse stats file: %s\n' "$PULSE_STATS_FILE" >&2
+		return 1
+	}
+
+	if [[ -z "$data" ]]; then
+		echo "  No pulse gauges recorded yet."
+		return 0
+	fi
+
+	local name_with_colon value ts
+	while IFS=$'\t' read -r name_with_colon value ts; do
+		[[ -z "$name_with_colon" ]] && continue
+		printf '  %-40s %s (ts=%s)\n' "$name_with_colon" "${value:-0}" "${ts:-0}"
+	done <<<"$data"
+
+	return 0
+}
+
+#######################################
+# Set a named gauge to an absolute integer value (t3193).
+#
+# Gauges are distinct from counters: they store the LATEST observation,
+# not an event stream. Use for "current cycle has N stuck PRs" or
+# "consecutive zero-progress cycles" semantics where the prior value is
+# overwritten, not appended.
+#
+# Stored under .gauges.<name> = {"value": V, "ts": <epoch>} so a reader
+# can both see the value and detect staleness.
+#
+# Args:
+#   $1 - gauge_name
+#   $2 - integer value (must match ^-?[0-9]+$; non-numeric is rejected)
+#
+# Non-fatal: any jq/file failure is logged but does not propagate.
+#######################################
+pulse_stats_set_gauge() {
+	local gauge_name="${1:-unknown}"
+	local gauge_value="${2:-0}"
+
+	# Reject non-integer values rather than silently writing garbage.
+	if [[ ! "$gauge_value" =~ ^-?[0-9]+$ ]]; then
+		return 0
+	fi
+
+	local now_epoch
+	now_epoch=$(date +%s 2>/dev/null) || now_epoch=0
+
+	_pulse_stats_ensure_file || return 0
+
+	local tmp_file
+	tmp_file=$(mktemp "${TMPDIR:-/tmp}/pulse-stats-XXXXXX") || return 0
+
+	# Overwrite the gauge value. Create .gauges if absent.
+	jq --arg name "$gauge_name" --argjson v "$gauge_value" --argjson ts "$now_epoch" \
+		'.gauges = (.gauges // {}) | .gauges[$name] = {"value": $v, "ts": $ts}' \
+		"$PULSE_STATS_FILE" >"$tmp_file" 2>/dev/null || { rm -f "$tmp_file"; return 0; }
+
+	mv "$tmp_file" "$PULSE_STATS_FILE" 2>/dev/null || rm -f "$tmp_file"
+	return 0
+}
+
+#######################################
+# Read the current value of a gauge (t3193).
+# Prints the integer to stdout. Returns 0 if found, 0 with "0" output if not.
+#
+# Args:
+#   $1 - gauge_name
+#######################################
+pulse_stats_get_gauge() {
+	local gauge_name="${1:-unknown}"
+
+	if [[ ! -f "$PULSE_STATS_FILE" ]]; then
+		printf '0\n'
+		return 0
+	fi
+
+	local value
+	value=$(jq -r --arg name "$gauge_name" \
+		'(.gauges[$name].value // 0) | tostring' \
+		"$PULSE_STATS_FILE" 2>/dev/null) || value="0"
+
+	printf '%s\n' "${value:-0}"
+	return 0
+}
+
+#######################################
+# Reset (clear) a counter's event history.
+# Args: $1 - counter_name
+#######################################
+pulse_stats_reset() {
+	local counter_name="${1:-}"
+	if [[ -z "$counter_name" ]]; then
+		echo "Usage: pulse_stats_reset <counter_name>" >&2
+		return 1
+	fi
+
+	if [[ ! -f "$PULSE_STATS_FILE" ]]; then
+		return 0
+	fi
+
+	local tmp_file
+	# t2997: drop .json — XXXXXX must be at end for BSD mktemp.
+	tmp_file=$(mktemp "${TMPDIR:-/tmp}/pulse-stats-XXXXXX") || return 1
+
+	jq --arg name "$counter_name" \
+		'del(.counters[$name])' \
+		"$PULSE_STATS_FILE" >"$tmp_file" 2>/dev/null || { rm -f "$tmp_file"; return 1; }
+
+	mv "$tmp_file" "$PULSE_STATS_FILE" 2>/dev/null || { rm -f "$tmp_file"; return 1; }
+	echo "Counter '${counter_name}' reset."
+	return 0
+}
+
+#######################################
+# Standalone CLI entry point.
+#######################################
+_main() {
+	local cmd="${1:-status}"
+	shift || true
+
+	case "$cmd" in
+		increment)
+			if [[ $# -lt 1 ]]; then
+				echo "Usage: pulse-stats-helper.sh increment <counter_name>" >&2
+				return 1
+			fi
+			local increment_counter="$1"
+			pulse_stats_increment "$increment_counter"
+			return 0
+			;;
+		get-24h)
+			if [[ $# -lt 1 ]]; then
+				echo "Usage: pulse-stats-helper.sh get-24h <counter_name>" >&2
+				return 1
+			fi
+			local get24h_counter="$1"
+			pulse_stats_get_24h "$get24h_counter"
+			return 0
+			;;
+		get-gauge)
+			if [[ $# -lt 1 ]]; then
+				echo "Usage: pulse-stats-helper.sh get-gauge <gauge_name>" >&2
+				return 1
+			fi
+			local get_gauge_name="$1"
+			pulse_stats_get_gauge "$get_gauge_name"
+			return 0
+			;;
+		status)
+			echo "Pulse Stats (last 24h):"
+			pulse_stats_status
+			echo ""
+			echo "Pulse Gauges:"
+			pulse_stats_gauge_status
+			return 0
+			;;
+		reset)
+			if [[ $# -lt 1 ]]; then
+				echo "Usage: pulse-stats-helper.sh reset <counter_name>" >&2
+				return 1
+			fi
+			local reset_counter="$1"
+			pulse_stats_reset "$reset_counter"
+			return 0
+			;;
+		help | --help | -h)
+			echo "pulse-stats-helper.sh — Pulse operational counter (t2424)"
+			echo ""
+			echo "Usage:"
+			echo "  pulse-stats-helper.sh increment <counter>   Add event to counter"
+			echo "  pulse-stats-helper.sh get-24h <counter>     Count events last 24h"
+			echo "  pulse-stats-helper.sh get-gauge <gauge>     Read current gauge value"
+			echo "  pulse-stats-helper.sh status                Human-readable summary"
+			echo "  pulse-stats-helper.sh reset <counter>       Clear a counter"
+			echo ""
+			echo "Stats file: ${PULSE_STATS_FILE}"
+			return 0
+			;;
+		*)
+			echo "Unknown command: ${cmd}. Run: pulse-stats-helper.sh help" >&2
+			return 1
+			;;
+	esac
+}
+
+# Only run _main when executed directly (not sourced).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	_main "$@"
+fi

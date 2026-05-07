@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # shellcheck disable=SC2034,SC2155
 
 # =============================================================================
@@ -23,7 +25,7 @@ source "${SCRIPT_DIR}/shared-constants.sh"
 
 set -euo pipefail
 
-readonly BOLD='\033[1m'
+[[ -z "${BOLD+x}" ]] && BOLD='\033[1m'
 readonly DIM='\033[2m'
 
 # OpenCode session storage
@@ -165,12 +167,7 @@ get_branch_start_date() {
 		echo "$first_commit_date"
 	else
 		# No unique commits, use worktree creation time (directory mtime)
-		# Portable stat (BSD: -f "%m", GNU: -c "%Y")
-		if stat --version &>/dev/null 2>&1; then
-			stat -c "%Y" "$worktree_path" 2>/dev/null || echo ""
-		else
-			stat -f "%m" "$worktree_path" 2>/dev/null || echo ""
-		fi
+		_file_mtime_epoch "$worktree_path"
 	fi
 }
 
@@ -415,7 +412,7 @@ cmd_list() {
 	echo "  2. Open OpenCode (it will show recent sessions)"
 	echo "  3. Use Ctrl+P to browse sessions by title"
 	echo ""
-	echo -e "${DIM}Tip: Session names sync with branch names when using session-rename_sync_branch${NC}"
+	echo -e "${DIM}Tip: For issue/PR work, title sessions 'Issue #123: ...' or 'PR #456: ...'; branch-name sync is the fallback.${NC}"
 
 	return 0
 }
@@ -555,8 +552,9 @@ HOW MATCHING WORKS
   - Low (<40): Possible match
 
 TIPS
-  - Use session-rename_sync_branch tool after creating branches
-  - Session titles that match branch names are easier to find
+  - For issue/PR work, title sessions with the work item first: "Issue #123: ..." or "PR #456: ..."
+  - Use session-rename_sync_branch after creating branches only when there is no issue/PR context
+  - Session titles that include the issue/PR number or branch name are easier to find
   - OpenCode stores sessions per-project, not per-worktree
 
 EOF

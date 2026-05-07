@@ -13,6 +13,9 @@ tools:
   context7_*: true
 ---
 
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Product Monetisation
 
 <!-- AI-CONTEXT-START -->
@@ -22,7 +25,7 @@ tools:
 - **Purpose**: Implement and optimise product revenue streams
 - **Models**: Subscriptions, one-time purchases, freemium, ads, affiliate, funnel
 - **Applies to**: Mobile apps, browser extensions, desktop apps, web apps, SaaS
-- **Core metric**: LTV > CAC — lifetime value must exceed customer acquisition cost
+- **Core metric**: LTV > CAC
 
 **Revenue model decision tree**:
 
@@ -34,40 +37,42 @@ Drives users to another offering?  -> Free (sales funnel / audience builder)
 Can recommend relevant products?   -> Affiliate links + optional premium tier
 ```
 
-**Platform payment tools**:
-
-| Platform | Primary | Alternative |
-|----------|---------|-------------|
-| Mobile (iOS + Android) | RevenueCat | Superwall (paywall A/B testing) |
-| Browser extensions | Stripe, Chrome Web Store | LemonSqueezy, Gumroad |
-| Desktop apps | Stripe, Paddle | LemonSqueezy, Gumroad |
-| Web apps / SaaS | Stripe | Paddle, LemonSqueezy |
-
 <!-- AI-CONTEXT-END -->
 
-## Subscription Providers
+## Choose Model
 
-| Provider | Platform | Capabilities |
-|----------|----------|-------------|
-| **RevenueCat** | Mobile | Cross-platform state, receipt validation, entitlements, A/B testing. See `services/payments/revenuecat.md` |
-| **Stripe** | Web, desktop, extensions | Billing, Checkout, customer portal, webhook sync. See `services/payments/stripe.md` |
-| **Superwall** | Any | Remote paywall config, price/layout/copy A/B testing. See `services/payments/superwall.md` |
+| Model | Best for | Notes |
+|-------|---------|-------|
+| Subscription | Recurring problems, ongoing value | Weekly/monthly/annual plans; 7-day trial is the default |
+| One-time purchase | Utilities, focused tools | Consider lifetime unlock instead of recurring billing |
+| Freemium | Products with a genuinely useful free tier | Premium should feel like an upgrade, not ransom |
+| Ad-supported | High-volume, low-WTP audiences | AdMob (mobile), Unity Ads (games), Carbon Ads (dev/tech); pair with paid ad removal |
+| Affiliate | Recommendation/review products | Transparent disclosure required |
+| Sales funnel | Consultants, coaches, SaaS | Product stays free; revenue comes from the external offer |
 
-## Entitlements Model
+## Choose Provider
+
+| Platform | Primary | Alternative | Notes |
+|----------|---------|-------------|-------|
+| Mobile (iOS + Android) | RevenueCat | Superwall (paywall A/B) | Cross-platform state, receipt validation, entitlements. See `services/payments/revenuecat.md` |
+| Browser extensions | Stripe | LemonSqueezy, Gumroad | See `services/payments/stripe.md` |
+| Desktop apps | Stripe, Paddle | LemonSqueezy, Gumroad | |
+| Web apps / SaaS | Stripe | Paddle, LemonSqueezy | |
+
+## Define Entitlements
+
+Products → entitlements → feature gates:
 
 ```text
-Products (what users buy)     -> Entitlements (what users get access to)
 ├── Monthly ($4.99/mo)        -> "premium" entitlement
 ├── Annual ($39.99/yr)        -> "premium" entitlement
 ├── Lifetime ($99.99)         -> "premium" entitlement
 └── Pro Add-on ($2.99/mo)     -> "pro" entitlement
 ```
 
-Platform-agnostic: users buy products -> products grant entitlements -> features check entitlements.
+## Design Paywall
 
-## Paywall Design
-
-**Principles**: Show at moment of highest intent (after user tries a premium feature). Display value proposition, not price. Offer 3 tiers: weekly (highest per-unit), monthly (default), annual (best value). Highlight "best value" visually. Include free trial. Show social proof. "Restore Purchases" must be accessible (mobile).
+Show at moment of highest intent. Display value proposition, not price. Offer 3 tiers: weekly (highest per-unit), monthly (default), annual (best value — highlight this). Include free trial and social proof. "Restore Purchases" must be accessible (mobile).
 
 **Placement by conversion rate**:
 
@@ -75,11 +80,9 @@ Platform-agnostic: users buy products -> products grant entitlements -> features
 |---------|-----------|-------|
 | Feature gate | High | User wants the feature NOW |
 | Usage limit | High | User has experienced value, wants more |
-| After onboarding (hard paywall) | Medium-high | Onboarding built intent |
+| After onboarding (hard paywall) | Medium-high | Onboarding built intent. See `product/onboarding.md` |
 | Time-delayed | Medium | After N days of free use |
 | Settings/upgrade | Low | Only motivated users find it |
-
-See `product/onboarding.md` for the hard paywall pattern.
 
 **Free trial length**:
 
@@ -89,20 +92,11 @@ See `product/onboarding.md` for the hard paywall pattern.
 | 7-day | Lower | Higher | Subscriptions (recommended) |
 | No trial | Lowest | Highest | One-time purchases |
 
-## Alternative Revenue Models
+A/B test price points, paywall designs, trial lengths, and feature gates via RevenueCat Experiments or Superwall (Superwall also handles remote paywall config). Stripe test mode validates checkout and billing flows — it is not an A/B testing tool.
 
-| Model | Best for | Notes |
-|-------|---------|-------|
-| **Ad-supported** | High-volume, low WTP | AdMob (mobile), Unity Ads (games), Carbon Ads (dev/tech). Combine with premium to remove ads |
-| **Freemium** | Genuine free-tier value | Premium should feel like upgrade, not ransom |
-| **Affiliate** | Recommendation/review products | Transparent disclosure required |
-| **Sales funnel** | Consultants, coaches, SaaS | Product is free; revenue from external offering |
+## Set Pricing
 
-## Pricing Strategy
-
-**Process**: Check competitor pricing -> survey target users on WTP -> start competitive, adjust on data -> annual plans: 15-40% discount vs monthly.
-
-**Common price points**:
+Process: competitor pricing → WTP survey → start competitive → adjust on data. Annual plans: 15–40% discount vs monthly.
 
 | Model | Typical Range |
 |-------|--------------|
@@ -112,9 +106,7 @@ See `product/onboarding.md` for the hard paywall pattern.
 | Lifetime | $49.99-$149.99 |
 | One-time (extension/desktop) | $9.99-$49.99 |
 
-**A/B testing**: RevenueCat Experiments, Superwall, or Stripe test mode for price points, paywall designs, trial lengths, and feature gates.
-
-## Legal Requirements
+## Meet Legal Requirements
 
 | Requirement | Applies to |
 |-------------|-----------|
@@ -127,9 +119,5 @@ See `product/onboarding.md` for the hard paywall pattern.
 
 ## Related
 
-- `services/payments/revenuecat.md` — RevenueCat setup (mobile)
-- `services/payments/superwall.md` — Paywall A/B testing
-- `services/payments/stripe.md` — Stripe payments (web, desktop, extensions)
-- `product/onboarding.md` — Paywall placement in onboarding
 - `product/analytics.md` — Revenue analytics and optimisation
 - `product/growth.md` — User acquisition to feed the revenue funnel

@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -6,6 +9,6509 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [3.14.82] - 2026-05-06
+
+### Fixed
+
+- quarantine dead worktree owners (#23026)
+
+## [3.14.81] - 2026-05-06
+
+### Fixed
+
+- preserve peer-runner circuit breakers (#23025)
+- keep pulse OpenCode resolver product-strict (#23023)
+
+## [3.14.80] - 2026-05-06
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- release claim-only dispatch markers (#23021)
+- enforce ruleset required checks in pulse merge gate (#23022)
+
+## [3.14.79] - 2026-05-06
+
+### Changed
+
+- Maintenance: mark t3565 complete (pr:#23020 completed:2026-05-06) [skip ci]
+- Maintenance: sync ref:GH#23018 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- normalize interactive tracking issue labels (#23020)
+
+## [3.14.78] - 2026-05-06
+
+### Fixed
+
+- avoid dispatch claims before canary passes (#23015)
+
+## [3.14.77] - 2026-05-06
+
+### Fixed
+
+- requeue available brief-rewrite holds (#23017)
+- generate daemon-safe opencode shim (#23014)
+
+## [3.14.76] - 2026-05-06
+
+### Changed
+
+- Documentation: clarify approved release main workflow (#23013)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+- Tests: guard dashboard freshness jq filtering (#23003)
+- Documentation: add changelog traceability reference (#23002)
+- Maintenance: update simplification state registry
+- Documentation: remove duplicate changelog entry (#22984)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- initialize reconcile helper locals (#23011)
+- recover stuck pulse dispatch issues (#23010)
+- share dispatch zero-output comment metrics (#23009)
+- harden pulse retry reset and reuse evidence metrics (#23008)
+- preserve zero-output state count parsing (#23007)
+- fail closed when reclaiming worker worktrees (#23006)
+- count no-work zero-output comments (#23005)
+- tighten PR salvage recovery matching (#23004)
+- resolve worker worktree paths outside Git roots (#22989)
+- reuse dispatch comment metrics (#22991)
+- paginate dashboard freshness alert lookup (#22990)
+- align PR salvage recovery test mock (#22988)
+- reduce PR salvage recovery issue lookups (#22987)
+- align pulse fast-fail header (#22985)
+- close original issues for superseding PR merges (#22975)
+- preserve origin provenance on dispatch (#22973)
+- preserve dirty worker worktrees on exit (#22974)
+- let auto-dispatch clear interactive active claims (#22971)
+
+## [3.14.75] - 2026-05-06
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- close original issues for superseding PR merges (#22975)
+- preserve origin provenance on dispatch (#22973)
+- preserve dirty worker worktrees on exit (#22974)
+- let auto-dispatch clear interactive active claims (#22971)
+
+## [3.14.73] - 2026-05-06
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- allow auto-dispatch interactive handoff (#22967)
+- ignore local case alarm config (#22966)
+
+## [3.14.72] - 2026-05-05
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- block dispatch of interactive PR targets (#22963)
+- reclaim stale worker worktree owners (#22958)
+- block dispatch against pull request targets (#22961)
+
+## [3.14.71] - 2026-05-05
+
+### Changed
+
+- Documentation: remove duplicate 3.14.70 changelog entry (#22960)
+
+### Fixed
+
+- reclaim stale worker worktree owners (#22958)
+- block dispatch against pull request targets (#22961)
+
+## [3.14.70] - 2026-05-05
+
+### Changed
+
+- Documentation: prepare 3.14.70 changelog
+
+### Fixed
+
+- qualify Anthropic OAuth requests for plan usage (#22956)
+
+## [3.14.69] - 2026-05-05
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- let clean-room issues bypass zero-output hold (#22954)
+
+## [3.14.68] - 2026-05-05
+
+### Fixed
+
+- clean-room prompts for bloated issues (#22950)
+
+## [3.14.67] - 2026-05-05
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- initialize release retry locals (#22940)
+
+## [3.14.66] - 2026-05-05
+
+### Fixed
+
+- retry failures after recovery releases (#22946)
+- suppress completed PR salvage recoveries (#22945)
+
+## [3.14.65] - 2026-05-05
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- dedup dashboard freshness alerts (#22943)
+- suppress completed PR salvage recoveries (#22942)
+- retry failures after recovery releases (#22941)
+
+## [3.14.64] - 2026-05-05
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- recover OpenAI overload interruptions
+
+## [3.14.63] - 2026-05-05
+
+### Fixed
+
+- fallback after zero-output worker launches (#22936)
+
+## [3.14.62] - 2026-05-05
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Tests: guard full-loop behavior spelling (#22929)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- initialize fast-fail age-out locals (#22931)
+- recover stale pulse dispatch blockers (#22930)
+- narrow pulse zero-progress candidates (#22926)
+
+## [3.14.61] - 2026-05-05
+
+### Changed
+
+- Documentation: standardize full-loop behavior spelling (#22921)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- bound pulse final dispatch wait (#22925)
+- preserve helper output when printing bash32 scan logs (#22924)
+- harden REST mergeable jq normalization (#22923)
+- support older git in bash32 gate test (#22922)
+- normalize FOSS issue selection fallback (#22920)
+
+## [3.14.60] - 2026-05-05
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Documentation: align auto-dispatch followup guidance (#22916)
+- Tests: cover contributor insight review followup (#22915)
+- Tests: guard reachable CI test failure guidance (#22912)
+- Documentation: consolidate auto-dispatch readiness criteria (#22910)
+- Documentation: align plans auto-dispatch gate (#22911)
+- Documentation: clarify auto-dispatch placeholders (#22870)
+- Documentation: align auto-dispatch quality gate (#22904)
+- Documentation: clarify plans auto-dispatch guidance
+- reset idle merge zero-progress streak (#22884)
+- streamline zombie reaper ledger parsing (#22879)
+- Performance: avoid mergeable normalization subshells (#22880)
+- Documentation: align auto-dispatch exclusions (#22882)
+- Tests: align stale recovery mock repo slug (#22867)
+
+### Fixed
+
+- unblock review cleanup dispatch
+- optimize pulse gauge status (#22914)
+- harden gh pr list state parsing (#22877)
+- include OpenAI retry missing body status (#22883)
+- require lint warning cleanup dependency (#22903)
+- surface stale PR activity lookup errors (#22909)
+- improve setup lock diagnostics (#22907)
+- include OpenAI retry missing body status (#22908)
+- cover watchdog thrash advisory (#22900)
+- streamline contributor insight error composition (#22902)
+- release worker worktree on retry finish (#22899)
+- remove duplicate CI test failure patterns (#22901)
+- close recovered dashboard freshness alerts (#22873)
+- improve ratchet timeout diagnostics (#22898)
+- preserve log novelty evidence backslashes (#22897)
+- resolve SonarCloud quality gate blockers (#22886)
+- classify review bot notices in one pass (#22866)
+- preserve audit filenames in evidence tables (#22875)
+- simplify stale open PR activity guard (#22872)
+
+## [3.14.59] - 2026-05-05
+
+### Fixed
+
+- recover startup-stalled workers
+- unlock issues on worker release (#22860)
+- allow interactive self-claim for unassigned issues (#22857)
+- order dispatch lifecycle comments (#22858)
+- harden lint warning temp cleanup (#22852)
+- classify review bot notice categories (#22853)
+
+## [3.14.58] - 2026-05-05
+
+### Fixed
+
+- reduce full-loop context blockers (#22851)
+
+## [3.14.57] - 2026-05-05
+
+### Changed
+
+- Documentation: clarify auto-dispatch readiness exclusions (#22847)
+
+### Fixed
+
+- expose pulse merge gauges (#22845)
+
+## [3.14.56] - 2026-05-05
+
+### Fixed
+
+- preserve OpenAI retry failure signals (#22843)
+
+## [3.14.55] - 2026-05-05
+
+### Changed
+
+- Documentation: restore auto-dispatch default guidance (#22820)
+
+### Fixed
+
+- respect worker liveness events (#22819)
+
+## [3.14.54] - 2026-05-05
+
+### Changed
+
+- Documentation: restore auto-dispatch default guidance (#22817)
+
+## [3.14.53] - 2026-05-04
+
+### Fixed
+
+- classify bash workdir access failures (#22813)
+
+## [3.14.52] - 2026-05-04
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- preserve active worker worktrees (#22811)
+
+## [3.14.51] - 2026-05-04
+
+### Fixed
+
+- flag actionable ESLint warnings (#22809)
+
+## [3.14.50] - 2026-05-04
+
+### Added
+
+- diagnose hermetic pnpm Vitest test failures (#22810)
+
+### Changed
+
+- require merge evidence before reconcile close (#22807)
+
+### Fixed
+
+- harden OpenCode security-validation denies (#22808)
+
+## [3.14.49] - 2026-05-04
+
+### Fixed
+
+- keep failed review bots blocking (#22806)
+- bound local bash32 linter gate (#22796)
+
+## [3.14.48] - 2026-05-04
+
+### Fixed
+
+- retry OpenAI overloaded streams in OpenCode plugin (#22792)
+- normalize pulse mergeable states (#22801)
+
+## [3.14.46] - 2026-05-04
+
+### Changed
+
+- Documentation: restore core AGENTS progress guidance (#22797)
+
+## [3.14.45] - 2026-05-04
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.14.44] - 2026-05-04
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.14.43] - 2026-05-04
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- stabilize FOSS dispatch regression test (#22795)
+- guard FOSS dispatch issue selection (#22790)
+- normalize REST PR mergeable state (#22787)
+
+## [3.14.42] - 2026-05-04
+
+### Fixed
+
+- optimize pulse dispatch diagnostics and PR reads (#22785)
+
+## [3.14.40] - 2026-05-04
+
+### Changed
+
+- Refactor: clarify ops comment body construction (#22770)
+- Tests: lock startup greeting prompt wording (#22772)
+- Performance: harden TODO sync recovery (#22771)
+- Tests: cover lowercase dispatch claim release markers (#22767)
+- Documentation: align quality gate reference wording (#22766)
+- Refactor: reduce agent source nesting debt (#22750)
+- Refactor: split case alarm tick complexity (#22748)
+
+### Fixed
+
+- reduce bash compatibility baseline debt (#22781)
+- bind zombie reaper to worker ledger repo (#22776)
+- skip launch preflight fast-fail accrual (#22773)
+- skip launch preflight fast-fail accrual (#22775)
+- trim fallback greeting version (#22769)
+- honor skipped OpenAI OAuth account (#22768)
+- skip no_work NMR for prelaunch skips (#22754)
+- align git safety hook branch self-test (#22753)
+- normalize health dashboard issue states (#22751)
+- count no_work markers across comment pages (#22747)
+- reduce bash 3.2 compatibility violations (#22749)
+- improve worker reliability controls (#22745)
+
+## [3.14.39] - 2026-05-04
+
+### Changed
+
+- preserve signed NMR approvals (#22743)
+
+## [3.14.38] - 2026-05-04
+
+### Changed
+
+- fix worker throughput guards (#22738)
+
+### Fixed
+
+- route circuit breaker meta issues to framework source (#22740)
+
+## [3.14.37] - 2026-05-04
+
+### Added
+
+- add Open Design peripheral workflow (#22735)
+
+### Changed
+
+- Tests: cover disabled pulse REST dispatch fallback (#22734)
+
+## [3.14.36] - 2026-05-04
+
+### Changed
+
+- fix pulse REST dispatch fallback (#22732)
+
+## [3.14.35] - 2026-05-04
+
+### Changed
+
+- fix headless GraphQL fallback guidance (#22729)
+
+### Fixed
+
+- reset failed worker claims to available (#22724)
+
+## [3.14.34] - 2026-05-04
+
+### Changed
+
+- Documentation: clarify quality gate override justification (#22721)
+- Documentation: preserve error prevention guidance (#22720)
+- Maintenance: align package version with 3.14.33 (#22694)
+
+### Fixed
+
+- align skill frontmatter names (#22728)
+- respect false runtime markers in signature session mode (#22718)
+- correct goals mission routing (#22722)
+- route no_work meta briefs to stale recovery (#22719)
+- harden self assignment cleanup (#22717)
+- match dispatch claim markers literally (#22715)
+- simplify claim release comment construction (#22714)
+- sustain OpenAI worker dispatch (#22709)
+- clarify OpenCode startup greeting guidance (#22712)
+- harden pulse TODO sync recovery (#22711)
+- propagate consolidation comment API failures (#22708)
+- preserve comment fetch API errors (#22707)
+- slurp stale assignment comments (#22695)
+- add cost breaker approval command (#22693)
+- bound Claude MCP registration listing (#22690)
+
+## [3.14.32] - 2026-05-03
+
+### Fixed
+
+- dedupe circuit breaker comments (#22688)
+- repo-qualify all approval prompts (#22686)
+- include repo slug in sudo approval prompts (#22683)
+- paginate stale assignment comments (#22682)
+
+## [3.14.31] - 2026-05-03
+
+### Fixed
+
+- preserve self dispatch claims (#22681)
+
+## [3.14.30] - 2026-05-03
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- sync default branch after remote cleanup (#22680)
+- report runtime versions in automation messages
+
+## [3.14.29] - 2026-05-03
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- dedupe TODO auto-mark completions (#22676)
+
+## [3.14.28] - 2026-05-03
+
+### Fixed
+
+- dedupe consolidation dispatch on long threads (#22673)
+
+## [3.14.27] - 2026-05-03
+
+### Fixed
+
+- preserve OpenAI startup OAuth account (#22674)
+
+## [3.14.26] - 2026-05-03
+
+### Fixed
+
+- keep startup advisories out of chat (#22671)
+- avoid TODO sync stashes during canonical recovery (#22670)
+
+## [3.14.25] - 2026-05-03
+
+### Fixed
+
+- correct signature footer session mode (#22669)
+- paginate dispatch claim comment fetch (#22668)
+
+## [3.14.24] - 2026-05-03
+
+### Changed
+
+- Maintenance: sync ref:GH#22664 to TODO.md [skip ci]
+
+### Fixed
+
+- preserve startup greeting advisories (#22666)
+- preserve gpt-5.5 compaction boundary (#22663)
+
+## [3.14.23] - 2026-05-03
+
+### Fixed
+
+- wrap operational GitHub comments (#22662)
+
+## [3.14.22] - 2026-05-03
+
+### Changed
+
+- Documentation: add AGENTS size ratchet (#22661)
+- Maintenance: sync ref:GH#22660 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+
+## [3.14.21] - 2026-05-03
+
+### Changed
+
+- fix dispatch dedup for ops-wrapped comments
+- Documentation: extract quality gate pattern references (#22658)
+- Maintenance: update simplification state registry
+
+## [3.14.20] - 2026-05-03
+
+### Changed
+
+- Documentation: extract worker discipline guidance (#22653)
+
+## [3.14.19] - 2026-05-03
+
+### Changed
+
+- Maintenance: mark t3560 complete (pr:#22650 completed:2026-05-03) [skip ci]
+- add /goals mission command
+
+## [3.14.18] - 2026-05-03
+
+### Changed
+
+- Documentation: extract gh command discipline reference (#22651)
+- Maintenance: sync ref:GH#22649 to TODO.md [skip ci]
+- align OpenAI availability auth precedence (#22638)
+- Maintenance: update simplification state registry
+- Maintenance: mark t3558 complete (pr:#22639 completed:2026-05-03) [skip ci]
+- preserve current OpenAI OAuth account (#22646)
+
+## [3.14.17] - 2026-05-03
+
+### Changed
+
+- prevent duplicate phase auto-filing (#22642)
+- Maintenance: mark t3557 complete (pr:#22641 completed:2026-05-03) [skip ci]
+- trigger phase autofile after REST fallback merge (#22635)
+- Maintenance: sync ref:GH#22640 to TODO.md [skip ci]
+
+### Fixed
+
+- remove CPU-based canary throttling (#22639)
+- reset pulse blockers when work is available (#22641)
+
+## [3.14.16] - 2026-05-03
+
+### Changed
+
+- extract Git Workflow body to workflow reference (#22632)
+- Maintenance: sync ref:GH#22631 to TODO.md
+- Maintenance: mark t3554 complete (pr:#22628 completed:2026-05-03) [skip ci]
+- Maintenance: sync ref:GH#22631 to TODO.md [skip ci]
+
+### Fixed
+
+- clamp oauth pool retry-after cooldowns (#22633)
+
+## [3.14.15] - 2026-05-03
+
+### Changed
+
+- Maintenance: sync TODO issue refs
+- Maintenance: sync ref:GH#22629 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22627 to TODO.md [skip ci]
+
+### Fixed
+
+- rotate OpenAI OAuth pool on usage limits (#22630)
+
+## [3.14.14] - 2026-05-03
+
+### Changed
+
+- Documentation: extract task lifecycle rules to reference file (#22625)
+- Maintenance: update simplification state registry
+- extract diagnostics-discipline to reference (Phase 1 of #22616) (#22620)
+- register parent task for AGENTS.md progressive disclosure (#22618)
+
+## [3.14.13] - 2026-05-03
+
+### Changed
+
+- replace load-based canary overload gate with CPU saturation classifier (#22617)
+- Maintenance: update simplification state registry
+- Maintenance: sync ref:GH#22619 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22615 to TODO.md [skip ci]
+
+## [3.14.12] - 2026-05-03
+
+### Changed
+
+- Maintenance: update simplification state registry
+- classify zero-commit branches as empty-branch, not merged (#22612)
+- Maintenance: sync ref:GH#22610 to TODO.md [skip ci]
+- address Gemini review of PR #22605 — vacuous-close + count derivation (#22609)
+- Maintenance: sync ref:GH#22607 to TODO.md [skip ci]
+- parent-task auto-close fires on single-filed-child parents (#22605)
+- Maintenance: sync ref:GH#22606 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22604 to TODO.md [skip ci]
+- make gh timeout function detection zsh-compatible (#22601)
+- Documentation: clarify dispatch-path tier guidance (#22599)
+- Documentation: add campaign asset safety checks (#22582)
+- Documentation: add feedback retention policy (#22573)
+- fix task-id guard cache follow-up (#22581)
+- Performance: filter maintainer comments by since (#22579)
+- Documentation: address t2893 brief review feedback (#22577)
+- Documentation: clarify self-modifying full-loop merge path (#22572)
+- Maintenance: sync ref:GH#22571 to TODO.md [skip ci]
+- add REST fallback for GraphQL-limited full-loop merges (#22569)
+- Maintenance: sync ref:GH#22538 to TODO.md [skip ci]
+- Define _performance KPI result schema
+- prevent active worktree cleanup during verification
+- Fix phase-only parent auto-filing (#22555)
+- Fix interactive issue origin labels
+- Define _projects directory contract (#22554)
+- document feedback promotion paths (#22551)
+- define feedback capture contract
+- Fix setup noninteractive stale-lock false reclaim (#22540)
+- Maintenance: sync ref:GH#22525 to TODO.md [skip ci]
+- clarify setup postflight advisory noise (#22546)
+- route failing verification badges to tasks (#22543)
+- Maintenance: sync ref:GH#22539 to TODO.md [skip ci]
+- Limit broad log searches in interactive diagnostics (#22541)
+
+### Fixed
+
+- re-checkout framework after caller checkout in sync-on-pr-merge (#22614)
+- initialise multi-var locals in _compose_unfiled_phases_note (#22611)
+- guard NMR timestamp jq parsing (#22603)
+- verify pulse merge label fetch behavior (#22602)
+- extract all release completion task IDs (#22600)
+- tolerate missing preflight log matches (#22597)
+- reuse worker activity summary timestamp (#22596)
+- allow ESLint flat configs in root allowlist (#22595)
+- harden opencode install validation (#22584)
+- tighten external content spam detector followups (#22580)
+- align full-loop gate parity test with split helper (#22578)
+- harden fast_cp portability (#22576)
+- add REST fallback for GraphQL-limited full-loop merge (#22568)
+
+## [3.14.11] - 2026-05-03
+
+### Changed
+
+- Maintenance: sync ref:GH#22537 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22534 to TODO.md [skip ci]
+- feedback plane Phase 3 mining workflow (#22532)
+
+## [3.14.10] - 2026-05-03
+
+### Changed
+
+- release dispatch claims on pre-launch aborts
+- feedback plane Phase 5 CLI and routines design
+- Maintenance: sync ref:GH#22527 to TODO.md [skip ci]
+
+### Fixed
+
+- restore validator cwd before amend
+
+## [3.14.9] - 2026-05-03
+
+### Changed
+
+- Maintenance: sync ref:GH#22525 to TODO.md [skip ci]
+
+## [3.14.8] - 2026-05-03
+
+### Changed
+
+- Documentation: verify projects parent planning state (#22516)
+- Maintenance: sync ref:GH#22515 to TODO.md [skip ci]
+
+## [3.14.7] - 2026-05-03
+
+### Changed
+
+- Maintenance: decompose feedback plane parent (#22520)
+
+### Fixed
+
+- address review feedback for setup and model probes (#22509)
+
+## [3.14.6] - 2026-05-03
+
+### Changed
+
+- gate compaction advisory (#22497)
+- remove duplicate performance TODO entry (#22514)
+- Maintenance: sync ref:GH#22510 to TODO.md [skip ci]
+
+## [3.14.5] - 2026-05-03
+
+### Changed
+
+- fix GPT-5.5 compaction input limit (#22508)
+- reduce setup postflight degradation noise (#22505)
+- Maintenance: sync ref:GH#22507 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22506 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22481 to TODO.md [skip ci]
+- add conditional pulse prefetch caching (#22494)
+
+## [3.14.4] - 2026-05-03
+
+### Changed
+
+- reduce launchd xpcproxy setup warnings
+- prevent non-maintainer upstream-watch issue spam
+- cost circuit breaker diagnostics and 800K budget
+- Maintenance: sync ref:GH#22478 to TODO.md [skip ci]
+- prioritize GraphQL budget for pulse stages (#22492)
+
+## [3.14.3] - 2026-05-03
+
+### Changed
+
+- Documentation: clarify launch-worker repo default (#22491)
+
+### Fixed
+
+- reduce GraphQL read pressure during pulse cycles (#22493)
+
+## [3.14.2] - 2026-05-03
+
+### Fixed
+
+- prioritize security quality-debt dispatch (#22487)
+- scope contributor insights to repo sessions (#22490)
+
+## [3.14.1] - 2026-05-03
+
+### Fixed
+
+- use REST-first PR readiness checks (#22488)
+
+## [3.14.0] - 2026-05-02
+
+### Changed
+
+- reason-code dispatch candidate pre-launch failures (#22485)
+- Maintenance: sync ref:GH#22482 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22481 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22480 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22479 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22472 to TODO.md [skip ci]
+- add PR repair loop for blocked checks (#22475)
+- Maintenance: sync ref:GH#22474 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22473 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22472 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22471 to TODO.md [skip ci]
+- add auto-reason subjective refinement workflow (#22470)
+- Fix commit-and-pr REST fallback PR-number stdout (#22468)
+- Maintenance: sync ref:GH#22458 to TODO.md [skip ci]
+- update upstream skill review docs (#22464)
+- suppress postflight scrubber fixture false positive
+- remove volatile Sonar quality gate badge (#22447)
+- Make issue-sync TODO pushes conflict-safe
+- Maintenance: sync ref:GH#22442 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22441 to TODO.md [skip ci]
+- clean up root shell script layout (#22440)
+- Maintenance: sync ref:GH#22436 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22434 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22433 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22432 to TODO.md [skip ci]
+- Maintenance: mark t3492 complete (pr:#22431 completed:2026-05-02) [skip ci]
+- Maintenance: sync ref:GH#22428 to TODO.md [skip ci]
+
+### Fixed
+
+- prevent duplicate manual worker launches (#22486)
+- suppress available feedback issue assignments (#22483)
+- sync canonical labels during repo init (#22469)
+- guard issue workers missing worktree env (#22467)
+- reduce workflow cancellation noise (#22466)
+- isolate setup worktree preservation test fixtures (#22465)
+- harden code review auto-fix pushes (#22443)
+- make release creation idempotent (#22444)
+- redact session miner instruction candidate snippets (#22439)
+- route issue list json reads through REST fallback (#22435)
+- stop warning on empty Anthropic API key (#22431)
+- make verified worktree cleanup remove permanently (#22426)
+
+## [3.13.95] - 2026-05-02
+
+### Changed
+
+- Maintenance: mark t3489 complete (pr:#22421 completed:2026-05-02) [skip ci]
+- Maintenance: mark t3491 complete (pr:#22422 completed:2026-05-02) [skip ci]
+- automate safe remote branch cleanup (#22421)
+- Maintenance: mark t3488 complete (pr:#22424 completed:2026-05-02) [skip ci]
+- ensure release deploy starts pulse (#22422)
+- Maintenance: mark t3474 complete (pr:#22423 completed:2026-05-02) [skip ci]
+- Documentation: align research command names (#22423)
+- Maintenance: sync ref:GH#22418 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22417 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- guard pulse wrapper bash-only sourcing (#22402)
+- Maintenance: mark t3482 complete (pr:#22412 completed:2026-05-02) [skip ci]
+- Maintenance: mark t3468 complete (pr:#22410 completed:2026-05-02) [skip ci]
+
+### Fixed
+
+- harden launchd xpcproxy recovery (#22427)
+- add REST fallback for PR comments (#22424)
+
+## [3.13.94] - 2026-05-02
+
+### Added
+
+- close worker failure feedback loop (#22384)
+- file memory audit opportunities (#22383)
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Add user-owned GitHub App auth and API routing
+- Relax worker timing recovery gates (#22392)
+- Maintenance: mark t3467 complete (pr:#22383 completed:2026-05-02) [skip ci]
+- Maintenance: mark t3429 complete (pr:#22382 completed:2026-05-02) [skip ci]
+- tolerate scalar thread fields (#22375)
+- Maintenance: sync ref:GH#22370 to TODO.md [skip ci]
+- Maintenance: mark t3475 complete (pr:#22377 completed:2026-05-02) [skip ci]
+- Maintenance: sync ref:GH#22373 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22372 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22371 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22370 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22369 to TODO.md [skip ci]
+- Maintenance: mark t3448 complete (pr:#22353 completed:2026-05-02) [skip ci]
+- restore agents backups atomically (#22362)
+- reduce pulse GraphQL read pressure (#22353)
+- document seeded draft PR workflow
+- Maintenance: mark t3435 complete (pr:#22342 completed:2026-05-02) [skip ci]
+- route gh list view calls through wrappers (#22352)
+- Maintenance: mark t3460 complete (pr:#22335 completed:2026-05-02) [skip ci]
+- route solved label edits through gh timeout wrapper (#22359)
+- Maintenance: mark t3440 complete (pr:#22341 completed:2026-05-02) [skip ci]
+- Maintenance: mark t3432 complete (pr:#22343 completed:2026-05-02) [skip ci]
+- Maintenance: mark t3442 complete (pr:#22336 completed:2026-05-02) [skip ci]
+- Maintenance: sync ref:GH#22320 to TODO.md [skip ci]
+- add inbox correction learning
+- Maintenance: mark t3428 complete (pr:#22329 completed:2026-05-02) [skip ci]
+- avoid reloading active profile README jobs
+- measure pulse and worker resources (#22342)
+- route gh read call sites through wrappers
+- mark pulse prefetch audit complete
+- Maintenance: mark t3441 complete (pr:#22326 completed:2026-05-02) [skip ci]
+- improve pulse API call attribution
+- reduce headless prompt argv size
+- seed managed agent source repos
+- reduce shell forks in dispatch hot paths
+
+### Fixed
+
+- use BSD-compatible awk for efficiency speed collection (#22374)
+- make origin label ceremony REST-backed (#22391)
+- exclude future worker metric timestamps (#22377)
+- paginate orphan loop comments (#22361)
+- remove redundant NMR timestamp jq guard (#22358)
+- enforce task ID boundary in release extraction (#22357)
+- harden worker canary soft-failure handling (#22340)
+
+## [3.13.93] - 2026-05-02
+
+### Added
+
+- add rich inbox preview extraction (#22330)
+
+### Changed
+
+- Add data-flow contracts and privacy tiers to agent packs
+- route eligible GitHub reads through REST proactively
+- Maintenance: mark t3455 complete (pr:#22323 completed:2026-05-02) [skip ci]
+- Maintenance: sync ref:GH#22324 to TODO.md [skip ci]
+- Maintenance: repair stale TODO completions for data-plane tasks (#22325)
+- Maintenance: mark t3457 complete (pr:#22319 completed:2026-05-02) [skip ci]
+- normalize escaped newlines in issue bodies (#22319)
+- Maintenance: mark t3458 complete (pr:#22318 completed:2026-05-02) [skip ci]
+- Maintenance: sync ref:GH#22317 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22316 to TODO.md [skip ci]
+- Maintenance: mark t3436 complete (pr:#22315 completed:2026-05-02) [skip ci]
+- Maintenance: sync ref:GH#22314 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22311 to TODO.md [skip ci]
+
+### Fixed
+
+- harden profile README session stats (#22331)
+- route campaign status provisioning (#22329)
+- enforce active worker minimum floor (#22327)
+- make shared constants source cleanly from zsh (#22323)
+
+## [3.13.92] - 2026-05-02
+
+### Fixed
+
+- use app usage fallback for sparse backlit stream (#22309)
+
+## [3.13.91] - 2026-05-02
+
+### Added
+
+- prioritize PR backlog before dispatch (#22307)
+- improve worker telemetry (#22278)
+
+### Changed
+
+- Maintenance: sync ref:GH#22308 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22306 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22305 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22304 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22303 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22301 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22300 to TODO.md [skip ci]
+- Maintenance: mark t3445 complete (pr:#22298 completed:2026-05-02) [skip ci]
+- Maintenance: sync ref:GH#22299 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22297 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22296 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22293 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22292 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22291 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22290 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22288 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22287 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22286 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22285 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22267 to TODO.md [skip ci]
+- Maintenance: mark t3421 complete (pr:#22278 completed:2026-05-02) [skip ci]
+- Maintenance: mark t3427 complete (pr:#22275 completed:2026-05-02) [skip ci]
+- normalize feedback redispatch ownership (#22279)
+- Maintenance: sync ref:GH#22274 to TODO.md [skip ci]
+- integrate plugin namespaces into subagent discovery (#22275)
+- Maintenance: sync ref:GH#22271 to TODO.md [skip ci]
+- add manual worker launcher (#22269)
+- Fix dispatch-single issue state casing (#22266)
+- reduce GraphQL budget usage in diagnostics
+- Performance: scope headless startup provider state (#22261)
+- add minimum worker concurrency floor
+- Maintenance: mark t3417 complete (pr:#22252 completed:2026-05-01) [skip ci]
+- support glob-compressed subagent allowlists (#22252)
+- Maintenance: mark t3416 complete (pr:#22258 completed:2026-05-01) [skip ci]
+
+### Fixed
+
+- ignore generated Beads export state (#22298)
+- harden opencode maintenance-window cleanup (#22283)
+- use portable token advisory temp paths (#22277)
+- scope pulse merge routine scheduler test (#22276)
+- skip orphan loop check for fresh worker branches (#22273)
+- guard attribution printf hyphen output (#22272)
+
+## [3.13.90] - 2026-05-02
+
+### Added
+
+- add per-function GraphQL instrumentation to 14 public gh CLI wrappers (#22242)
+
+### Changed
+
+- Fix headless canary default agent regression
+- Maintenance: sync ref:GH#22251 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22250 to TODO.md [skip ci]
+- Maintenance: mark t3415 complete (pr:#22249 completed:2026-05-01) [skip ci]
+- Maintenance: sync ref:GH#22248 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: mark t3414 complete (pr:#22244 completed:2026-05-01) [skip ci]
+- Maintenance: sync ref:GH#22243 to TODO.md [skip ci]
+- Maintenance: mark t3411 complete (pr:#22239 completed:2026-05-01) [skip ci]
+- Fix routines setup push retry (#22239)
+- Maintenance: sync ref:GH#22238 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22235 to TODO.md [skip ci]
+
+### Fixed
+
+- address worktree registry review feedback (#22246)
+- select latest dispatch cooldown marker (#22245)
+- cap dispatch timing and node_modules restore fanout
+
+## [3.13.89] - 2026-05-01
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.13.88] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3410 complete (pr:#22223 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3409 complete (pr:#22217 completed:2026-05-01) [skip ci]
+- Make release creation resilient to GitHub GraphQL exhaustion (#22217)
+
+### Fixed
+
+- include worktree path in stale claim reports (#22227)
+
+## [3.13.87] - 2026-05-01
+
+### Fixed
+
+- harden pulse merge routine test checks (#22215)
+
+## [3.13.86] - 2026-05-01
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.13.85] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3407 complete (pr:#22211 completed:2026-05-01) [skip ci]
+- add remote branch cleanup command (#22211)
+
+## [3.13.84] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3408 complete (pr:#22206 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3404 complete (pr:#22200 completed:2026-05-01) [skip ci]
+- enforce public repo PR gating (#22200)
+
+### Fixed
+
+- abort routines sync rebase conflicts (#22206)
+
+## [3.13.83] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3405 complete (pr:#22204 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3406 complete (pr:#22203 completed:2026-05-01) [skip ci]
+
+### Fixed
+
+- suppress missing agent source find errors (#22204)
+
+## [3.13.82] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#22202 to TODO.md [skip ci]
+
+### Fixed
+
+- handle routines repo remote-ahead pushes (#22203)
+
+## [3.13.81] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3402 complete (pr:#22201 completed:2026-05-01) [skip ci]
+- Maintenance: sync ref:GH#22199 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22197 to TODO.md [skip ci]
+- Maintenance: mark t3403 complete (pr:#22196 completed:2026-05-01) [skip ci]
+- fix quality gate cancellation false failures (#22196)
+- Maintenance: mark t3400 complete (pr:#22193 completed:2026-05-01) [skip ci]
+- add helper scripts for AGENTS token efficiency (#22193)
+- prevent setup removing current worktree (#22190)
+- Maintenance: sync ref:GH#22086 to TODO.md [skip ci]
+- Maintenance: mark t3370 complete (pr:#22189 completed:2026-05-01) [skip ci]
+
+### Fixed
+
+- sanitize launchd PATH generation (#22201)
+- guard snap opencode candidate on non-linux (#22198)
+
+## [3.13.80] - 2026-05-01
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.13.79] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#22174 to TODO.md [skip ci]
+- Maintenance: mark t3395 complete (pr:#22182 completed:2026-05-01) [skip ci]
+
+## [3.13.78] - 2026-05-01
+
+### Changed
+
+- harden setup noninteractive cleanup (#22185)
+- Maintenance: sync ref:GH#22183 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22178 to TODO.md [skip ci]
+- Maintenance: mark t3397 complete (pr:#22181 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3384 complete (pr:#22170) (#22179)
+
+## [3.13.77] - 2026-05-01
+
+### Changed
+
+- split aidevops CLI helper libraries
+
+## [3.13.76] - 2026-05-01
+
+### Changed
+
+- fix task-complete merged PR detection (#22181)
+- Maintenance: mark t3391 complete (pr:#22172 completed:2026-05-01) [skip ci]
+- Maintenance: record task-complete follow-up
+- Maintenance: mark t3369 complete (pr:#22177 testing:runtime-verified)
+- Maintenance: mark t3392 complete (pr:#22169 completed:2026-05-01) [skip ci]
+- Maintenance: sync ref:GH#22146 to TODO.md [skip ci]
+- Maintenance: mark t3386 complete (pr:#22152 completed:2026-05-01) [skip ci]
+
+## [3.13.75] - 2026-05-01
+
+### Changed
+
+- Maintenance: record setup follow-up tasks
+- bound serialized setup wait on stale setup process (#22177)
+
+## [3.13.74] - 2026-05-01
+
+### Changed
+
+- treat runtime deployment timeout as warning (#22172)
+
+## [3.13.73] - 2026-05-01
+
+### Changed
+
+- Maintenance: add t3394 setup timeout cleanup follow-up
+- Maintenance: mark t3388 complete (pr:#22162 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3389 complete (pr:#22159 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3383 complete (pr:#22144 completed:2026-05-01) [skip ci]
+- docs(README): recommend OpenCode with OpenAI models (#22169)
+- Maintenance: ratchet QLTY_SMELL_THRESHOLD 40→39 (-1) [skip ci]
+- Maintenance: mark t3390 complete (pr:#22163)
+- add B'5 regression test for gh_create_issue empty argv (#22141)
+
+### Fixed
+
+- optimize skill generator timeout (#22170)
+
+## [3.13.72] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#22153 to TODO.md [skip ci]
+
+### Fixed
+
+- verify approval lifecycle REST fallback (#22152)
+
+## [3.13.71] - 2026-05-01
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.13.70] - 2026-05-01
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.13.69] - 2026-05-01
+
+### Changed
+
+- Fix linters-local worktree deletion (#22161)
+
+## [3.13.68] - 2026-05-01
+
+### Changed
+
+- harden setup noninteractive lock cleanup (#22162)
+
+## [3.13.67] - 2026-05-01
+
+### Changed
+
+- fix verify-issue-close-helper merged PR file parsing
+- Maintenance: mark t3381 complete (pr:#22142 completed:2026-05-01) [skip ci]
+- Maintenance: restore t3389 TODO entry
+- Maintenance: add t3390 follow-up task
+- Maintenance: mark t3387 complete (pr:#22156 testing:self-assessed)
+
+## [3.13.66] - 2026-05-01
+
+### Changed
+
+- optimize pulse auto-merge state parsing
+- Maintenance: remove duplicate t3385 TODO entry (#22156)
+- Maintenance: record t3388 follow-up
+
+## [3.13.65] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3385 complete (pr:#22150)
+- accept REST merged evidence in task completion (#22150)
+- Maintenance: sync ref:GH#22076 to TODO.md [skip ci]
+- Maintenance: mark t3376 complete (pr:#22130 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3227 complete (pr:#22139 completed:2026-05-01) [skip ci]
+
+### Fixed
+
+- harden claim task issue extraction (#22129)
+
+## [3.13.64] - 2026-05-01
+
+### Changed
+
+- Fix merge LaunchAgent stuck in xpcproxy before exec
+- Maintenance: mark t3216 complete (pr:#22128 completed:2026-05-01) [skip ci]
+
+## [3.13.63] - 2026-05-01
+
+### Changed
+
+- release stale claims by PID liveness (#22148)
+- Maintenance: mark t3372 complete (pr:#22101 completed:2026-05-01) [skip ci]
+- update stale pre-check comment in _attempt_orphan_recovery_pr (#22125)
+
+## [3.13.62] - 2026-05-01
+
+### Changed
+
+- fix pre-edit worktree auto-create detection
+- Maintenance: sync t3385 follow-up task
+
+### Fixed
+
+- stub _rest_append_sig in REST fallback test to prevent hang (#22107)
+
+## [3.13.61] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3380 complete (pr:#22137 testing:runtime-verified)
+
+## [3.13.60] - 2026-05-01
+
+### Changed
+
+- speed up worktree registry prune for large stale backlogs
+- Maintenance: mark t3258 complete (pr:#22097 completed:2026-05-01) [skip ci]
+- track solved-by actor labels (#22130)
+
+### Fixed
+
+- check paginated dispatch cooldown comments (#22132)
+
+## [3.13.59] - 2026-05-01
+
+### Fixed
+
+- harden agent deploy against concurrent races (#22139)
+
+## [3.13.58] - 2026-05-01
+
+### Changed
+
+- Refactor: derive Claude proxy models from registry (#22128)
+- Maintenance: mark t3257 complete (pr:#22102 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3379 complete (pr:#22124 completed:2026-05-01) [skip ci]
+
+## [3.13.57] - 2026-05-01
+
+### Changed
+
+- Maintenance: add t3382 follow-up task
+- Maintenance: sync ref:GH#22119 to TODO.md [skip ci]
+- add issue-body structural lint before publication (#22096)
+- add pulse-diagnose-helper.sh issue subcommand for issue-level worker/PR timelines (#22097)
+- exclude ChatGPT OAuth unsupported pro models from routing (#22103)
+- reconstruct PR #21876 worker-loop timeline (#22102)
+- bound opencode --version in validate_opencode_config (#22104)
+- enrich setup noninteractive lock contention diagnostics (#22124)
+
+### Fixed
+
+- reduce stale-recovery NMR query overhead (#22134)
+- add include guard to prevent repeated sourcing hang (GH#22091) (#22101)
+- verify_pr_merged passes when state=closed but mergedAt is set (GH#22075) (#22098)
+
+## [3.13.56] - 2026-05-01
+
+### Fixed
+
+- reuse preflight timing helper (#22126)
+- support variable-width release task IDs (#22127)
+
+## [3.13.55] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3378 complete (pr:#22122 completed:2026-05-01) [skip ci]
+- fix pulse merge dry-run and scheduler (#22122)
+- Maintenance: mark t3371 complete (pr:#22109 completed:2026-05-01) [skip ci]
+- Maintenance: sync ref:GH#22123 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22121 to TODO.md [skip ci]
+- expose OpenCode DB maintenance command and notice (#22120)
+- Maintenance: sync ref:GH#22119 to TODO.md [skip ci]
+
+### Fixed
+
+- portable timeout + Pattern 2 subprocess elimination in generate_agent_skills (#22099)
+- bound deploy_agents_to_runtimes stage in non-interactive setup (#22109)
+- avoid empty gh_create_issue label arg when no TODO labels derived (GH#22056) (#22110)
+
+## [3.13.54] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3375 complete (pr:#22116 completed:2026-05-01) [skip ci]
+- Maintenance: sync ref:GH#22117 to TODO.md [skip ci]
+
+### Fixed
+
+- raise token advisory threshold (#22116)
+
+## [3.13.53] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3239 complete (pr:#22114 completed:2026-05-01) [skip ci]
+- finish OpenCode DB WAL and maintenance-window handling (#22114)
+- Maintenance: sync ref:GH#22115 to TODO.md [skip ci]
+- Maintenance: mark t3259 complete (pr:#22113 completed:2026-05-01) [skip ci]
+- add branch-orphan loop hold (#22113)
+- Maintenance: sync ref:GH#22093 to TODO.md [skip ci]
+- remove Augment and Auggie MCP (#22089)
+- Maintenance: mark t3361 complete (pr:#22080 completed:2026-05-01) [skip ci]
+
+## [3.13.52] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3253 complete (pr:#22078 completed:2026-05-01) [skip ci]
+- Maintenance: remove duplicate t3364 TODO entry (#22090)
+- Maintenance: mark t3256 complete (pr:#22082 completed:2026-05-01) [skip ci]
+- Maintenance: record t3372 dry-run hang task
+- Maintenance: mark t3240 complete (pr:#22073 completed:2026-05-01) [skip ci]
+
+### Fixed
+
+- declare setup tool update prompt state (#22094)
+- bound setup skill generation (#22088)
+
+## [3.13.51] - 2026-05-01
+
+### Added
+
+- add maintainer PR drain helper (#22083)
+
+### Fixed
+
+- use unique agent deploy staging paths (#22080)
+
+## [3.13.50] - 2026-05-01
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.13.49] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#22065 to TODO.md [skip ci]
+- Maintenance: mark t3362 complete (pr:#22067 completed:2026-05-01) [skip ci]
+
+### Fixed
+
+- bound legacy OpenCode setup path (#22085)
+
+## [3.13.48] - 2026-05-01
+
+### Changed
+
+- Make linters-local string literal gate ratchet-based (#22082)
+
+## [3.13.47] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3201 complete (pr:#22053)
+- Maintenance: mark t3229 complete (pr:#22025 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3248 complete (pr:#22030 completed:2026-05-01) [skip ci]
+- Maintenance: record t3367 setup hang task
+- Maintenance: mark t3221 complete (pr:#22027 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3249 complete (pr:#22033 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3252 complete (pr:#22043 completed:2026-05-01) [skip ci]
+
+## [3.13.46] - 2026-05-01
+
+### Fixed
+
+- serialize noninteractive deployments (#22072)
+- make stash cleanup non-blocking (#22073)
+
+## [3.13.45] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3218 complete (pr:#22047)
+- Maintenance: mark t3250 complete (pr:#22036 completed:2026-05-01) [skip ci]
+- Maintenance: sync ref:GH#21985 to TODO.md [skip ci]
+- Maintenance: mark t3231 complete (pr:#22044 completed:2026-05-01) [skip ci]
+- Refactor: split headless runtime worker helpers (#22055)
+
+## [3.13.44] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3238 complete (pr:#22051 completed:2026-05-01) [skip ci]
+
+### Fixed
+
+- resolve worktree default branch from repo metadata (#22060)
+
+## [3.13.43] - 2026-05-01
+
+### Changed
+
+- Performance: setup.sh steady-state under 60s — rsync drift check, SHA-skip backup, async pulse, migration sentinels (t3221) (#22027)
+
+### Fixed
+
+- guard atomic swap mv ops in agent-deploy against set -e suppression (#22033)
+
+## [3.13.42] - 2026-05-01
+
+### Fixed
+
+- avoid empty gh_create_pr origin label arg (#22043)
+
+## [3.13.41] - 2026-05-01
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.13.40] - 2026-05-01
+
+### Changed
+
+- Maintenance: offline claim t3360..t3360 [offline]
+- rollback failed release mutations (#22062)
+- add maintainer-gate required-check alias (#22036)
+
+### Fixed
+
+- retry empty mergeable states (#22047)
+
+## [3.13.39] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3226 complete (pr:#22046 completed:2026-05-01) [skip ci]
+
+## [3.13.38] - 2026-05-01
+
+### Changed
+
+- Maintenance: decompose parent task GH#21901 (#22061)
+- Maintenance: sync ref:GH#22045 to TODO.md [skip ci]
+
+### Fixed
+
+- bound optional CodeRabbit pre-push review (#22044)
+
+## [3.13.37] - 2026-05-01
+
+### Changed
+
+- Maintenance: record follow-up tasks for PR 21876 investigation (#22053)
+- add memory truth-maintenance workflow (#22051)
+
+## [3.13.36] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3241 complete (pr:#22040 completed:2026-05-01) [skip ci]
+
+### Fixed
+
+- warn when pulse credentials lack Anthropic key (#22046)
+
+## [3.13.35] - 2026-05-01
+
+### Changed
+
+- tolerate array pulse_hours in pulse iterators (#22042)
+- Maintenance: sync ref:GH#22039 to TODO.md [skip ci]
+
+## [3.13.34] - 2026-05-01
+
+### Fixed
+
+- keep dedup dry-run count machine-readable (#22040)
+
+## [3.13.33] - 2026-05-01
+
+### Changed
+
+- skip node validators for shell-only commits (#22032)
+
+## [3.13.32] - 2026-05-01
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.13.31] - 2026-05-01
+
+### Changed
+
+- omit GPT-5.5 sonnet worker variant (#22031)
+- Maintenance: mark t3247 complete (pr:#22019 completed:2026-05-01) [skip ci]
+- restore OpenAI headless worker recovery (#22019)
+
+## [3.13.30] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3217 complete (pr:#22029 completed:2026-05-01) [skip ci]
+- fix orphan recovery existing PR probe (#22029)
+- Maintenance: mark t3246 complete (pr:#22013 completed:2026-05-01) [skip ci]
+- Maintenance: mark t3220 complete (pr:#22020 completed:2026-05-01) [skip ci]
+
+## [3.13.29] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#22022 to TODO.md [skip ci]
+- add prompt-to-hook migration loop (#22013)
+- Maintenance: mark t3251 complete (pr:#22018 completed:2026-05-01) [skip ci]
+- fast-fail worker dispatch before expensive startup (#22018)
+- Maintenance: mark t3242 complete (pr:#22006 completed:2026-05-01) [skip ci]
+- tighten AGENTS progressive disclosure and routing references (#22006)
+- Maintenance: sync ref:GH#22017 to TODO.md [skip ci]
+
+### Fixed
+
+- block unsafe pre-edit target paths (#22020)
+- stream worker activity metrics aggregation (#22021)
+
+## [3.13.28] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3234 complete (pr:#22015 completed:2026-05-01) [skip ci]
+- Maintenance: sync ref:GH#22016 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22014 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22012 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22012 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22011 to TODO.md [skip ci]
+
+## [3.13.27] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3245 complete (pr:#22010 completed:2026-05-01) [skip ci]
+- Enforce brief workflow in issue creation harness (#22010)
+
+## [3.13.26] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#22009 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#22008 to TODO.md [skip ci]
+- Maintenance: mark t3233 complete (pr:#22005 completed:2026-05-01) [skip ci]
+- make model override labels availability-aware (#22005)
+
+## [3.13.25] - 2026-05-01
+
+### Fixed
+
+- harden JSON version updates (#22002)
+
+## [3.13.24] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#21994 to TODO.md [skip ci]
+- Maintenance: mark t3237 complete (pr:#22000 completed:2026-05-01) [skip ci]
+- standardize session title prefixes (#22000)
+
+## [3.13.23] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#22001 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21999 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21997 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21996 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21995 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21994 to TODO.md [skip ci]
+- Maintenance: mark t3232 complete (pr:#21992 completed:2026-04-30) [skip ci]
+- fix OpenCode DB archive schema drift (#21992)
+- Maintenance: sync ref:GH#21981 to TODO.md [skip ci]
+
+## [3.13.22] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3228 complete (pr:#21986 completed:2026-04-30) [skip ci]
+- Maintenance: mark t3210 complete (pr:#21937 completed:2026-04-30) [skip ci]
+- refactor conflict-pattern classifier below function-complexity gate (#21986)
+- pre-canary system overload check (root cause #21919 + sibling trips) (#21937)
+- Maintenance: sync ref:GH#21990 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21988 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21987 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21985 to TODO.md [skip ci]
+
+## [3.13.21] - 2026-05-01
+
+### Changed
+
+- Maintenance: sync ref:GH#21984 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21983 to TODO.md [skip ci]
+
+## [3.13.20] - 2026-05-01
+
+### Changed
+
+- Maintenance: mark t3208 complete (pr:#21979 completed:2026-04-30) [skip ci]
+- file investigation task on circuit-breaker trips (#21979)
+- Maintenance: sync ref:GH#21981 to TODO.md [skip ci]
+
+### Fixed
+
+- drop awk END block emitting empty 'with:' at EOF (#21980)
+- add SSH fallback for claim task counter pushes (#21982)
+
+## [3.13.19] - 2026-04-30
+
+### Added
+
+- classify add/add conflicts as ADD_ADD_NEW_FILE for pattern-aware brief (#21976)
+
+### Changed
+
+- detect runner-only drift in CURRENT/CALLER workflows (#21977)
+- Maintenance: mark t3088 complete (pr:#21914 completed:2026-04-30) [skip ci]
+- eliminate dual origin label on worker-dispatched PRs (Resolves #21862) (#21914)
+- ci-feedback workers prioritize format/lint auto-fix before generic re-implementation (#21978)
+- Maintenance: mark t3199 complete (pr:#21976 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21973 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21972 to TODO.md [skip ci]
+- repo-aware pre-push verify hook auto-runs project format/lint/typecheck (#21971)
+- Maintenance: mark t3222 complete (pr:#21969 completed:2026-04-30) [skip ci]
+- detector summary distinguishes classified vs LLM-skipped (#21970)
+- harness rule — productivity questions are current-state queries (#21969)
+- Maintenance: sync ref:GH#21968 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21967 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21966 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21965 to TODO.md [skip ci]
+- Maintenance: mark t3211 complete (pr:#21959 completed:2026-04-30) [skip ci]
+- detect & escalate Actions runner queue saturation in stuck-merge detector (#21959)
+- shared proxy-lifecycle helper for cursor + google + claude (#21962)
+- Maintenance: sync ref:GH#21964 to TODO.md [skip ci]
+
+### Fixed
+
+- allowlist .aidevops.json and .gitattributes in pre-commit-hook (#21974)
+- drop invalid --cwd flag from claude CLI invocation (GH#21886) (#21975)
+
+## [3.13.18] - 2026-04-30
+
+### Added
+
+- classify add/add conflicts as ADD_ADD_NEW_FILE for pattern-aware brief (#21976)
+
+### Changed
+
+- detect runner-only drift in CURRENT/CALLER workflows (#21977)
+- Maintenance: mark t3088 complete (pr:#21914 completed:2026-04-30) [skip ci]
+- eliminate dual origin label on worker-dispatched PRs (Resolves #21862) (#21914)
+- ci-feedback workers prioritize format/lint auto-fix before generic re-implementation (#21978)
+- Maintenance: mark t3199 complete (pr:#21976 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21973 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21972 to TODO.md [skip ci]
+- repo-aware pre-push verify hook auto-runs project format/lint/typecheck (#21971)
+- Maintenance: mark t3222 complete (pr:#21969 completed:2026-04-30) [skip ci]
+- detector summary distinguishes classified vs LLM-skipped (#21970)
+- harness rule — productivity questions are current-state queries (#21969)
+- Maintenance: sync ref:GH#21968 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21967 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21966 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21965 to TODO.md [skip ci]
+- Maintenance: mark t3211 complete (pr:#21959 completed:2026-04-30) [skip ci]
+- detect & escalate Actions runner queue saturation in stuck-merge detector (#21959)
+- shared proxy-lifecycle helper for cursor + google + claude (#21962)
+- Maintenance: sync ref:GH#21964 to TODO.md [skip ci]
+
+### Fixed
+
+- allowlist .aidevops.json and .gitattributes in pre-commit-hook (#21974)
+- drop invalid --cwd flag from claude CLI invocation (GH#21886) (#21975)
+
+## [3.13.17] - 2026-04-30
+
+### Added
+
+- t3193 stuck-merge detector + zero-progress circuit breaker (#21915)
+
+### Changed
+
+- Maintenance: add TODO entry for t3220 (ref:GH#21963) [skip ci]
+- Maintenance: sync ref:GH#21963 to TODO.md [skip ci]
+- Maintenance: mark t3206 complete (pr:#21955 completed:2026-04-30) [skip ci]
+- Tests: align harness with t3209 fix and add intra-branch reversal coverage (t3206) (#21955)
+- Maintenance: mark t3215 complete (pr:#21956 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21961 to TODO.md [skip ci]
+- add worker-activity-helper.sh canonical-source summary (#21956)
+- Maintenance: sync ref:GH#21960 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21958 to TODO.md [skip ci]
+- Maintenance: mark t3204 complete (pr:#21918 completed:2026-04-30) [skip ci]
+- Maintenance: mark t3200 complete (pr:#21938 completed:2026-04-30) [skip ci]
+- Maintenance: mark t3196 complete (pr:#21939 completed:2026-04-30) [skip ci]
+- detect shallow clone before rebase to avoid add/add conflict cascade (#21938)
+- stale-stamp-aware takeover for DIRTY origin:interactive PRs (#21939)
+- Maintenance: mark t3209 complete (pr:#21940 completed:2026-04-30) [skip ci]
+- fix pulse-unbound-var-check.yml diff-scoping double-counts replaced lines (#21940)
+- Unify REST fallback function namespace to _rest_* (#21946)
+- Maintenance: mark t3213 complete (pr:#21950 completed:2026-04-30) [skip ci]
+- lazy-start Claude CLI proxy + skip in headless + EADDRINUSE adopt (#21951)
+- Maintenance: sync ref:GH#21952 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21949 to TODO.md [skip ci]
+- Maintenance: mark t3194 complete (pr:#21941 completed:2026-04-30) [skip ci]
+- cross-runner peer quarantine helper (#21941)
+- Maintenance: sync ref:GH#21948 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21947 to TODO.md [skip ci]
+- Maintenance: mark t3193 complete (pr:#21915 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21944 to TODO.md [skip ci]
+- Maintenance: mark t3198 complete (pr:#21908 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21942 to TODO.md [skip ci]
+- add pulse-runner-health-helper diagnose subcommand (#21908)
+- Maintenance: mark t3207 complete (pr:#21932 completed:2026-04-30) [skip ci]
+
+### Fixed
+
+- restore signature footer on auto-close path (t3204) (#21918)
+- switch check-pr concurrency to cancel-in-progress: true
+- extend WORKER_PROCESS_PATTERN with bash for test bash-runner liveness (#21932)
+
+## [3.13.16] - 2026-04-30
+
+### Changed
+
+- pulse: filter sidecar plists from main-pulse PILE-UP threshold (#21917)
+- Maintenance: sync ref:GH#21923 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21921 to TODO.md [skip ci]
+
+### Fixed
+
+- default auto-release ON for AI agent interactive sessions (t3205) (#21920)
+
+## [3.13.15] - 2026-04-30
+
+### Changed
+
+- status: threshold-based PILE-UP detection (#21911)
+- Maintenance: sync ref:GH#21913 to TODO.md [skip ci]
+- Maintenance: mark t3202 complete (pr:#21909 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21910 to TODO.md [skip ci]
+- Maintenance: mark t3197 complete (pr:#21907 completed:2026-04-30) [skip ci]
+- add per-issue dispatch cooldown after no-worker-process launch failures (#21907)
+
+### Fixed
+
+- make _update_json_version_field race-resistant (#21909)
+
+## [3.13.14] - 2026-04-30
+
+### Added
+
+- t3192 stuck auto_merge fallback to --admin direct merge (#21906)
+
+### Changed
+
+- Maintenance: mark t3192 complete (pr:#21906 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21905 to TODO.md [skip ci]
+- Maintenance: mark t3195 complete (pr:#21902 completed:2026-04-30) [skip ci]
+- fix worker output classification using --head not --search (#21902)
+
+## [3.13.13] - 2026-04-30
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Maintenance: mark t3086 complete (pr:#21898 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21901 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21900 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21895 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21889 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21888 to TODO.md [skip ci]
+- add configurable runner label to reusable workflows via repos.json (#21879)
+- Maintenance: mark t3090 complete (pr:#21884 completed:2026-04-30) [skip ci]
+- fix 4 pre-existing test failures in test-pulse-wrapper-worker-count.sh
+- Maintenance: offline claim t3191..t3191 [offline]
+
+### Fixed
+
+- parent-side lifecycle observer emits worker_exited for detached workers (#21885)
+
+## [3.13.12] - 2026-04-30
+
+### Added
+
+- t3063 extend crypto-approval bypass to deterministic merge cascade (#21827)
+
+### Changed
+
+- Maintenance: mark t3077 complete (pr:#21878 completed:2026-04-30) [skip ci]
+- LLM-driven fix-the-fixer detector + worker observability (#21878)
+- Maintenance: sync ref:GH#21873 to TODO.md [skip ci]
+- Maintenance: mark t3084 complete (pr:#21872 completed:2026-04-30) [skip ci]
+- Maintenance: mark t3089 complete (pr:#21869 completed:2026-04-30) [skip ci]
+- route progress/idle-resume markers from PULSE_WATCHDOG_LOG to LIFECYCLE_LOG (#21869)
+- Maintenance: mark t3071 complete (pr:#21867 completed:2026-04-30) [skip ci]
+- Maintenance: mark t3015 complete (pr:#21871 completed:2026-04-30) [skip ci]
+- codify watchdog self-write anti-pattern in shell style guide (#21867)
+- rename dispatch_floor / dispatch_max + back-compat env aliases (#21871)
+- Maintenance: mark t3076 complete (pr:#21863 completed:2026-04-30) [skip ci]
+- auto-file root-cause meta-issues on circuit-breaker trips (#21863)
+- Maintenance: sync ref:GH#21868 to TODO.md [skip ci]
+- Instrument all gh shim exec paths for full GraphQL budget visibility (#21866)
+- Add multi-account gopass secret template for Meta Ads CLI
+- Maintenance: mark t3085 complete (pr:#21864 completed:2026-04-30) [skip ci]
+- init pre-existing local-var declarations in pulse-wrapper.sh + bootstrap (#21864)
+- Maintenance: mark t3080 complete (pr:#21859 completed:2026-04-30) [skip ci]
+- cross-link meta-ads-tooling-cli.md from ABO and metrics docs (#21859)
+- Maintenance: mark t3075 complete (pr:#21835 completed:2026-04-30) [skip ci]
+- Maintenance: mark t3074 complete (pr:#21834 completed:2026-04-30) [skip ci]
+- Maintenance: sync ref:GH#21844 to TODO.md [skip ci]
+- Maintenance: mark t3078 complete (pr:#21845 completed:2026-04-30) [skip ci]
+- claim-task-id dedup searches open issues in addition to PRs (#21835)
+- fix duplicate Code Audit Routines dashboard issues — fail-closed dedup + title-prefix fallback + self-healing sweep (#21834)
+- add Meta Ads CLI tooling doc to meta-ads agent (#21845)
+- Maintenance: mark t3081 complete (pr:#21851 completed:2026-04-30) [skip ci]
+- fix: worker exit classifier propagates SIGTERM/zero-session via wait_status sentinel + NMR escalation (#21825)
+- document multi-account naming convention for secrets (#21851)
+- Maintenance: mark t3068 complete (pr:#21854 completed:2026-04-30) [skip ci]
+- kick pulse-merge after sudo aidevops approve (#21854)
+- Maintenance: mark t3067 complete (pr:#21833 completed:2026-04-30) [skip ci]
+- Maintenance: mark t3082 complete (pr:#21852 completed:2026-04-30) [skip ci]
+- skip status:available on closed issues in release command (#21833)
+- Maintenance: sync ref:GH#21855 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21853 to TODO.md [skip ci]
+- guard PyYAML import; fix BSD sed non-greedy regex in localdev/loop helpers (#21839)
+- Maintenance: sync ref:GH#21849 to TODO.md [skip ci]
+- add image size guard to prevent session-crashing 5MB uploads
+- Maintenance: sync ref:GH#21841 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21840 to TODO.md [skip ci]
+- Maintenance: mark t3072 complete (pr:#21829 completed:2026-04-30) [skip ci]
+- split headless-runtime-helper.sh into focused sub-modules
+- runtime-health-audit routine surfaces operational regressions in interactive sessions
+- Maintenance: sync ref:GH#21831 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21830 to TODO.md [skip ci]
+- Maintenance: mark t3050 complete (pr:#21816 completed:2026-04-30) [skip ci]
+- skip consolidation when parent already resolved (#21816)
+- Maintenance: mark t3073 complete (pr:#21823 completed:2026-04-29) [skip ci]
+- restore +x on worktree-helper.sh orchestrator (#21823)
+- enforce canonical-workspace protection for Edit|Write across all default-branch names (#21824)
+
+### Fixed
+
+- use merge-base for pulse-unbound-var-check diff extraction (#21872)
+- route informational writes away from monitored LOGFILE (#21850)
+- bash 3.2 heredoc apostrophe in counter-trend-delta.sh (#21852)
+
+## [3.13.11] - 2026-04-30
+
+### Added
+
+- add stat portability CI gate (GH#21746) (#21777)
+- add runaway-log self-healing detector (GH#21756) (#21766)
+- split headless-runtime-helper.sh into focused sub-modules (#21728)
+- add portable-stat.sh with capability detection, wire into shared-constants.sh (#21642)
+- webhook-driven pulse-merge for sub-30s latency (t3038) (#21657)
+- split code-audit-helper.sh into orchestrator + 3 sub-libraries (#21722)
+- split email-agent-helper.sh into focused sub-modules (#21725)
+- split site-crawler-helper.sh into orchestrator + 3 sub-libraries (#21719)
+- t3043 per-sub-stage timing + parallel API calls in dedup_check (#21662)
+- extend gh PATH shim with GraphQL→REST read routing (t3037) (#21648)
+- split keyword-research-helper.sh into orchestrator + 3 sub-libraries (#21684)
+- split ip-reputation-helper.sh into orchestrator + 4 sub-libraries (#21688)
+- extend worktree exclusions to Linux indexers (tracker3, baloo) (#21702)
+- t2916 honour interactive-session claim stamps in worktree sweep (GH#21074) (#21705)
+- add _resolve_log_dir to shared-constants.sh, replace hardcoded log paths in runners (#21701)
+- split memory-embeddings-helper.sh into orchestrator + 2 sub-libraries (#21686)
+
+### Changed
+
+- Maintenance: sync ref:GH#21820 to TODO.md [skip ci]
+- split pulse-dispatch-engine.sh into orchestrator + sub-libraries (recovery) (#21815)
+- split worktree-helper.sh into focused sub-modules (#21741)
+- Maintenance: mark t3070 complete (pr:#21812 completed:2026-04-29) [skip ci]
+- Native GitHub auto-merge fast-track for sub-30s green-to-merged latency (#21812)
+- Maintenance: sync ref:GH#21811 to TODO.md [skip ci]
+- Maintenance: mark t3064 complete (pr:#21800 completed:2026-04-29) [skip ci]
+- Maintenance: mark t3065 complete (pr:#21802 completed:2026-04-29) [skip ci]
+- Maintenance: mark t3062 complete (pr:#21804 completed:2026-04-29) [skip ci]
+- add trusted-issue-author allowlist to bypass t2449 gate for peer-runner-filed issues (#21804)
+- Maintenance: sync ref:GH#21807 to TODO.md [skip ci]
+- Maintenance: mark t3059 complete (pr:#21796 testing:runtime-verified)
+- walk full process-tree (BFS) in _watchdog_tree_cpu (#21796)
+- Maintenance: add TODO entries for t3066/t3068/t3069 (lost to t3069 bug) (#21808)
+- Maintenance: mark t3060 complete (pr:#21794 completed:2026-04-29) [skip ci]
+- enum-prefix kill_reason for deterministic classification (#21794)
+- Maintenance: mark t3063 complete (pr:#21795 completed:2026-04-29) [skip ci]
+- Maintenance: sync ref:GH#21801 to TODO.md [skip ci]
+- add kill_reason field to worker_exited lifecycle line (#21795)
+- Maintenance: mark t3058 complete (pr:#21797 testing:runtime-verified)
+- Maintenance: sync ref:GH#21798 to TODO.md [skip ci]
+- Maintenance: mark t3052 complete (pr:#21767 completed:2026-04-29) [skip ci]
+- extend t2449 worker-briefed auto-merge gate to honour cryptographic approval as OWNER/MEMBER bypass (#21767)
+- fix jq ARG_MAX overflow — pass checks_json via stdin instead of --argjson (#21778)
+- Maintenance: mark t3057 complete (pr:#21792 completed:2026-04-29) [skip ci]
+- replace lifetime-avg CPU with interval-sampled delta in _watchdog_tree_cpu (#21792)
+- Maintenance: sync ref:GH#21789 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21787 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21786 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21785 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21781 to TODO.md [skip ci]
+- fix(pulse): stop OpenCode JSON event stream from contaminating pulse.log (#21780)
+- Maintenance: mark t3046 complete (pr:#21777 completed:2026-04-29) [skip ci]
+- Maintenance: mark t3044 complete (pr:#21775 completed:2026-04-29) [skip ci]
+- add server-side issue dedup to issue-sync-reusable.yml (#21775)
+- Maintenance: mark t3049 complete (pr:#21768 completed:2026-04-29) [skip ci]
+- Maintenance: mark t3054 complete (pr:#21769 completed:2026-04-29) [skip ci]
+- auto-notify stale-recovery NMR when subsequent worker produces approved PR (#21768)
+- clean up stale stat comments, add pre-commit gate for raw stat usage (#21759)
+- Maintenance: sync ref:GH#21763 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21762 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21761 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21755 to TODO.md [skip ci]
+- portable-stat: add _stat_batch, refactor wrappers, fix generate-skills.sh Linux crash (#21743)
+- surface workflow template drift on aidevops update (#21749)
+- Maintenance: sync ref:GH#21754 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21753 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21752 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21748 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21747 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21746 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21745 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21744 to TODO.md [skip ci]
+- Maintenance: mark t2982 complete (pr:#21727 completed:2026-04-29) [skip ci]
+- fix worker output classification to follow worker (Mode B/C) (#21727)
+- Maintenance: mark t3038 complete (pr:#21657 completed:2026-04-29) [skip ci]
+- Refactor: split generate-opencode-commands.sh into orchestrator + 6 sub-libraries (#21721)
+- Refactor: split test-encryption-git-roundtrip.sh into orchestrator + 4 sub-libraries (#21724)
+- Refactor: split self-evolution-helper.sh into 6 focused sub-modules (#21726)
+- harden anti-detect helpers against code injection (#21720)
+- reconcile pulse lock-file paths, improve subshell filter and status message (#21661)
+- Maintenance: mark t2880 complete (pr:#21664 completed:2026-04-29) [skip ci]
+- feat(setup-debt): detect cross-account secrets:inherit in issue-sync.yml (#21664)
+- harden knowledge search find pipelines under pipefail (#21706)
+- Refactor: split pulse-issue-reconcile.sh into focused sub-modules (1718->1162 lines) (#21710)
+- Maintenance: mark t3041 complete (pr:#21711 completed:2026-04-29) [skip ci]
+- add timeout ceiling to pulse-merge-routine (Bug 3 of GH#21616) (#21711)
+- pulse: split merge pass into dedicated 60s launchd plist via --merge-only (#21712)
+- Refactor: split stats-health-dashboard.sh into orchestrator + 2 sub-libraries (#21713)
+- Maintenance: mark t3022 complete (pr:#21715 completed:2026-04-29) [skip ci]
+- cap concurrent opus-4-6 dispatches to prevent rate-limit cascade (#21715)
+- Maintenance: mark t3037 complete (pr:#21648 completed:2026-04-29) [skip ci]
+- Maintenance: mark t3039 complete (pr:#21655 completed:2026-04-29) [skip ci]
+- REST-aware issue creation in claim-task-id.sh and issue-sync-helper-push.sh (#21655)
+- Maintenance: mark t3030 complete (pr:#21663 completed:2026-04-29) [skip ci]
+- fix 7 pulse-merge regression tests broken by sub-module split (#21663)
+- consistent commit-body style in sync-workflows-helper (#21691)
+- fix source_pdf fallback for empty strings and content_hash for headingless docs (#21693)
+- pre-compute _canon_norm once per workflow type in _process_rows (#21694)
+- fix blocked-by:GH#NNN regex, treat failed auto-create as validation error (#21695)
+- Maintenance: mark t2993 complete (pr:#21703 completed:2026-04-29) [skip ci]
+- fix(task-id-guard): word-boundary regex to avoid false positives on subagent names like context7 (#21703)
+- Maintenance: mark t2916 complete (pr:#21705 completed:2026-04-29) [skip ci]
+- add stale-UU recovery branch to pulse-canonical-recovery (#21704)
+- Performance: use bash parameter expansion instead of tr in _dt_json_field numeric path (#21698)
+- Maintenance: mark t2917 complete (pr:#21701 completed:2026-04-29) [skip ci]
+- replace inline stat -f/-c patterns with portable functions across 58 scripts (#21689)
+- fix(claim-task-id): update fallback to (no title), remove dead LONG_DESC
+- split document-creation-helper.sh into focused sub-modules (#21683)
+- split gh-signature-helper.sh into focused sub-modules (#21687)
+- fix conversation-helper review followup — JSON empty guard, query elim, sed combine (#21678)
+- Refactor: split auto-update-helper.sh into focused sub-modules (#21685)
+- Refactor: split browser-qa-helper.sh (1600 lines) into orchestrator + 3 sub-libraries (#21682)
+- replace timeout with timeout_sec in pulse canary check (#21673)
+- use project cleanup pattern for mktemp in transport_matrix_send (#21676)
+- Refactor: split email-health-check-helper.sh into orchestrator + 3 sub-libraries (#21681)
+- harden campaign-helper.sh per gemini review feedback (#21675)
+- fix review-bot-gate commit status posting to restore branch protection contract (#21674)
+- feat: per-worktree preview subdomains via local proxy (#21666)
+
+### Fixed
+
+- skill freshness writes to canonical AGENTS_DIR, not cwd; pass --name on update; fix systemd WorkingDirectory (#21696)
+- GH#21717 normalize issue state to uppercase before dispatch check (#21718)
+- add sleep guard and stale-PID purge to _dff_dispatch_loop_parallel wait -n loop (#21764)
+- extract issue num via URL pattern, immune to stderr log lines (GH#21770) (#21771)
+- use gh_issue_edit_safe in remaining hot-path body updates (GH#21798) (#21800)
+- use gh_issue_edit_safe for body updates (#21733)
+- t3058: route worker stall defer marker to LIFECYCLE_LOG (not OUTPUT_FILE) (#21797)
+- remove redundant group timeout from preflight_early_dispatch (t3054) (#21769)
+- use _resolve_worktree_owner_pid in is_worktree_owned_by_others (#21772)
+- skip sudo-requiring tool updates with manual instructions (GH#21734) (#21773)
+- add is_registered_canonical guard + audit log on ephemeral worktree cleanup (#21716)
+- replace jq-in-loop with single jq --slurp pass in _collect_excerpts_via_search (#21739)
+- source portable-stat.sh before pre-jitter fast-fail in pulse-wrapper.sh (#21732)
+- strip tNNN: prefix in TODO line to prevent doubling (GH#21723) (#21731)
+- relax brew category gate so brew-origin tools check on Linux (#21709)
+- address gemini review feedback on upstream-watch-helper-issues.sh (#21667)
+- wrap script_path in escaped double quotes in systemd ExecStart for space-safe paths (#21672)
+- apply optional operator to nested jq fields in gh-status-helper (#21690)
+- guard NextElapse grep against systemd 255 rename (#21700)
+- guard log_worktree_removal_event stub with command -v check (#21677)
+- campaign-asset-helper.sh jq robustness and asset_id uniqueness (#21680)
+
+## [3.13.10] - 2026-04-29
+
+### Changed
+
+- Maintenance: mark t3043 complete (pr:#21660 completed:2026-04-29) [skip ci]
+- raise per-candidate timeout floor 360s -> 600s (#21660)
+- Maintenance: sync ref:GH#21658 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21656 to TODO.md [skip ci]
+- fix pulse-merge-routine bootstrap (Bug 1+2) (#21643)
+- Refactor: split issue-sync-helper.sh (1839 lines) into orchestrator + 5 sub-modules (#21639)
+
+## [3.13.9] - 2026-04-29
+
+### Added
+
+- orphan worker reaper for workers whose parent pulse died (#21624)
+
+### Changed
+
+- Maintenance: mark t3040 complete (pr:#21638 completed:2026-04-29) [skip ci]
+- drop t2955 already-committed cache from dispatch hot path (#21638)
+- Maintenance: sync ref:GH#21629 to TODO.md [skip ci]
+- add screenshot-import-helper.sh for macOS U+202F filename bug
+- Maintenance: mark t3033 complete (pr:#21619 completed:2026-04-29) [skip ci]
+- pulse-wrapper self-respawn on source mtime change (#21619)
+- Maintenance: mark t3034 complete (pr:#21620 completed:2026-04-29) [skip ci]
+- add per-stage ceremony timing instrumentation for dispatch pipeline (#21620)
+- Maintenance: mark t3013 complete (pr:#21612 completed:2026-04-29) [skip ci]
+- Maintenance: mark t3031 complete (pr:#21610 completed:2026-04-29) [skip ci]
+- fix _pulse_pids false positive — filter pgrep to non-pulse-parent processes (#21612)
+- seal _dff_dispatch_loop_parallel subshell stdout to fix dispatch counter (#21610)
+- Maintenance: sync ref:GH#21616 to TODO.md [skip ci]
+- Maintenance: mark t3032 complete (pr:#21614 completed:2026-04-29) [skip ci]
+- reconcile pulse-health.json workers_active with dispatch ledger (#21614)
+- Maintenance: mark t3021 complete (pr:#21615 completed:2026-04-29) [skip ci]
+- detect Anthropic 429 within first 30s, exit cleanly (GH#21578) (#21615)
+- Maintenance: mark t3020 complete (pr:#21613 completed:2026-04-29) [skip ci]
+- add brief-filename-guard pre-commit hook to block unclaimed t-IDs in brief filenames (#21613)
+
+### Fixed
+
+- stat -f Linux compat in pulse-wrapper-cycle.sh (GH#21618) (#21621)
+
+## [3.13.8] - 2026-04-29
+
+### Added
+
+- split full-loop-helper.sh into orchestrator + 3 sub-libraries (#21594)
+- split smartlead-helper.sh into focused sub-modules (#21590)
+- split security-posture-helper.sh into orchestrator + 2 sub-libraries (#21592)
+
+### Changed
+
+- Maintenance: update simplification state registry
+- support multiple heading variants for completion section
+- route gh issue view through wrapper + top-of-cycle GraphQL skip (#21606)
+- Maintenance: mark t3027 complete (pr:#21596 completed:2026-04-29) [skip ci]
+- idle backoff + budget-aware throttle + telemetry fixes for pulse cycle (#21596)
+- Maintenance: sync ref:GH#21608 to TODO.md [skip ci]
+- split generate-runtime-config.sh into focused sub-modules (#21591)
+- Refactor: split pulse-merge.sh into focused sub-modules (GH#21301) (#21595)
+- Refactor: split pulse-simplification.sh into focused sub-modules (GH#21306) (#21593)
+- Refactor: split contest-helper.sh (1639 lines) into orchestrator + 5 sub-libraries (#21589)
+- Maintenance: mark t3028 complete (pr:#21588 completed:2026-04-28) [skip ci]
+- Maintenance: mark t3025 complete (pr:#21587 completed:2026-04-28) [skip ci]
+- Maintenance: sync ref:GH#21586 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21583 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21581 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21580 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21579 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21578 to TODO.md [skip ci]
+- Maintenance: mark t2830 complete (pr:#21577 completed:2026-04-28) [skip ci]
+- pulse: L1 events-ETag tickle layer above batch prefetch (#21577)
+- Maintenance: sync ref:GH#21576 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21575 to TODO.md [skip ci]
+
+### Fixed
+
+- guard jq startswith() against null inputs (t3025) (#21597)
+- repoint approve_collaborator_pr extract to pulse-merge-gates.sh (#21609)
+- make SCRIPT_DIR resolution unconditional in schedulers.sh (#21588)
+- floor per-candidate fill_floor timeout at 360s to unblock dispatch (#21585)
+
+## [3.13.7] - 2026-04-28
+
+### Added
+
+- split add-skill-helper.sh into orchestrator + 3 sub-libraries (#21565)
+- split memory/maintenance.sh into focused sub-modules (GH#21332) (#21564)
+- split stats-quality-sweep.sh into focused sub-modules (#21562)
+
+### Changed
+
+- Maintenance: mark t3018 complete (pr:#21572 completed:2026-04-28) [skip ci]
+- self-heal stale rate-limit stamp when no live pulse lock holder (#21572)
+- split contributor-activity-helper.sh into focused sub-modules (#21574)
+- split shared-gh-wrappers.sh into focused sub-modules (#21561)
+- Maintenance: mark t3017 complete (pr:#21569 completed:2026-04-28) [skip ci]
+- add aidevops circuit-breaker CLI subcommand (#21569)
+- Maintenance: sync ref:GH#21570 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21567 to TODO.md [skip ci]
+- Maintenance: mark t3014 complete (pr:#21554 completed:2026-04-28) [skip ci]
+- default fill-floor parallelism to effective_slots (#21554)
+- Refactor: split pulse-triage.sh into orchestrator + 3 sub-libraries (#21558)
+- Refactor: split interactive-session-helper.sh into orchestrator + 4 sub-libraries (GH#21320) (#21559)
+- Maintenance: sync ref:GH#21557 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21555 to TODO.md [skip ci]
+- split pulse-wrapper.sh into bootstrap+cycle sub-libraries (#21553)
+- Refactor: split issue-sync-lib.sh (1645 lines) into orchestrator + 3 sub-modules (#21552)
+- Maintenance: sync ref:GH#21551 to TODO.md [skip ci]
+- Maintenance: mark t3012 complete (pr:#21550 completed:2026-04-28) [skip ci]
+- fix bash 3.2 violations in compare-models-scoring-lib + document-creation-helper (#21550)
+- Maintenance: sync ref:GH#21549 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21540 to TODO.md [skip ci]
+
+### Fixed
+
+- evaluate source check at top-level + seed canary test config (#21566)
+- correct t2980 typo to t2983 in fatal error message (#21548)
+- GH#21505 clear _VALIDATE_OC_VERSION on early return, reuse cached version in canary failure path (#21545)
+
+## [3.13.6] - 2026-04-28
+
+### Added
+
+- split mail-helper.sh into orchestrator + 3 sub-libraries (#21529)
+- t2965 _campaigns/ P4 — asset binary integration (30MB routing + thumbnail previews) (#21523)
+
+### Changed
+
+- Refactor: split upstream-watch-helper.sh into focused sub-modules (#21530)
+- Refactor: split anti-detect-helper.sh into focused sub-modules (#21528)
+- Performance: batch jq/grep invocations in knowledge search helpers (#21539)
+- strip framework task IDs from consumer-repo commit/PR bodies in sync-workflows-helper and badges-sync-helper (#21534)
+- add fallback guards for audit-worktree-removal-helper sourcing (#21532)
+- split conversation-helper.sh into focused sub-modules (#21526)
+- split linters-local.sh into focused sub-modules (#21527)
+- Maintenance: mark t2976 complete (pr:#21521 completed:2026-04-28) [skip ci]
+- document intentional scope of worktree-removal audit tests (#21521)
+- Maintenance: mark t3011 complete (pr:#21524 completed:2026-04-28) [skip ci]
+- fix bash 3.2 compat — convert local -n namerefs in compare-models libs (#21524)
+
+### Fixed
+
+- use jq optional operator .incidents[]? to handle null/missing key (#21533)
+- use grep -oE in _dt_json_field to avoid greedy-prefix matching (#21538)
+- drop broken TSV transport in _resolve_wf_canonical, add classifier regression tests (#21537)
+- add fallback stubs before audit-worktree-removal-helper.sh source to guard set -u (#21525)
+- use title not description in _ensure_todo_entry_written (#21535)
+- auto-create blocked-by:tNNN labels in pre-flight validation (GH#21474) (#21536)
+- pass source_pdf to build_headingless_result and simplify redundant conditional (#21531)
+
+## [3.13.5] - 2026-04-28
+
+### Changed
+
+- Maintenance: mark t3003 complete (pr:#21435 completed:2026-04-28) [skip ci]
+- adaptive per-candidate dispatch timeout (#21435)
+- Maintenance: sync ref:GH#21434 to TODO.md [skip ci]
+
+## [3.13.4] - 2026-04-28
+
+### Changed
+
+- Documentation: changelog v3.13.4 — t2999/t3000/t3001 trilogy + t2995/t2996/t2997 [skip ci]
+- Maintenance: mark t3001 complete (pr:#21432 completed:2026-04-27) [skip ci]
+- Maintenance: mark t3000 complete (pr:#21430 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2999 complete (pr:#21428 completed:2026-04-27) [skip ci]
+- gh-status-helper for incident detection + recovery runbook (#21432)
+- dispatch-single-issue-helper: apply pulse-parity ceremony pre-launch (#21430)
+- dispatch-ledger-helper stale-lock recovery (#21428)
+- Maintenance: sync ref:GH#21433 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21431 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21429 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21427 to TODO.md [skip ci]
+- Maintenance: mark t2996 complete (pr:#21410 completed:2026-04-27) [skip ci]
+- perf: t2996 reduce dispatch_with_dedup gh-call count from 10-15 to 1-3 (#21410)
+- Maintenance: mark t2997 complete (pr:#21421 completed:2026-04-27) [skip ci]
+- fix BSD-incompatible mktemp templates (XXXXXX before .ext) (#21421)
+- Maintenance: mark t2995 complete (pr:#21424 completed:2026-04-27) [skip ci]
+- Maintenance: sync ref:GH#21408 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21407 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21406 to TODO.md [skip ci]
+
+### Fixed
+
+- distinguish file-size-debt dedup lookup-failure from no-match (#21424)
+
+## [3.13.4] - 2026-04-27
+
+### Fixed
+
+- t2999 — dispatch-ledger-helper stale-lock recovery: 24-day-old lock dir was silently disabling all worker registration (`mkdir` retry loop returned rc=1 every dispatch). Replaces busy-wait with stale-detection (PID-alive + age-threshold force-reclaim, mirroring `pulse-instance-lock.sh` pattern). All workers now visible to ledger. (#21428)
+- t3000 — dispatch-single-issue-helper: apply pulse-parity ceremony pre-launch. Manual workers now receive `status:in-progress` label transition (replacing `status:queued`), claim stamp via `interactive-session-helper.sh write-stamp`, and dispatch-ledger registration before the worker process starts. Closes the dispatch-double-launch race window where the pulse could spawn a duplicate worker on top of a manually-launched one. `--no-ceremony` opt-out preserved for smoke-testing. (#21430)
+- t2996 — perf: reduce `dispatch_with_dedup` gh-call count from 10-15 to 1-3 by passing already-loaded metadata through downstream gates. Eliminates the t2989 30s per-candidate timeout cliff (37 timeout events / 24h pre-fix → near-zero). (#21410)
+- t2997 — fix BSD-incompatible mktemp templates (`XXXXXX` placed before file extension): ~17 production callsites + new CI lint gate. macOS `mktemp` returned the literal template name on the first call, then failed `mkstemp: File exists` on subsequent calls — silently breaking `update_repo_tier_check_timestamp`, browser-qa screenshots, codacy collectors, and pulse-stats persistence. (#21421)
+- t2995 — distinguish file-size-debt dedup lookup-failure from no-match. The large-file-simplification-gate scanner was creating duplicate `file-size-debt:` issues when `gh_issue_list` timed out silently and returned empty. Now treats timeout/error as "abort dedup, do not file" rather than "no match, file new". (#21424)
+
+### Added
+
+- t3001 — `gh-status-helper.sh` for GitHub incident detection (`check`/`incidents`/`correlate` subcommands) with 60s Statuspage cache and exit-code semantic mapping (operational/degraded/outage/unknown). New incident-recovery runbook at `.agents/reference/incident-recovery-runbook.md` cross-linking pulse-lock-recovery and t2999/t3000 procedures. Filed during recovery from a real-world GitHub search-degradation incident that exposed the dispatch-helper gaps the rest of this release fixes. (#21432)
+
+## [3.13.3] - 2026-04-27
+
+### Changed
+
+- Maintenance: mark t2991 complete (pr:#21397 completed:2026-04-27) [skip ci]
+- fix subagent permission.task entries (4 broken keys + missing Product allowlist) (#21397)
+- Maintenance: mark t2994 complete (pr:#21405 completed:2026-04-27) [skip ci]
+- move cache priming from lifecycle-helper into pulse-wrapper main (#21405)
+- Maintenance: sync ref:GH#21404 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21402 to TODO.md [skip ci]
+
+## [3.13.2] - 2026-04-27
+
+### Added
+
+- t2964 — add competitive sensitivity tier + _campaigns/intel/ enforcement (#21400)
+
+### Changed
+
+- Maintenance: mark t2989 complete (pr:#21385 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2962 complete (pr:#21396 completed:2026-04-27) [skip ci]
+- per-candidate timeout in dispatch_deterministic_fill_floor (#21385)
+- _campaigns/ directory contract + sub-folder structure (#21396)
+- Maintenance: mark t2992 complete (pr:#21398 completed:2026-04-27) [skip ci]
+- pre-warm pulse caches before restart to eliminate first-cycle stage cost (#21398)
+- Maintenance: mark t2964 complete (pr:#21400 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2963 complete (pr:#21393 completed:2026-04-27) [skip ci]
+- campaign CLI P2 — new/list/status/archive + campaign-id provisioning (#21393)
+- Maintenance: mark t2985 complete (pr:#21392 completed:2026-04-27) [skip ci]
+- batch _action_oimp_single search per-repo to eliminate per-issue gh API calls (#21392)
+- Maintenance: sync ref:GH#21394 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- split pulse-issue-reconcile.sh into 3 focused files (2527→1640 lines) (#21388)
+- fix reconcile_issues_single_pass budget regression (540s→360s) (#21384)
+- Maintenance: sync ref:GH#21383 to TODO.md [skip ci]
+- Maintenance: mark t2987 complete (pr:#21382 completed:2026-04-27) [skip ci]
+- add pattern-aware conflict resolution guidance to conflict-feedback brief (#21382)
+- Maintenance: file t2988 P0 — t2984 regression, dedupe t2987 entry (Ref #21380)
+- Maintenance: file t2987 — pattern-aware conflict resolution guidance (Ref #21379)
+- Maintenance: sync ref:GH#21379 to TODO.md [skip ci]
+
+## [3.13.1] - 2026-04-27
+
+### Added
+
+- make worktree pre-creation failures observable (t2981) (#21359)
+- add markdoc-extract.sh — tag-stripped text + JSON tags sidecar (t2970, GH#21258) (#21358)
+- add badges CLI subcommand + init hook + cross-repo drift detection (t2975) (#21340)
+- convert file-size gate from absolute count to ratchet-based (t2938) (#21346)
+- t2968 Markdoc schema conformance validator + pre-commit hook + CI gate (#21350)
+- Ollama chat/embed/health/privacy-check + bundle + tests (#21217)
+- atomic stamp on _auto_assign_issue + parent-task skip (#21207)
+- case draft agent with RAG, provenance, and cross-case firewall (#21194)
+- peer-productivity-monitor — observe origin:worker claims for broken-peer detection (#21193)
+
+### Changed
+
+- Maintenance: mark t2986 complete (pr:#21378 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2986 complete (pr:#21378 completed:2026-04-27) [skip ci]
+- Maintenance: sync ref:GH#21377 to TODO.md [skip ci]
+- Maintenance: mark t2984 complete (pr:#21374 completed:2026-04-27) [skip ci]
+- time-budget early-exit for reconcile_issues_single_pass (#21374)
+- Maintenance: sync ref:GH#21375 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21373 to TODO.md [skip ci]
+- add canonical audit logging at every worktree-removal event (#21372)
+- Maintenance: mark t2983 complete (pr:#21371 completed:2026-04-27) [skip ci]
+- Fix C — resolve V6 headless contract worktree contradiction (#21371)
+- tighten return type hints in email_poll.py helper functions (#21368)
+- Maintenance: mark t2977 complete (pr:#21366 completed:2026-04-27) [skip ci]
+- t2874 Phase 6: knowledge search tag-attribute filters + case-scoped draft RAG (#21366)
+- Maintenance: mark t2981 complete (pr:#21359 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2974 complete (pr:#21343 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2972 complete (pr:#21365 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2970 complete (pr:#21358 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2851 complete (pr:#21245 completed:2026-04-27) [skip ci]
+- guard nohup log redirection against unwritable path (#21236)
+- add ownership guards and fixture path-shape assertions at worktree-removal call sites (#21343)
+- PageIndex Phase 5 — lift Markdoc tag attributes into tree node metadata (#21365)
+- Maintenance: mark t2915 complete (pr:#21292 completed:2026-04-27) [skip ci]
+- decompose knowledge_index_helpers.py to reduce qlty smells to 0 (#21246)
+- case dossier contract + aidevops case open (#21245)
+- split schedulers.sh (2754→539 lines) into 3 focused sub-libraries (#21342)
+- fix line-continuation regex bug in stage-wiring test (#21292)
+- Maintenance: mark t2979 complete (pr:#21360 completed:2026-04-27) [skip ci]
+- Maintenance: ratchet QLTY_SMELL_THRESHOLD 37→34 (-3) [skip ci]
+- decompose email_poll.py to eliminate 4 qlty smells (#21361)
+- gh comment renderer — strip/annotate Markdoc tags in PR/issue output (#21360)
+- Maintenance: mark t2969 complete (pr:#21351 completed:2026-04-27) [skip ci]
+- _campaigns/ P6 — performance integration + learnings promotion (#21351)
+- Maintenance: mark t2971 complete (pr:#21357 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2980 complete (pr:#21352 completed:2026-04-27) [skip ci]
+- t2874 Phase 4: source.md migration tool and backwards-compat reader (#21357)
+- Maintenance: mark t2938 complete (pr:#21346 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2968 complete (pr:#21350 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2831 complete (pr:#21347 completed:2026-04-27) [skip ci]
+- Maintenance: sync ref:GH#20980 to TODO.md [skip ci]
+- Maintenance: mark t2879 complete (pr:#21244 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2839 complete (pr:#21249 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2837 complete (pr:#21242 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2907 complete (pr:#21278 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2854 complete (pr:#21265 completed:2026-04-27) [skip ci]
+- Add watchdog hard-kill threshold to bound worker_stall_continue drain (#21271)
+- Maintenance: decompose #21040 — add t2980 investigation child (Resolves #21220)
+- pulse: per-repo adaptive cadence (hot/warm/cold tiers)
+- decompose t2874 Markdoc tag format into 7 phase children
+- Maintenance: decompose t2936 into 53 file-split children (Resolves #21156)
+- docs(README): add per-repo platform setup section pointing to /setup-git (#21244)
+- Maintenance: mark t2961 complete (pr:#21241 completed:2026-04-27) [skip ci]
+- dispatch-issue CLI status PID liveness + model inference alignment (#21249)
+- fix: validator robustness — timeout guard, git add -u, mktemp portability, detection alignment
+- fix batch jq delimiter, missing input redirection, and base64 portability in reconcile_issues_single_pass (#21241)
+- fix generate-runtime-config.sh stat portability and redundant hash recompute (#21237)
+- Maintenance: mark t2894 complete (pr:#21243 completed:2026-04-27) [skip ci]
+- document BSD awk and ratchet hazards in reference docs (#21242)
+- Maintenance: decompose t2907 (#21055) into 3 child phases — add t2973/t2974/t2976 to TODO.md (For #21055, Resolves #21219) (#21278)
+- add .eml/.emlx ingestion handler (kind=email) for knowledge plane
+- Maintenance: add t2962-t2969 _campaigns/ phase children to TODO.md (For #20929, Resolves #20963)
+- Maintenance: add t2961 to TODO.md ref:GH#21166 [skip ci]
+- fix review followup for t2902 instrumentation — printf builtin, slash-guard, prefetch dedup
+- enumerate all dispatch-dedup blockers in /full-loop gate
+- fix: use AGENTS_DIR for pulse helper path in cmd_update
+- Maintenance: mark t2947 complete (pr:#21234 completed:2026-04-27) [skip ci]
+- fix observability.mjs command injection and staleness robustness
+- fix orphan branch exit-code fallback in _handle_worker_branch_orphan
+- reduce FAST_FAIL_AGE_OUT_SECONDS default 86400→3600 (1h)
+- Maintenance: mark t2952 complete (pr:#21225 completed:2026-04-27) [skip ci]
+- qlty smell threshold history entry + deferred refactor follow-up issues (#21225)
+- Maintenance: mark t2853 complete (pr:#21221 completed:2026-04-27) [skip ci]
+- case milestone + deadline alarming routine (P4c) (#21221)
+- Maintenance: mark t2858 complete (pr:#21216 completed:2026-04-27) [skip ci]
+- case chase — template-only opt-in SMTP chaser for cases (#21216)
+- Maintenance: mark t2843 complete (pr:#21218 completed:2026-04-27) [skip ci]
+- knowledge CLI add/list/search + platform abstraction layer (#21218)
+- Maintenance: mark t2849 complete (pr:#21214 completed:2026-04-27) [skip ci]
+- kind-aware enrichment + structured field extraction (#21214)
+- Maintenance: mark t2848 complete (pr:#21217 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2949 complete (pr:#21211 completed:2026-04-27) [skip ci]
+- reduce parent-task advisory nudge threshold 24h→4h with env-controlled constants (#21211)
+- Maintenance: mark t2943 complete (pr:#21207 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2948 complete (pr:#21209 completed:2026-04-27) [skip ci]
+- reduce idle interactive PR handover threshold 24h→4h (IDLE_INTERACTIVE_HANDOVER_SECONDS) (#21209)
+- Maintenance: mark t2950 complete (pr:#21210 completed:2026-04-27) [skip ci]
+- raise MAX_WORKERS_CAP ceiling 32→64 in pulse-wrapper-config.sh (#21210)
+- Maintenance: sync GitHub issue refs to TODO.md [skip ci]
+- Maintenance: mark t2955 complete (pr:#21205 completed:2026-04-27) [skip ci]
+- cache _is_task_committed_to_main result via dispatch-blocked label (#21205)
+- Maintenance: mark t2954 complete (pr:#21204 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2953 complete (pr:#21203 completed:2026-04-27) [skip ci]
+- fix(_ff_with_lock): detect and clear orphan lockdirs with no owner.pid (#21203)
+- Maintenance: mark t2857 complete (pr:#21194 completed:2026-04-27) [skip ci]
+- Maintenance: sync ref:GH#21200 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21199 to TODO.md [skip ci]
+- fix settings namespace divergence: read orchestration.pulse_interval_seconds with supervisor.* fallback + schema + migration (#21196)
+- Maintenance: sync ref:GH#21197 to TODO.md [skip ci]
+- Maintenance: mark t2946 complete (pr:#21191 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2951 complete (pr:#21192 completed:2026-04-27) [skip ci]
+- Maintenance: scrub external account name from t2925 TODO entry (#21188)
+- fix settings namespace divergence: read orchestration.pulse_interval_seconds with supervisor.* fallback + schema + migration (#21191)
+- fix bounty-spam-auto-close gate — verdict-string instead of unreachable RC check (#21192)
+- Maintenance: mark t2846 complete (pr:#21195 completed:2026-04-27) [skip ci]
+- sensitivity classification schema + detector (#21195)
+- Maintenance: sync ref:GH#21186 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21181 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21180 to TODO.md [skip ci]
+- Maintenance: mark t2911 complete (pr:#21158 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2850 complete (pr:#21161 completed:2026-04-27) [skip ci]
+- add per-stage timing log to setup.sh non-interactive path (#21158)
+- PageIndex tree generation across corpus (#21161)
+- Maintenance: mark t2942 complete (pr:#21159 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2937 complete (pr:#21178 completed:2026-04-27) [skip ci]
+- reduce STAMPLESS_INTERACTIVE_AGE_THRESHOLD default from 24h to 1h (#21159)
+- make maintainer-gate.yml reusable + wire into check/sync-workflows (#21178)
+- Maintenance: mark t2944 complete (pr:#21165 completed:2026-04-27) [skip ci]
+- fix bash 3.2 heredoc-in-$() in bounty-spam-detector.sh (#21165)
+- Maintenance: sync ref:GH#21162 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21160 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21157 to TODO.md [skip ci]
+
+### Fixed
+
+- suppress 5 shellcheck false positives blocking release preflight (#21378)
+- robust version check and reduce redundant --version I/O in canary (#21369)
+- last-line read, ERE escaping, single-pass full-slug matching (#21367)
+- bias age-check failure toward reclaim path in is_running short-circuit (GH#20962) (#21281)
+- complexity advisory parser — one-liner and next-line brace (GH#20956) (#21282)
+- canonical caller templates use explicit secret pass-through (GH#20976) (#21345)
+- add mktemp -t template for BSD/macOS portability in probe functions (#21260)
+- GH#20954 — use jq fallback operator and SCRIPT_DIR in framework-routing-helper (#21279)
+- _pcr_sanitise_path path-boundary check prevents shared-prefix username leak (#21259)
+- add issue) dispatch case and help line to aidevops.sh (#21266)
+- remove stale line number ref from t2841 comment in pulse-issue-reconcile (#21262)
+- address gemini review feedback on t2913 gh-wrapper timeout changes
+- t2898-brief code samples — INTERVAL_MINUTES scope, arg preservation, idempotent stall check
+- nvm path discovery + product validation in pulse runtime resolver
+- use verdict string instead of RC in auto-close gate (#21190)
+- add setup_peer_productivity_monitor to interactive flow (#21164)
+
+## [3.13.0] - 2026-04-27
+
+### Added
+
+- pulse defense-in-depth restart reliability (#21155)
+
+### Changed
+
+- Maintenance: mark t2925 complete (pr:#21139 completed:2026-04-27) [skip ci]
+- add bounty-spam-detector for templated bot PRs (#21139)
+- Maintenance: mark t2929 complete (pr:#21153 completed:2026-04-27) [skip ci]
+- cut preflight_cleanup_and_ledger by ~47s — async DB archive + single-pass jq ledger (#21153)
+- Maintenance: mark t2931 complete (pr:#21142 completed:2026-04-27) [skip ci]
+- Maintenance: mark t2940 complete (pr:#21152 completed:2026-04-27) [skip ci]
+- fix 6 correctness bugs in email polling post-merge review (#21142)
+- Maintenance: mark t2934 complete (pr:#21144 completed:2026-04-27) [skip ci]
+- redact bad-actor identifiers from incident artifacts (#21152)
+- defense-in-depth admin-merge guard for external-contributor PRs (#21144)
+- Maintenance: mark t2939 complete (pr:#21155 completed:2026-04-27) [skip ci]
+- Maintenance: sync ref:GH#21154 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21150 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21149 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21148 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20972 to TODO.md [skip ci]
+- Maintenance: mark t2877 complete (pr:#21141 completed:2026-04-26) [skip ci]
+- Maintenance: mark t2928 complete (pr:#21143 completed:2026-04-26) [skip ci]
+- parse parent-task body cross-phase dep declarations into blocked-by markers (#21141)
+- Maintenance: mark t2847 complete (pr:#21138 completed:2026-04-26) [skip ci]
+- LLM routing helper + audit log (#21138)
+- Maintenance: mark t2845 complete (pr:#21140 completed:2026-04-26) [skip ci]
+- feat(t2845): knowledge review gate routine + NMR integration (#21140)
+- Maintenance: mark t2933 complete (pr:#21133 completed:2026-04-26) [skip ci]
+- harden approve_collaborator_pr against GH#17671 supply-chain class (#21133)
+- Maintenance: sync ref:GH#21134 to TODO.md [skip ci]
+- Maintenance: mark t2856 complete (pr:#21127 completed:2026-04-26) [skip ci]
+- email thread reconstruction + filter→case-attach (#21127)
+- Maintenance: sync ref:GH#21132 to TODO.md [skip ci]
+
+### Fixed
+
+- add missing icon_url_override column to archive.project schema (#21143)
+
+## [3.12.0] - 2026-04-27
+
+### Added
+
+- knowledge plane directory contract + provisioning (#21107)
+- decouple pulse-merge into fast standalone routine (GH#20919) (#21093)
+
+### Changed
+
+- Maintenance: mark t2932 complete (pr:#21128 completed:2026-04-26) [skip ci]
+- peer-productivity-monitor for adaptive cross-runner coordination (#21128)
+- Maintenance: sync ref:GH#21119 to TODO.md, drop duplicate t2932 [skip ci]
+- add inbox digest subcommand + weekly pulse routine + advisory integration (#21124)
+- Maintenance: sync ref:GH#21125 to TODO.md [skip ci]
+- Maintenance: mark t2923 complete (pr:#21121 completed:2026-04-26) [skip ci]
+- feat(worker): push WIP commits to origin on exit/kill (#21121)
+- Maintenance: sync ref:GH#21122 to TODO.md [skip ci]
+- Maintenance: mark t2855 complete (pr:#21112 completed:2026-04-26) [skip ci]
+- Maintenance: mark t2922 complete (pr:#21118 completed:2026-04-26) [skip ci]
+- IMAP polling routine + mailboxes.json registry (#21112)
+- fix(pulse-merge): bypass phantom pending checks for owner+origin:worker auto-merge (#21118)
+- Maintenance: mark t2927 complete (pr:#21117 completed:2026-04-26) [skip ci]
+- Maintenance: mark t2926 complete (pr:#21115 completed:2026-04-26) [skip ci]
+- setup.sh: auto-install util-linux for setsid on macOS (#21115)
+- honor dispatch-override.conf 'ignore' at assignee level (#21120)
+- Maintenance: mark t2863 complete (pr:#21113 completed:2026-04-26) [skip ci]
+- sweep pulse-*.sh for set -u unbound variable bugs (#21113)
+- Maintenance: mark t2852 complete (pr:#21114 completed:2026-04-26) [skip ci]
+- case CLI surface (attach/status/close/archive/list/show/note/deadline/party/comm) (#21114)
+- inbox triage routine: sensitivity gate → classification → routing (#21111)
+- Maintenance: mark t2844 complete (pr:#21107 completed:2026-04-26) [skip ci]
+- Maintenance: mark t2924 complete (pr:#21109 completed:2026-04-26) [skip ci]
+- Maintenance: mark t2912 complete (pr:#21108 completed:2026-04-26) [skip ci]
+- filter non-dispatchable management labels at candidate-build time (#21109)
+- detect wedged auto-update lock holder and force-release (#21108)
+- Maintenance: mark t2861 complete (pr:#21106 completed:2026-04-26) [skip ci]
+- fix gh PATH shim --body-file source mutation — use temp file (#21106)
+- Maintenance: sync ref:GH#21105 to TODO.md [skip ci]
+- Maintenance: append t2926-t2929 systemic-fix tasks (refs:GH#21102-#21105) [skip ci]
+- Maintenance: sync ref:GH#21102 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21100 to TODO.md [skip ci]
+- Maintenance: append t2922-t2925 systemic-fix tasks (refs:GH#21097-#21100) [skip ci]
+- Maintenance: sync ref:GH#21098 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21097 to TODO.md [skip ci]
+- Maintenance: mark t2860 complete (pr:#21095 completed:2026-04-26) [skip ci]
+- fix mv check, legacy cleanup, mktemp, empty guard in plist install (#21096)
+- deregister from SQLite worktree registry on pulse-cleanup removal (#21095)
+- Maintenance: mark t2862 complete (pr:#21093 completed:2026-04-26) [skip ci]
+- Maintenance: mark t2921 complete (pr:#21092 completed:2026-04-26) [skip ci]
+- fix worker-watchdog find_workers regex broken by t2421 alternation (#21092)
+- Maintenance: sync ref:GH#21091 to TODO.md [skip ci]
+- Maintenance: mark t2920 complete (pr:#21089 completed:2026-04-26) [skip ci]
+- Maintenance: sync ref:GH#21086 to TODO.md [skip ci]
+- Maintenance: mark t2867 complete (pr:#21085 completed:2026-04-26) [skip ci]
+- inbox capture CLI + watch folder + audit log (t2866 + t2867) (#21085)
+- Maintenance: mark t2919 complete (pr:#21082 completed:2026-04-26) [skip ci]
+- fix(setup): install pulse plist early to survive unattended-update timeouts (#21082)
+- Maintenance: mark t2918 complete (pr:#21080 completed:2026-04-26) [skip ci]
+- Maintenance: sync ref:GH#21081 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21079 to TODO.md [skip ci]
+
+### Fixed
+
+- split cmd_list to satisfy function-complexity gate (<100 lines) (#21116)
+- invalidate FOOTPRINT_OVERLAP cache on issue close — reduce TTL 120s→30s (#21117)
+- repair Phase 1 auto-release GitHub gap (GH#21057) (#21110)
+- invert tooling/product priority boost (#21080)
+
+## [3.11.17] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2905 complete (pr:#21078 completed:2026-04-26) [skip ci]
+- Maintenance: mark t2903 complete (pr:#21070 completed:2026-04-26) [skip ci]
+- extract complexity_scan to standalone launchd plist (#21070)
+- Maintenance: sync ref:GH#21076 to TODO.md [skip ci]
+- Maintenance: mark t2904 complete (pr:#21073 completed:2026-04-26) [skip ci]
+- Performance: batch per-issue jq extraction in reconcile_issues_single_pass (#21073)
+- Maintenance: sync ref:GH#21074 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+
+## [3.11.16] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2914 complete (pr:#21071 completed:2026-04-26) [skip ci]
+- ensure pulse running after every aidevops update via idempotent start (#21071)
+- Maintenance: mark t2913 complete (pr:#21068 completed:2026-04-26) [skip ci]
+- move gh wall-clock timeouts into wrapper layer (#21068)
+- Maintenance: sync ref:GH#21072 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21069 to TODO.md [skip ci]
+- Maintenance: mark t2910 complete (pr:#21064 completed:2026-04-26) [skip ci]
+
+## [3.11.15] - 2026-04-26
+
+### Changed
+
+- Performance: t2910: cache generate-runtime-config.sh on input hash (saves 135s/cycle) (#21064)
+- file ref:GH#21057 — auto-release leaves GitHub state stale (#21058)
+- Maintenance: mark t2902 complete (pr:#21053 completed:2026-04-26) [skip ci]
+- stop GraphQL exhaustion via instrumentation + proactive REST guard (#21053)
+- Maintenance: mark t2906 complete (pr:#21062 completed:2026-04-26) [skip ci]
+- fix 0-byte pulse plist on interrupted setup (#21062)
+- Maintenance: sync ref:GH#21061 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21059 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21057 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21056 to TODO.md [skip ci]
+- implement runner-health circuit breaker and auto-update daemon verifier (#21039)
+
+## [3.11.14] - 2026-04-26
+
+### Changed
+
+- Maintenance: sync ref:GH#21055 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21054 to TODO.md [skip ci]
+
+## [3.11.13] - 2026-04-26
+
+### Changed
+
+- Maintenance: sync ref:GH#21041 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21049 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21047 to TODO.md [skip ci]
+
+## [3.11.12] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2899 complete (pr:#21045 testing:runtime-verified)
+- Maintenance: update simplification state registry
+- Maintenance: sync ref:GH#21041 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#21040 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: mark t2893 complete (pr:#21032 completed:2026-04-26) [skip ci]
+- structured failure causes in gh signature-gate JS hook (#21032)
+- Maintenance: mark t2895 complete (pr:#21037 completed:2026-04-26) [skip ci]
+- bound task-id-guard check-pr scan range and cache subjects to prevent CI hang (#21037)
+- Maintenance: surface t2892 in TODO.md (credential-scrub regex bug already filed as GH#21026)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- guard branch_orphan classifier against default branch (t2899) (#21045)
+- correct path prefix and ambiguous section ref in .agents/AGENTS.md (#21009)
+
+## [3.11.11] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2896 complete (pr:#21036 completed:2026-04-26) [skip ci]
+- lower pulse GraphQL circuit-breaker threshold from 0.30 to 0.05 (#21036)
+- Maintenance: mark t2873 complete (pr:#20965 completed:2026-04-26) [skip ci]
+- Maintenance: sync ref:GH#21026 to TODO.md [skip ci]
+- comment out OpenCode→Claude Code substitution after A/B verification (#20965)
+- anchor credential-scrub regex to word boundary (#21031)
+- add TODO entry for slow task-id-guard check-pr mode (#21035)
+- Maintenance: mark t2891 complete (pr:#21028 completed:2026-04-26) [skip ci]
+
+## [3.11.10] - 2026-04-26
+
+### Changed
+
+- add binary validator + auto-heal to active setup_opencode_cli (#21028)
+- Maintenance: mark t2890 complete (pr:#21027 completed:2026-04-26) [skip ci]
+- align /full-loop gate with pulse dispatch primitives (#21027)
+- decompose knowledge planes MVP into 20 children + 2 peer parents (campaigns, tag format) (planning-only) (#20913)
+- Maintenance: update simplification state registry
+- auto-decomposer skip already-decomposed parents and recent maintainer activity (#21021)
+- Maintenance: sync ref:GH#20983 to TODO.md [skip ci]
+
+## [3.11.9] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2884 complete (pr:#21022 completed:2026-04-26) [skip ci]
+- add external-content-spam-detector.sh combining patterns + structural checks (#21022)
+- Maintenance: sync ref:GH#21025 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: sync ref:GH#21023 to TODO.md [skip ci]
+- fix(interactive-session): auto-dispatch carve-out in _isc_cmd_claim (#20977)
+- land _campaigns/ plane parent-task brief (#21020)
+
+## [3.11.8] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2888 complete (pr:#21018 completed:2026-04-26) [skip ci]
+- restore setup_opencode_cli install/heal logic (#21018)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2883 complete (pr:#21011 completed:2026-04-26) [skip ci]
+- add §7c untrusted-body content directive immunity rule to AGENTS.md (#21011)
+- Maintenance: sync ref:GH#21016 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: mark t2886 complete (pr:#21015 completed:2026-04-26) [skip ci]
+- extend pulse triage prefetch with evidence-verification sections (#21015)
+- add permissions block to caller templates — fix startup_failure on read-only default repos (#21012)
+- Maintenance: mark t2882 complete (pr:#21014 completed:2026-04-26) [skip ci]
+- add unsolicited_disclosure_marketing patterns to prompt-injection-patterns.yaml (#21014)
+- fix worktree path enumeration for paths with spaces
+- fix worktree-exclusions setup-backblaze advice (#21002)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- add missing labels field to t2148 test stub fixtures (#21010)
+
+## [3.11.7] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2887 complete (pr:#21001 completed:2026-04-26) [skip ci]
+- canary detect wrong opencode binary, long backoff on config errors (#21001)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2876 complete (pr:#20974 completed:2026-04-26) [skip ci]
+- gh PATH shim privacy-scan layer (fail-closed on private slugs in public-repo writes) (#20974)
+- consolidate prompts/build.txt into AGENTS.md Framework Rules (#20982)
+- Maintenance: sync ref:GH#21000 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+
+## [3.11.6] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2885 complete (pr:#20989 completed:2026-04-26) [skip ci]
+- exclude worktrees from macOS Spotlight + Time Machine (#20989)
+- Maintenance: sync ref:GH#20988 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20987 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20986 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20985 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20984 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20983 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20981 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20980 to TODO.md [skip ci]
+- backfill blocked-by markers on t2840 decomposition children (#20973)
+- Maintenance: sync ref:GH#20975 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20972 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20970 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: sync ref:GH#20966 to TODO.md [skip ci]
+- Maintenance: mark t2859 complete (pr:#20915 completed:2026-04-26) [skip ci]
+- inline config defaults in pulse-cleanup.sh to stop premature worktree destruction (#20915)
+- reduce _detect_self_hosting_task complexity via helper extraction (#20926)
+- Maintenance: sync ref:GH#20964 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+
+## [3.11.5] - 2026-04-26
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Maintenance: mark t2871 complete (pr:#20945 completed:2026-04-26) [skip ci]
+- pulse-canonical-recovery: switch to local advisory channel (privacy fix) (#20945)
+- Maintenance: sync ref:GH#20944 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20942 to TODO.md [skip ci]
+
+## [3.11.4] - 2026-04-26
+
+### Changed
+
+- Maintenance: mark t2865 complete (pr:#20928 completed:2026-04-25) [skip ci]
+- pulse canonical-worktree conflict auto-recovery (#20928)
+- Maintenance: sync ref:GH#20931 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20929 to TODO.md [skip ci]
+- reduce function complexity in upstream-watch-helper.sh (#20925)
+- reduce log_framework_issue complexity by extracting dedup and creation helpers (#20927)
+- Maintenance: mark t2864 complete (pr:#20924 completed:2026-04-25) [skip ci]
+- pre-write bash function complexity advisory hook (#20924)
+- Maintenance: add t2865 worktree-conflict recovery + blocked-by t2863 on t2862 (#20923)
+- Maintenance: sync ref:GH#20919 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20917 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: sync ref:GH#20914 to TODO.md [skip ci]
+- Maintenance: mark t2841 complete (pr:#20907 completed:2026-04-25) [skip ci]
+- Maintenance: sync ref:GH#20912 to TODO.md [skip ci]
+- Maintenance: mark t2835 complete (pr:#20887 completed:2026-04-25) [skip ci]
+
+### Fixed
+
+- init _b_nums to prevent unbound-variable abort (#20907)
+
+## [3.11.3] - 2026-04-25
+
+### Changed
+
+- Maintenance: mark t2842 complete (pr:#20898 completed:2026-04-25) [skip ci]
+- add manual single-issue dispatch CLI (#20887)
+- full-loop-helper: run project validators before push (close worker-CI-failure gap) (#20898)
+- Maintenance: sync ref:GH#20910 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20909 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20908 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20906 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20905 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20904 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20903 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20902 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20901 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20900 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20899 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20897 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20896 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20895 to TODO.md [skip ci]
+- Maintenance: mark t2838 complete (pr:#20890 completed:2026-04-25) [skip ci]
+- periodic parent-task sub-issue backfill + --parent-issue flag (#20890)
+- Maintenance: sync ref:GH#20894 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20893 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20892 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20889 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20888 to TODO.md [skip ci]
+- Maintenance: mark t2834 complete (pr:#20883 completed:2026-04-25) [skip ci]
+- add reusable LOC badge workflow + canonical README badge template (#20883)
+- Maintenance: mark t2829 complete (pr:#20886 completed:2026-04-25) [skip ci]
+- enforce age check in pulse is_running short-circuit (#20886)
+- Maintenance: update simplification state registry
+
+## [3.11.2] - 2026-04-25
+
+### Changed
+
+- Maintenance: sync ref:GH#20885 to TODO.md [skip ci]
+- Maintenance: mark t2832 complete (pr:#20877 completed:2026-04-25) [skip ci]
+- union (graph, body, prose) child sources for parent close
+- Maintenance: sync ref:GH#20882 to TODO.md [skip ci]
+- fix _parse_phases_section over-count of ### subsections
+- fix(orphan-recovery) SC2215 broken line continuation silently dropped PR creation args (#20878)
+- Maintenance: sync ref:GH#20879 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+
+## [3.11.1] - 2026-04-25
+
+### Added
+
+- dispatch-path default to #parent + no-auto-dispatch for interactive implementation (t2821) (#20854)
+- add pre-dispatch self-hosting detector for dispatch-path tasks (t2819) (#20844)
+
+### Changed
+
+- Maintenance: sync ref:GH#20870 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20868 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20867 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20866 to TODO.md [skip ci]
+- validate PR title prefix against canonical issue mapping in _compose_pr_title (#20862)
+- Maintenance: mark t2821 complete (pr:#20854 completed:2026-04-25) [skip ci]
+- scope self-hosting scan to implementation sections; paginate idempotency check (#20861)
+- write no-changes report to --output-md when no .sh/.py files changed (#20860)
+- Maintenance: mark t2820 complete (pr:#20855 completed:2026-04-25) [skip ci]
+- pulse: extend no_work reclassification to worker_failed using Phase 3 log-tail data (#20855)
+- Maintenance: mark t2827 complete (pr:#20848 completed:2026-04-25) [skip ci]
+- diff-scoped scan in complexity-regression-helper.sh to fix 60s pre-push timeout (#20848)
+- fix no_worker_process root cause + add regression test (#20849)
+- Maintenance: mark t2819 complete (pr:#20844 completed:2026-04-25) [skip ci]
+- Maintenance: mark t2825 complete (pr:#20837 completed:2026-04-25) [skip ci]
+- idempotent task-ID prefix in commit-and-pr (#20837)
+- Maintenance: mark t2823 complete (pr:#20839 completed:2026-04-25) [skip ci]
+- auto-emit blocked-by from predecessor references in claim-task-id.sh (#20839)
+- Maintenance: mark t2826 complete (pr:#20841 completed:2026-04-25) [skip ci]
+- retarget test-label-invariants WORKFLOW_FILE to issue-sync-reusable.yml (#20841)
+- Documentation: GH-20835 Phase 1 diagnostic findings — complexity guard 98s timeout identified (#20843)
+- Maintenance: sync ref:GH#20842 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20840 to TODO.md [skip ci]
+
+### Fixed
+
+- case-insensitive extraction + normalisation in _detect_predecessor_refs (#20863)
+
+## [3.11.0] - 2026-04-25
+
+### Added
+
+- extract pulse-wrapper config block into pulse-wrapper-config.sh (GH#20781) (#20786)
+- migrate 12 style archetypes to DESIGN.md spec v0.1.0 format (#20783)
+- upstream-watch files GitHub issues on detected updates (t2810) (#20784)
+- rebase MERGEABLE PRs with CI failures before routing to fix-worker (t2805) (#20752)
+
+### Changed
+
+- add parent-task close gate to bash-helper _do_close path (#20838)
+- Maintenance: mark t2816 complete (pr:#20814 completed:2026-04-25) [skip ci]
+- Maintenance: mark t2815 complete (pr:#20815 completed:2026-04-25) [skip ci]
+- Maintenance: mark t2818 complete (pr:#20833 completed:2026-04-25) [skip ci]
+- add /setup-git slash command + per-repo setup debt aggregator (Phase 1) (#20814)
+- prevent cascade tier escalation on infra failures (#20815)
+- wire fingerprint dedup into framework-routing-helper, normalize body before hashing (#20824)
+- fix(lifecycle): detect worker_branch_orphan — classify pushed-branch-without-PR and auto-recover (#20833)
+- Maintenance: sync ref:GH#20836 to TODO.md [skip ci]
+- fix(issue-triage-gate): remove title-prefix bypass that lets external contributors evade needs-maintainer-review (#20832)
+- Maintenance: sync ref:GH#20834 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20825 to TODO.md [skip ci]
+- Maintenance: mark t2817 complete (pr:#20823 completed:2026-04-25) [skip ci]
+- extend NOOP_RE to catch Gemini mid-sentence LGTM + zero-findings gate (#20823)
+- Maintenance: sync ref:GH#20819 to TODO.md [skip ci]
+- Maintenance: mark t2799 complete (pr:#20817 completed:2026-04-25) [skip ci]
+- Maintenance: sync ref:GH#20818 to TODO.md [skip ci]
+- split RATE_LIMIT_PATTERNS from NON_REVIEW_PATTERNS in review-bot-gate-helper (#20817)
+- Maintenance: sync ref:GH#20812 to TODO.md [skip ci]
+- align Complexity Impact thresholds — warning at 80-100 lines, mandatory refactor at >100 (#20805)
+- simplify jq abs calculation and remove 2>/dev/null in co-temporality guard (#20806)
+- fix _usage off-by-one and hoist _reusable_escaped out of per-repo loop (#20809)
+- robustify release_interactive_claim_on_merge regex and add pre-guard (#20810)
+- Refactor: consolidate dual gh pr view calls into single call in _attempt_pr_ci_rebase_retry (GH#20793) (#20799)
+- Maintenance: mark t2808 complete (pr:#20783 completed:2026-04-24) [skip ci]
+- Maintenance: mark t2810 complete (pr:#20784 completed:2026-04-24) [skip ci]
+- add log_warning alias to shared-constants.sh (#20779)
+- Maintenance: mark t2813 complete (pr:#20778 completed:2026-04-24) [skip ci]
+- remove deprecated is_rate_limit_comment alias (#20776)
+- Maintenance: mark t2812 complete (pr:#20770 completed:2026-04-24) [skip ci]
+- fix stale feature-flag comment in shared-phase-filing.sh header (#20771)
+- Maintenance: mark t2806 complete (pr:#20772 completed:2026-04-24) [skip ci]
+- detect SYNC_PAT need under rulesets-based branch protection (#20772)
+- Maintenance: mark t2786 complete (pr:#20731 completed:2026-04-24) [skip ci]
+- Maintenance: mark t2803 complete (pr:#20762 completed:2026-04-24) [skip ci]
+- Maintenance: mark t2804 complete (pr:#20767 completed:2026-04-24) [skip ci]
+- add declared-vs-filed guard to _try_close_parent_tracker (#20731)
+- add Complexity Impact brief section to prevent function-complexity gate surprises (#20762)
+- Maintenance: decompose t2804 parent-task into 4 child phases (t2812-t2815) (#20767)
+- Maintenance: mark t2805 complete (pr:#20752 completed:2026-04-24) [skip ci]
+- Maintenance: mark t2811 complete (pr:#20760 completed:2026-04-24) [skip ci]
+- release interactive claim on Ref/For planning PR merges (#20760)
+- Maintenance: mark t2798 complete (pr:#20759 completed:2026-04-24) [skip ci]
+- t2798: add status:available default workflow for bypass-path issue creation (#20759)
+- Maintenance: sync ref:GH#20757 to TODO.md [skip ci]
+
+### Fixed
+
+- closing-keyword-only status:done — word-boundary regex + For/Ref veto guard (#20831)
+- quote repo_slug in log_error and extract slug helper (GH#20796) (#20802)
+- expand heredoc tag regex and gh write boundary anchors (GH#20798) (#20804)
+- restore blank line before '### Files' header in conflict feedback (#20803)
+- sanitize YAML description field and portable mktemp in prompt-guard sub-libraries (#20800)
+- remove mode| from evil-twin YAML pattern to fix dark/light mode false positive (#20777)
+- invert NMR check order and add co-temporality guard to prevent scanner-label ever-NMR trap (GH#20758) (#20761)
+
+## [3.10.3] - 2026-04-24
+
+### Changed
+
+- Maintenance: mark t2807 complete (pr:#20749 completed:2026-04-24) [skip ci]
+- align design-md agent with google-labs DESIGN.md spec v0.1.0 (#20749)
+- refresh t1305 plan status — #14740 closed-stale, PR #14741 sole live ref (#20754)
+- Maintenance: sync ref:GH#20755 to TODO.md [skip ci]
+- migrate review-bot-gate.yml to reusable-workflow pattern (#20748)
+- Maintenance: sync ref:GH#20753 to TODO.md [skip ci]
+- Maintenance: mark t2802 complete (pr:#20742 completed:2026-04-24) [skip ci]
+- explicit origin/<default> base for new worktrees + scope-leak detection in conflict-feedback (#20742)
+- Maintenance: sync ref:GH#20750 to TODO.md [skip ci]
+- Refactor: split prompt-guard-helper.sh into focused sub-libraries (#20746)
+- Maintenance: sync ref:GH#20747 to TODO.md [skip ci]
+- Maintenance: mark t2797 complete (pr:#20733 completed:2026-04-24) [skip ci]
+- add backfill-status-available.sh for pre-t2789 status label heal (#20733)
+- Maintenance: sync ref:GH#20734 to TODO.md [skip ci]
+- Maintenance: mark t2800 complete (pr:#20744 completed:2026-04-24) [skip ci]
+- claim-task-id: pre-flight label validation with exit 3 before counter advance (#20744)
+- Maintenance: sync ref:GH#20743 to TODO.md [skip ci]
+- Maintenance: mark t2788 complete (pr:#20736 completed:2026-04-24) [skip ci]
+- Maintenance: mark t2801 complete (pr:#20739 completed:2026-04-24) [skip ci]
+- extend _parse_phases_section for bold-heading form (Phase 1 of #20559) (#20736)
+- Maintenance: sync ref:GH#20740 to TODO.md [skip ci]
+- tighten isGhWriteCommand to eliminate heredoc/quoted-arg false positives (#20739)
+- Maintenance: sync ref:GH#20738 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20737 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20735 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20734 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: mark t2796 complete (pr:#20726 completed:2026-04-24) [skip ci]
+- Maintenance: sync ref:GH#20732 to TODO.md [skip ci]
+- classify zero-output worker exit as worker_noop to trigger cascade (#20726)
+- Maintenance: sync ref:GH#20730 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20728 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: mark t2789 complete (pr:#20720 completed:2026-04-24) [skip ci]
+- apply status:available by default in claim-task-id.sh (#20720)
+- Maintenance: mark t2762 complete (pr:#20719 completed:2026-04-24) [skip ci]
+- sweep all grep -c counter-stacking violations to zero (#20719)
+- Maintenance: sync ref:GH#20721 to TODO.md [skip ci]
+- Maintenance: mark t2776 complete (pr:#20711 completed:2026-04-24) [skip ci]
+- consolidate reconcile sub-stages into single-pass iterator (Phase 4 of #20622) (#20711)
+
+### Fixed
+
+- address gemini review feedback for check-workflows-helper.sh (#20724)
+- use Bash parameter expansion and proper error handling in phase extractor (#20725)
+
+## [3.10.2] - 2026-04-24
+
+### Added
+
+- per-issue rate_limit backoff gate in dispatch engine (#20691)
+
+### Changed
+
+- Maintenance: sync ref:GH#20717 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20715 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20714 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20713 to TODO.md [skip ci]
+- Maintenance: mark t2787 complete (pr:#20712 completed:2026-04-24) [skip ci]
+- flip AIDEVOPS_SEQUENTIAL_PHASE_AUTOFILE default to 1 + docs sweep (#20712)
+- Maintenance: mark t2780 complete (pr:#20710 completed:2026-04-24) [skip ci]
+- fix sync/check-workflows for non-main default branches (#20710)
+- Maintenance: sync ref:GH#20660 to TODO.md [skip ci]
+- decompose parent-task #20559 into 3 phase children (#20706)
+- Maintenance: mark t2775 complete (pr:#20709 completed:2026-04-24) [skip ci]
+- pulse: per-repo pulse_interval throttle for contributor-role repos (#20709)
+- Maintenance: sync ref:GH#20704 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20703 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: mark t2782 complete (pr:#20701 completed:2026-04-24) [skip ci]
+- cap watchdog_stall_continue duration and count per session (#20701)
+- Maintenance: update simplification state registry
+- split worker-watchdog.sh into 5 focused sub-libraries (#20696)
+- Maintenance: update simplification state registry
+- fix sed escaping, checkout -B idempotency, and commit guard in sync-workflows-helper.sh (#20695)
+- Maintenance: mark t2783 complete (pr:#20693 completed:2026-04-24) [skip ci]
+- pulse: post remediation comment when maintainer removes NMR label without crypto approval (#20693)
+- Maintenance: mark t2770 complete (pr:#20690 completed:2026-04-24) [skip ci]
+- Maintenance: mark t2781 complete (pr:#20691 completed:2026-04-24) [skip ci]
+- pulse: cross-issue no_work rate circuit breaker (#20690)
+- Maintenance: mark t2772 complete (pr:#20692 completed:2026-04-24) [skip ci]
+- route pulse-*.sh gh reads through REST-fallback wrappers (#20692)
+- Maintenance: mark t2784 complete (pr:#20689 completed:2026-04-24) [skip ci]
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- address Gemini review feedback on pulse-issue-reconcile.sh (GH#20675) (#20694)
+- upstream-watch cloudron-packaging-community URL (root→WanderingMonster) (#20689)
+- add --paginate to gh api comments call in no_work circuit breaker (#20687)
+
+## [3.10.1] - 2026-04-24
+
+### Changed
+
+- Maintenance: sync ref:GH#20682 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20681 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20680 to TODO.md [skip ci]
+- Maintenance: mark t2773 complete (pr:#20667 completed:2026-04-24) [skip ci]
+- route reconcile sub-stages through pulse-prefetch-cache (Phase 2 of #20622) (#20667)
+- Maintenance: sync ref:GH#20674 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+
+## [3.10.0] - 2026-04-24
+
+### Changed
+
+- Maintenance: mark t2779 complete (pr:#20673 completed:2026-04-24) [skip ci]
+- aidevops sync-workflows — opt-in resync (Phase 2) (#20673)
+- Maintenance: mark t2771 complete (pr:#20668 completed:2026-04-24) [skip ci]
+- add deterministic phase-extractor for well-formed parent-task bodies (#20668)
+- Maintenance: mark t2769 complete (pr:#20669 completed:2026-04-24) [skip ci]
+- per-issue no_work circuit breaker — NMR after N consecutive failures (#20669)
+- Maintenance: mark t2778 complete (pr:#20666 completed:2026-04-24) [skip ci]
+- aidevops check-workflows — drift detector (Phase 1) (#20666)
+- Maintenance: update simplification state registry
+
+## [3.9.0] - 2026-04-24
+
+### Added
+
+- decompose _dlw_nohup_launch into focused helpers (GH#20617) (#20619)
+
+### Changed
+
+- Maintenance: mark t2777 complete (pr:#20664 completed:2026-04-24) [skip ci]
+- refactor framework workflows to reusable-workflow pattern (Phase 3) (#20664)
+- Documentation: file GH#20633 decomposition brief (parent #20622, phases 2-4 filed) (#20663)
+- Maintenance: mark t2768 complete (pr:#20659 completed:2026-04-24) [skip ci]
+- pulse: consolidate circuit breaker threshold into single conf file (#20659)
+- Maintenance: sync ref:GH#20661 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20660 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20658 to TODO.md [skip ci]
+- align Linux/cron interval label with launchd modulo-60 logic (#20654)
+- fix phase parsing — description strip order and child_ref line-end anchor (#20653)
+- harden awk if-pattern in extract_block test helper (#20650)
+- fix _state_json unbound variable in enrich single-task path (#20646)
+- Maintenance: mark t2767 complete (pr:#20643 completed:2026-04-23) [skip ci]
+- Maintenance: file 5 pulse concurrency backlog tasks (t2768-t2772) (#20644)
+- Maintenance: sync ref:GH#20642 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20641 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20640 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20639 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20638 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20634 to TODO.md [skip ci]
+- Maintenance: mark t2763 complete (pr:#20621 completed:2026-04-23) [skip ci]
+- Maintenance: update simplification state registry
+- Refactor: decompose _dirty_pr_action_rebase into focused helpers (#20620)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- use explicit empty-string guards for PGID pipeline fallbacks (#20657)
+- restore stderr suppression and clear node-ID cache per repo (#20655)
+- harden _handle_stale_llm_lock — portability, PID reuse guard, consistency (GH#20626) (#20651)
+- parameterize fallback global_config_path in generate-runtime-config (#20652)
+- add tier:standard to base label_list for NMR-path issues (#20647)
+- commit-and-pr partial-success recovery t2767 (#20643)
+- broaden counter-stack regex, use process substitution, harden safe_grep_count (#20645)
+- invert stat probe order to GNU-first for Linux compat (GH#20615) (#20635)
+
+## [3.8.95] - 2026-04-23
+
+### Added
+
+- add 'labeled' trigger to maintainer-gate.yml pull_request_target (#20502)
+- add sequential phase auto-filing for parent-task issues (t2740) (#20492)
+
+### Changed
+
+- Maintenance: sync ref:GH#20556 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20554 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20553 to TODO.md [skip ci]
+- auto-decomposer zero-delay thresholds + 1-day re-file interval (#20551)
+- Maintenance: update simplification state registry
+- migrate review-bot-gate CI to delegate to helper (t2139 settlement fix) (#20547)
+- fix local variable style in rest-fallback (separate decl from assignment, hoist _tok) (#20545)
+- fix pulse-batch-prefetch GraphQL exhaustion detection and add REST fallback (#20544)
+- exclude review-bot logins from _count_non_nudge_comments (#20543)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2748 complete (pr:#20533 completed:2026-04-22) [skip ci]
+- fix(scanner): emit auto-dispatch + tier:standard on review-followup issues (#20533)
+- fix dup-todo guard regex for indented/hierarchical IDs + rename bypass var (#20529)
+- fix node-ID null guard, parent-process cache init, and rest-fallback optional arg (#20536)
+- complete POSIX regex replacement doc in t2742 TODO entry (#20539)
+- guard inner shift in _gh_auto_link_sub_issue arg parser against $#=0 (#20540)
+- fix shared-phase-filing: description brackets, child_ref tail-1, dedup regex anchor, _parent_json guard (#20531)
+- Maintenance: sync ref:GH#20530 to TODO.md [skip ci]
+- add aidevops review-gate CLI for configuring rate_limit_behavior (#20527)
+- harden standalone-source tests — LC_ALL=C, safer path arg, declare -f (#20528)
+- Maintenance: mark t2746 complete (pr:#20525 completed:2026-04-22) [skip ci]
+- preserve worker assignee on merged linked PRs for audit trail (#20525)
+- Maintenance: mark t2741 complete (pr:#20526 completed:2026-04-22) [skip ci]
+- add aidevops parent-status CLI helper for decomposition inspection (#20526)
+- fix string-literal ratchet false positive on adjacent quoted shell args (#20522)
+- Refactor: split cmd_backfill_sub_issues into focused helpers (GH#20497) (#20519)
+- protect contributor PRs from auto-close on merge conflicts (#20521)
+- Maintenance: sync ref:GH#20520 to TODO.md [skip ci]
+- add actionlint pre-commit check for .github/workflows/*.yml (#20506)
+- reduce auto_file_next_phase complexity by extracting 3 helper functions (#20503)
+- Maintenance: update simplification state registry
+- suppress fatal: ambiguous argument origin/main via default-branch detection (#20500)
+- add standalone-source regression test for shared-gh-wrappers.sh (#20498)
+- Maintenance: mark t2745 complete (pr:#20499 completed:2026-04-22) [skip ci]
+- add pre-push guard to catch duplicate TODO entries from issue-sync orphan seed (#20499)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2740 complete (pr:#20492 completed:2026-04-22) [skip ci]
+- Maintenance: mark t2743 complete (pr:#20490 completed:2026-04-22) [skip ci]
+- fix shared-gh-wrappers REST fallback for zsh compat (drops labels+assignees) (#20490)
+- Maintenance: mark t2739 complete (pr:#20491 completed:2026-04-22) [skip ci]
+- extend REST fallback to sub-issue backfill node-ID resolution (Gap B) (#20491)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2744 complete (pr:#20483 completed:2026-04-22) [skip ci]
+- raise GraphQL throttle defaults and reduce pulse/stats pressure (#20483)
+- Maintenance: sync ref:GH#20484 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20482 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20480 to TODO.md [skip ci]
+- Maintenance: mark t2738 complete (pr:#20474 completed:2026-04-22) [skip ci]
+- extend _gh_auto_link_sub_issue to detect Parent: line at create-time (#20474)
+- Maintenance: mark t2742 complete (pr:#20479 completed:2026-04-22) [skip ci]
+- brief + TODO entry for string-literal ratchet regex false-positive fix (#20479)
+- Maintenance: sync ref:GH#20477 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20476 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20475 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20473 to TODO.md [skip ci]
+- Maintenance: mark t2722 complete (pr:#20415 completed:2026-04-22) [skip ci]
+- Phase 1 inventory of auto-dispatch references (#20415)
+
+### Fixed
+
+- export DISPATCH_REPO_SLUG before EXIT trap in _cmd_run_prepare (#20546)
+- accurate interval label for non-multiples of 60 in launchd setup (#20537)
+
+## [3.8.94] - 2026-04-22
+
+### Added
+
+- respect hold-for-review label in dirty-pr-sweep close decisions (#20462)
+- SonarCloud S1481/S1066/S100 false-positive inventory and classification (#20460)
+
+### Changed
+
+- file parent task for multi-runtime version freshness in greeting (#20472)
+- Maintenance: sync ref:GH#20471 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: mark t2736 complete (pr:#20470 completed:2026-04-22) [skip ci]
+- trim OpenCode first-response greeting to concise one-line (#20470)
+- Maintenance: sync ref:GH#20469 to TODO.md [skip ci]
+- extend rebase age window for planning-only conflicts in dirty-pr-sweep (#20468)
+- extend dirty-pr-sweep close window to 14d for origin:interactive referenced PRs (#20465)
+- widen _dps_consider_rebase conflict allowlist to match planning allowlist
+- Maintenance: mark t2734 complete (pr:#20461 completed:2026-04-22) [skip ci]
+- add SonarCloud exemption inventory (docs/sonar-exemptions.md) (#20461)
+- Maintenance: mark t2732 complete (pr:#20460 completed:2026-04-22) [skip ci]
+- Maintenance: mark t2733 complete (pr:#20459 completed:2026-04-22) [skip ci]
+- t2733: add SonarCloud S1481/S1066/S100 config-level rule exclusions (#20459)
+- decompose parent-task #20401 into SonarCloud rule-tuning children (#20456)
+- Maintenance: sync ref:GH#20455 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20454 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20453 to TODO.md [skip ci]
+- fix misleading coverage matrix comment in test-issue-sync-pull-seeds-orphans.sh (#20451)
+- Maintenance: mark t2729 complete (pr:#20452 completed:2026-04-22) [skip ci]
+- fire greeting update-check async so session.created handler returns immediately (#20452)
+- remove 5 redundant session-rename tool schema leaks (#20435)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2731 complete (pr:#20447 completed:2026-04-22) [skip ci]
+- unfilter runtime-identity line from opencode toast (#20447)
+- Maintenance: sync ref:GH#20446 to TODO.md [skip ci]
+- Maintenance: mark t2730 complete (pr:#20438 completed:2026-04-22) [skip ci]
+- restore runtime-identity line in generated opencode AGENTS.md (#20438)
+- Maintenance: sync ref:GH#20437 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: sync ref:GH#20436 to TODO.md [skip ci]
+- Maintenance: mark t2728 complete (pr:#20434 completed:2026-04-22) [skip ci]
+- toast UX polish — strip runtime-identity, add aidevops contributions subcommand, backtick commands (#20434)
+
+## [3.8.93] - 2026-04-22
+
+### Added
+
+- split compare-models-helper.sh into focused sub-libraries (#20416)
+
+### Changed
+
+- Maintenance: sync ref:GH#20433 to TODO.md [skip ci]
+- Maintenance: mark t2726 complete (pr:#20430 completed:2026-04-22) [skip ci]
+- compress build.txt and AGENTS.md via progressive disclosure (#20430)
+- Maintenance: mark t2727 complete (pr:#20432 completed:2026-04-22) [skip ci]
+- consolidate greeting toasts into single emit (#20432)
+- Maintenance: sync ref:GH#20431 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: mark t2725 complete (pr:#20424 completed:2026-04-22) [skip ci]
+- fix toast greeting update-check timeout (5s -> 15s) (#20424)
+- Maintenance: sync ref:GH#20429 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20423 to TODO.md [skip ci]
+- Maintenance: mark t2713 complete (pr:#20422 completed:2026-04-22) [skip ci]
+- large-file gate exemption for surgical briefs with line ranges (#20422)
+- Maintenance: mark t2720 complete (pr:#20400 completed:2026-04-22) [skip ci]
+- Maintenance: mark t2724 complete (pr:#20420 completed:2026-04-22) [skip ci]
+- route session-start framework status to TUI toasts (#20420)
+- reduce cmd_pr() complexity in pulse-diagnose-helper.sh (#20421)
+- split auto-update-helper.sh into orchestrator + freshness sub-library (#20407)
+- Refactor: split document-creation-helper.sh into 3 focused modules (#20417)
+- Maintenance: sync ref:GH#20412 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20410 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- prefer tNNN over GH#N in auto-derived PR title (t2720) (#20400)
+
+## [3.8.92] - 2026-04-22
+
+### Added
+
+- add pulse-diagnose-helper.sh for PR merge decision correlation (#20397)
+- add pulse-level GraphQL rate-limit circuit breaker (t2690) (#20349)
+
+### Changed
+
+- fix third-party billing detection by redistributing system prompt (#20406)
+- Maintenance: mark t2706 complete (pr:#20342 completed:2026-04-21) [skip ci]
+- redeploy on .deployed-sha drift, not just VERSION/sentinel (#20342)
+- Maintenance: sync ref:GH#20402 to TODO.md [skip ci]
+- decompose parent #20303 into 2 children (audit + fix) (#20394)
+- Maintenance: mark t2709 complete (pr:#20396 completed:2026-04-21) [skip ci]
+- fix REST-fallback source path resolution for zsh (use _SC_SELF) (#20396)
+- Maintenance: sync ref:GH#20395 to TODO.md [skip ci]
+- Maintenance: add TODO entries for t2718 (audit) and t2719 (fix) — children of #20303
+- Maintenance: update simplification state registry
+- Maintenance: mark t2715 complete (pr:#20374 completed:2026-04-21) [skip ci]
+- retire stale t2218 gap notes and close orphan TODO entry (#20374)
+- simplify AIDEVOPS_SESSION_ORIGIN assignment in health dashboard (#20381)
+- fix _worktree_resolve_abs_path double-slash and pwd vs pwd -P inconsistency (#20383)
+- Maintenance: mark t2712 complete (pr:#20389 completed:2026-04-21) [skip ci]
+- rename _DIRTY_ACTION_ESCALATE to _DIRTY_ACTION_NOTIFY in pulse-dirty-pr-sweep.sh (#20389)
+- replace misleading 'high/critical' aggregate with per-severity inline summary (BLOCKER · CRITICAL · MAJOR · MINOR · INFO) (#20387)
+- URL-encode labels and assignee in _rest_issue_list query params (#20386)
+- Maintenance: sync ref:GH#20384 to TODO.md [skip ci]
+- use AIDEVOPS_FRAMEWORK_REPO env var and defensive arithmetic in staleness check (#20378)
+- Maintenance: sync ref:GH#20376 to TODO.md [skip ci]
+- Maintenance: mark t2708 complete (pr:#20356 completed:2026-04-21) [skip ci]
+- narrow pulse-dirty-pr-sweep origin-interactive rule to true orphans (#20356)
+- Maintenance: sync ref:GH#20373 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20372 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20371 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20370 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20368 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20361 to TODO.md [skip ci]
+- Maintenance: sync ref:GH#20357 to TODO.md [skip ci]
+- Maintenance: update simplification state registry
+- Maintenance: sync ref:GH#20355 to TODO.md [skip ci]
+- Maintenance: mark t2707 complete (pr:#20352 completed:2026-04-21) [skip ci]
+- extend sig-footer enforcement to gh api POST/PATCH on issue/comment/PR endpoints (#20352)
+- Maintenance: update simplification state registry
+- Maintenance: sync ref:GH#20327 to TODO.md [skip ci]
+- seed TODO.md entries for open orphan GitHub issues in pull (#20354)
+- auto-detect --head/--base in _gh_pr_create_rest REST fallback (#20353)
+- Maintenance: update simplification state registry
+- fix prompt-guard staleness check to use deploy stamp mtime (#20351)
+- Maintenance: update simplification state registry
+- fix origin:worker stripped from health issues created by collaborator runners (#20346)
+- add body-hash fingerprint dedup to /log-issue-aidevops (#20345)
+- disable r912 dashboard routine (#20344)
+- Maintenance: mark t2700 complete (pr:#20334 completed:2026-04-21) [skip ci]
+- redirect broken routine run: fields to aidevops CLI via bin/ wrapper shims (#20334)
+- block worktree creation at paths nested inside repo (#20336)
+- extend REST fallback to gh issue view/list read paths (#20332)
+- brief orphan TODO seeding, seed missing t2696 entry (#20329)
+- bump pulse-wrapper canary test timeout from 30s to 60s (#20330)
+- Maintenance: mark t2686 complete (pr:#20304 completed:2026-04-21) [skip ci]
+- broaden quality-debt trust bar + extend NMR sig detector (#20304)
+- Maintenance: mark t2697 complete (pr:#20328 completed:2026-04-21) [skip ci]
+- auto-discover plugin .mjs files in re-export regression test (#20328)
+- Maintenance: mark t2687 complete (pr:#20308 completed:2026-04-21) [skip ci]
+- fix health-dashboard dedup under GraphQL rate-limit pressure (#20308)
+
+### Fixed
+
+- replace local -n namerefs with module-globals in setup/_tools.sh for bash 3.2/zsh compat (t2719) (#20403)
+- remove jq stderr suppression and use // "" fallback in circuit breaker (#20380)
+- address gemini review feedback on log-issue fingerprint dedup (#20382)
+- PATH security + array dispatch for run: fields with args (#20390)
+- remove redundant stderr redirect and extract helper function (#20385)
+- extend gh shim api endpoint detection and field flag handling (#20379)
+- address review-followup items from PR #20354 (#20377)
+- strip persistent label before dedup close to prevent issue-sync reopen (#20333)
+- drop unsupported headRefName from gh search prs (#20323)
+
+## [3.8.91] - 2026-04-21
+
+### Changed
+
+- Maintenance: mark t2693 complete (pr:#20320)
+- Maintenance: update simplification state registry
+- fix re-export-only breaking local binding in plugin modules (#20320)
+
+## [3.8.90] - 2026-04-21
+
+### Changed
+
+- Maintenance: mark t2692 complete (pr:#20318 completed:2026-04-21) [skip ci]
+- scrub private repo references from aidevops codebase (#20318)
+- Maintenance: update simplification state registry
+
+## [3.8.89] - 2026-04-21
+
+### Changed
+
+- Maintenance: mark t2685 complete (pr:#20307 completed:2026-04-21) [skip ci]
+- harden gh signature-footer enforcement (PATH shim + plugin hook block) (#20307)
+- Maintenance: mark t2688 complete (pr:#20302 completed:2026-04-21) [skip ci]
+- replace `local -n` namerefs with module-level globals for zsh/bash-3.2 compat (#20302)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+- split aidevops.sh into 3 sub-libraries to get below 2000-line gate (#20296)
+- extend REST fallback to gh_create_pr (GH#20290) (#20295)
+- add Slack token allowlist to secretlintrc for test fixtures (#20293)
+
+### Fixed
+
+- allow t-ID prose references when claimed in repo history (GH#20291) (#20294)
+
+## [3.8.88] - 2026-04-21
+
+### Added
+
+- revert t2449 false-completion + add planning-pr keyword CI guard (#20238)
+
+### Changed
+
+- auto-restart pulse on aidevops update and setup.sh (#20289)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2570 complete (pr:#20285 completed:2026-04-21) [skip ci]
+- add empty-compare-scanner.sh to detect derived-var comparison foot-gun (#20285)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2449 complete (pr:#20283 completed:2026-04-21) [skip ci]
+- symmetric auto-merge for maintainer-briefed origin:worker PRs (#20283)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2564 complete (pr:#20279 completed:2026-04-21) [skip ci]
+- docs(opencode): document project_id drift and /sessions session visibility recovery (#20279)
+- correct Files Scope heading level to ### in brief template (#20280)
+- update test-pulse-parent-nudge.sh tests 3 & 4 to match current gh api patterns (#20282)
+- reduce cmd_install complexity by extracting arg-parse and hook-reject helpers (#20277)
+- fix cleanup and fail-closed assertion in test-scope-guard-pre-push.sh (#20270)
+- reformat daily scan stages to multi-line style in _run_preflight_stages (#20271)
+- export TMP and INFO_LOG vars alongside stub functions in test-override-flags.sh (#20276)
+- remove 2>/dev/null from gh api idempotency check in issue-sync-lib.sh (#20275)
+- fix _decompose_issue_exists to use --paginate and jq --arg (#20274)
+- fix ambiguous Muvera storage comparison language in vector-search.md (#20272)
+- Documentation: condense Files Scope field entry and convert Worker-ready heuristic to list item in AGENTS.md (#20269)
+- add mkdir-based local mutex around claim-task-id CAS loop (#20262)
+- harden collision guard with branch-claim detection (Phase 1 of GH#20001)
+- add transcript-side credential scrub (t2458 Layer 4) (#20266)
+- Maintenance: update simplification state registry
+- tighten auto-decomposer gating: per-parent interval + 6h fresh-parent threshold (#20264)
+- Maintenance: mark t2578 complete (pr:#20263 completed:2026-04-21) [skip ci]
+- fix release_instance_lock double-release removing new owner's lock (#20263)
+- remove unsupported reviewDecision field from gh search prs calls (#20261)
+- fix privacy-guard remote name hardcoding and HEAD fallback bypass (#20256)
+- add structured audit log for CAS claims (#20257)
+- Maintenance: sync t2576 from pulse + add t2577, t2578 follow-up entries
+- Maintenance: update simplification state registry
+- add REST fallback for GraphQL-exhausted gh issue wrappers (#20255)
+- clarify Files Scope requires repository-root-relative paths with traversal risk warning (#20251)
+- fix _compute_baseline — separate local, add HEAD fallback, propagate exit code (#20253)
+- Maintenance: update simplification state registry
+- fix gh api --slurp --jq anti-pattern causing duplicate parent-decomposition nudge comments (#20249)
+- add TODO entry for opencode project_id drift docs (#20232)
+- isolate CAS push/fetch stdout from pre-push hook narration (#20248)
+- Maintenance: update simplification state registry
+- Maintenance: file t2559 follow-ups — empty-compare scanner (t2570) + dated cleanup (t2571) (#20245)
+- split claim-task-id.sh into counter and issue sub-libraries (#20247)
+- Maintenance: mark t2458 complete (pr:#20210 completed:2026-04-21) [skip ci]
+- prevent credential-bearing URLs in helper output (#20210)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- fail-closed when brief exists but lacks Files Scope section (#20252)
+- dispatch safety bypass + nudge loop on parent-task issues (3 factors) (#20246)
+
+## [3.8.87] - 2026-04-21
+
+### Changed
+
+- Maintenance: mark t2660 complete (pr:#20218 completed:2026-04-21) [skip ci]
+- route operational narration to stderr (#20218)
+- fix(claim-task-id): append TODO entry after verified issue creation to prevent orphans (#20213)
+- file narration-hygiene task (#20214)
+- Maintenance: mark t2559 complete (pr:#20209 completed:2026-04-21) [skip ci]
+- harden worktree cleanup against empty main_worktree_path (#20209)
+- integrate scope guard into install-pre-push-guards.sh (#20199)
+- Maintenance: mark t2450 complete (pr:#20200 completed:2026-04-21) [skip ci]
+- gate labelless-backfill on authorAssociation (#20200)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- review followup GH#20176 — pagination + word-boundary anchors (#20198)
+
+## [3.8.86] - 2026-04-21
+
+### Changed
+
+- Maintenance: mark t2451 complete (pr:#20202 completed:2026-04-20) [skip ci]
+- close trust-gate loop + preserve PR assignee on CLAIM_RELEASED (#20202)
+- Maintenance: update simplification state registry
+- gh-audit-log-helper.sh + wrapper integration + anomaly scanner (v2) (#20193)
+
+### Fixed
+
+- use git -c flags for http timeouts instead of ineffective env vars (#20196)
+- use ref local SHA and dynamic default branch in privacy guard; expose git push stderr (#20189)
+
+## [3.8.84] - 2026-04-20
+
+### Changed
+
+- decompose setup_test_env into per-fixture helpers (#20087)
+- restore TODO entry to backlog + strip last rolling-4-week ref (#20085)
+- fix(upgrade-planning): preserve tasks across all 6 sections (#20083)
+- brief — #parent tag not synchronously mapped to parent-task label at issue creation (#20082)
+- drop auto-close-as-wontfix from deferred trigger (GH#20072) (#20080)
+
+## [3.8.83] - 2026-04-20
+
+### Added
+
+- add AIDEVOPS_OPUS_47_CONTEXT env var for opus-4.7 context override (t2435) (#20079)
+
+### Changed
+
+- Maintenance: sync VERSION to v3.8.82 tag (recover partial-release state)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2432 complete (pr:#20075 completed:2026-04-20) [skip ci]
+- brief deferred follow-up for recent-commit eligibility check (#20075)
+- Maintenance: brief three t2422-spinoff gaps (t2429, t2430, t2431) (#20070)
+
+## [3.8.80] - 2026-04-20
+
+### Added
+
+- cherry-pick-first guidance in conflict-feedback template (t2426) (#20056)
+- batch prefetch via org-level gh search to reduce GraphQL consumption (GH#19963) (#20051)
+
+### Changed
+
+- Maintenance: mark t2422 complete (pr:#20054 completed:2026-04-20) [skip ci]
+- structured cross-runner dispatch coordination (#20054)
+- Maintenance: update simplification state registry
+- fix complexity-guard baseline to use origin/HEAD not @{u} (#20052)
+
+## [3.8.79] - 2026-04-20
+
+### Added
+
+- upgrade briefing agent with pre-composition checks and pre-flight validation (t2409) (#20049)
+- pulse stage timing + force-reclaim stale mkdir locks (GH#20025) (#20046)
+- clear active status labels on CLAIM_RELEASED (t2420) (#20038)
+- auto-release interactive claim on PR merge (t2413) (#20031)
+- extend _normalize_reassign_self to cover status:available feedback-routed worker issues (#19994)
+- parent-side detection for umbrella-style parent-task backfill (GH#19942) (#19981)
+
+### Changed
+
+- add fast-fail gate to 3 cascade-vulnerable workflows (#20006)
+- Maintenance: update simplification state registry
+- auto-release Phase 1 dead stamps in scan-stale (#20033)
+- split shared-constants.sh — extract gh wrappers into shared-gh-wrappers.sh (#20037)
+- detect worker-ready issue bodies and skip redundant brief creation (#20040)
+- retarget stacked PRs before base-branch merge to prevent auto-close (#20036)
+- upgrade log-issue-aidevops agent for worker-ready issue/PR drafting (#20034)
+- Maintenance: mark t2229 complete (pr:#20022 completed:2026-04-19) [skip ci]
+- add CI workflow cascade-vulnerability linter (#20022)
+- Maintenance: mark t2225 complete (pr:#20019 completed:2026-04-19) [skip ci]
+- fix(gh_create_issue): skip self-assignment when auto-dispatch label present (#20017)
+- fix(task-id-guard): scan PR title for invented t-IDs in check-pr mode (#20009)
+- Maintenance: mark t2227 complete (pr:#20000 completed:2026-04-19) [skip ci]
+- docs(agents-md): correct t2157 auto-dispatch carve-out paragraph to note claim-task-id.sh gap (#20000)
+- fix(approval): source shared-constants.sh for comment wrappers (#20002)
+- Maintenance: mark t2398 complete (pr:#19998 completed:2026-04-19) [skip ci]
+- feat(deploy): post-release hot-deploy trigger for framework-critical script fixes (#19998)
+- Maintenance: mark t2228 complete (pr:#19999 completed:2026-04-19) [skip ci]
+- Add task-counter monotonic guard to pre-commit hook (#19999)
+- Maintenance: mark t2401 complete (pr:#19993 completed:2026-04-19) [skip ci]
+- add version field to DISPATCH_CLAIM body for version-gated filter (#19993)
+- Maintenance: mark t2397 complete (pr:#19995 completed:2026-04-19) [skip ci]
+- feat(fast-fail): age-out HARD STOP counter to auto-recover permanently-blocked issues (#19995)
+- Maintenance: mark t2396 complete (pr:#19994 completed:2026-04-19) [skip ci]
+- feat(auto-update): loginctl enable-linger guidance for Linux systemd (#19990)
+- tactical override + CLAIM_RELEASED on launch failure (fixes cross-runner dispatch starvation, t2394/t2400) (#19965)
+- Maintenance: mark t2395 complete (pr:#19989 completed:2026-04-19) [skip ci]
+- fix ${N:-{}} bash expansion bug in pulse-prefetch and 3 helpers (#19986)
+- t2350: add pulse-dirty-pr-sweep scanner for stale DIRTY PRs (#19980)
+- fix(auto-update): Linux systemd status branch + help/reference doc refresh (#19984)
+- Maintenance: mark t2208 complete (pr:#19979 completed:2026-04-19) [skip ci]
+- restore Codacy badge (grade: A all categories) (#19979)
+- split pulse-prefetch.sh into 3 focused sub-libraries (#19973)
+- add pulse canonical-repo fast-forward + stale worktree sweep stage (#19974)
+
+### Fixed
+
+- cmd_status returns exit 0 regardless of drift state (#20020)
+- extend assignee-exemption to cover source:* automation-authored issues (#19989)
+- fail-closed label fetch in _interactive_pr_trigger_handover (#19972)
+- use explicit PID tracking for parallel wait and add COMPLEXITY_HELPER env override (GH#19921) (#19954)
+- atomic cache writes + defensive jq in stub-title scanner (#19961)
+
+## [3.8.78] - 2026-04-19
+
+### Added
+
+- auto-append signature footer to all gh issue/pr comment wrappers (t2393) (#19953)
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- qualify shell-specific advice for multi-language scanners (#19945)
+- pass self_login to is-assigned, avoid redundant API fetch, use parameter expansion (GH#19922) (#19950)
+
+## [3.8.77] - 2026-04-19
+
+### Changed
+
+- OAuth probe returns healthy without HTTP for opencode auth (#19947)
+- Maintenance: update simplification state registry
+- fix doc ordering and phrasing from review-followup on PR #19896 (#19931)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+- fix(issue-sync): range-syntax PR title guard for TODO auto-complete (#19939)
+- apply gemini review suggestions from PR #19907 followup (#19933)
+- fix(stats): export AIDEVOPS_HEADLESS in stats-wrapper.sh main() to unblock quality-debt dispatch (#19932)
+
+### Fixed
+
+- harden shellcheckrc parity grep against set -e exit and prefix false positives (#19941)
+- address Gemini review feedback on pre-commit-hook.sh ratchet validators (#19935)
+- reduce _infer_init_scope I/O — single jq pass + pass is_local_only from caller (#19938)
+
+## [3.8.76] - 2026-04-19
+
+### Changed
+
+- tier:simple body-shape validator (auto-downgrade mis-tiered briefs pre-dispatch) (#19930)
+- nudge parent-task issues with zero filed children (#19928)
+- fix(nmr): preserve NMR when circuit breaker tripped, prevent #19756 auto-approval loop (#19909)
+- fix(worker-lifecycle): skip tier escalation on no_work crashes (#19918)
+- Maintenance: mark t2180 complete (pr:#19915 completed:2026-04-19) [skip ci]
+- feat(claim-task-id): pre-claim discovery pass (5-function decomposition) (#19915)
+- Maintenance: update simplification state registry
+
+## [3.8.75] - 2026-04-19
+
+### Added
+
+- add framework-wide safety invariant for gh issue/pr edit (GH#19857) (#19907)
+- add SYNC_PAT detection to aidevops security check (#19892)
+- re-measure scanner-cited files before worker dispatch (#19891)
+
+### Changed
+
+- feat(detection): add hourly stub-title issue scanner routine (r006) (#19906)
+- t2265: feat(aidevops-init): add init_scope field to scope scaffolding per repo (#19905)
+- refactor(pre-commit): ratchet-style validators (block on increase, pass pre-existing) (#19904)
+- Maintenance: mark t2371 complete (pr:#19900 completed:2026-04-19) [skip ci]
+- feat: add shellcheckrc parity drift detection (#19898)
+- perf(complexity-guard): parallelize 3 sequential metric checks to prevent worker push timeouts (#19902)
+- feat(scanner-bodies): enrich issue templates with playbook links, precedent cites, and CI override instructions (#19900)
+- fix(pulse-merge): harden 5 pre-existing reliability issues in merge conflict + feedback clusters (#19899)
+- Maintenance: mark t2370 complete (pr:#19896 completed:2026-04-19) [skip ci]
+- feat(workflows): complexity-bump-ok justification validator (#19896)
+- Maintenance: mark t2263 complete (pr:#19894 completed:2026-04-19) [skip ci]
+- fix(complexity-guard): add file-existence guards to all scanner functions (#19894)
+- Maintenance: mark t2367 complete (pr:#19891 completed:2026-04-19) [skip ci]
+- document claim scope limitation, add lockdown/unlock subcommands (#19890)
+- Maintenance: mark t2261 complete (pr:#19886 completed:2026-04-19) [skip ci]
+- Performance: replace serial port scan with batch lsof query in assign_port() (#19886)
+- Maintenance: mark t2259 complete (pr:#19885 completed:2026-04-19) [skip ci]
+- fix CAS retry exhaustion causing silent +100 offset drift in claim-task-id (#19884)
+- add biome-zero regression test for grep -c arithmetic crash (#19882)
+- fix(ci): skip TODO.md proof-log for planning-only PRs (#19883)
+- Maintenance: mark t2260 complete (pr:#19881 completed:2026-04-19) [skip ci]
+- Maintenance: mark t2366 complete (pr:#19878 completed:2026-04-19) [skip ci]
+- feat(routines): add r914 daily repo-aidevops-health keeper (#19878)
+- Maintenance: mark t2384 complete (pr:#19875 completed:2026-04-19) [skip ci]
+- implement 5-layer defence against enrich-path data-loss bug (#19876)
+- chore(todo): log brief + TODO entry for pre-commit hook ratcheting (#19875)
+
+### Fixed
+
+- guard enrich path with dispatch-dedup-helper.sh is-assigned before gh issue edit (#19901)
+- replace greedy brief-body #NNN scanning with structured ref:GH# lookup (t2260) (#19881)
+
+## [3.8.74] - 2026-04-19
+
+### Changed
+
+- Maintenance: mark t2190 complete (pr:#19871 completed:2026-04-19) [skip ci]
+- fix(dispatch): Linux ps command truncation defeats worker detection (#19871)
+- Maintenance: mark t2379 complete (pr:#19870 completed:2026-04-19) [skip ci]
+- fix(pulse-dispatch): planning PR squash commits falsely marked as implementation (#19870)
+- correct opencode slug + clean repeated-literal debt + fix validate_string_literals false-positives (#19867)
+- Maintenance: mark t2247 complete (pr:#19868 completed:2026-04-19) [skip ci]
+- emit PR comment, audit log, and label on admin-merge fallback (#19868)
+- Maintenance: mark t2235 complete (pr:#19865 completed:2026-04-19) [skip ci]
+- forbid self-invented task ID suffixes in Traceability rules (#19865)
+- Maintenance: mark t2203 complete (pr:#19866 completed:2026-04-19) [skip ci]
+- refactor(pulse-merge): extract _route_pr_to_fix_worker helper to deduplicate routing gates (#19866)
+- Maintenance: mark t2234 complete (pr:#19862 completed:2026-04-19) [skip ci]
+- docs(brief-template): add planning-PR title-collision warning (t2219) (#19862)
+- Maintenance: mark t2377 complete (pr:#19849 completed:2026-04-19) [skip ci]
+- Maintenance: mark t2246 complete (pr:#19854 completed:2026-04-19) [skip ci]
+- brief and TODO entry for enrich-path data-loss bug (planning only) (#19849)
+- fix(pre-commit-hook): decouple print_warning from violations counter in validate_string_literals (#19853)
+- add pre-install validator dry-run to install-hooks-helper.sh (#19855)
+- split pulse-merge.sh into three modules + fix missing CLAIM_RELEASED on worker success (#19842)
+- fix(task-id-guard): accept Ref/For linkage when linked issue title contains t-ID (#19844)
+- Maintenance: sync ref:GH#19752 to TODO.md [skip ci]
+- Maintenance: mark t2237 complete (pr:#19850 completed:2026-04-19) [skip ci]
+- skip pre-commit hook on release commits to avoid false positives (#19850)
+- Maintenance: mark t2376 complete (pr:#19848 completed:2026-04-19) [skip ci]
+- fix grep -c arithmetic crash blocking Biome CI framework-wide (#19848)
+
+### Fixed
+
+- restore include-all CodeRabbit label semantics (GH#19770) (#19854)
+
+## [3.8.73] - 2026-04-19
+
+### Added
+
+- prevent .task-counter silent regression on PR merge (t2229) (#19801)
+- add PATH-discoverable gh_create_pr and gh_create_issue shims (t2199) (#19799)
+- t2245 detect stuck 3-way merge state in canonical repos on session start (#19798)
+
+### Changed
+
+- harden cross-runner guard with runner-identity gate (#19843)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2372 complete (pr:#19838 completed:2026-04-19) [skip ci]
+- tighten _normalize_unassign_stale 1h cutoff to 10min for faster orphan-worker recovery (#19838)
+- docs(agents-md): add SYNC_PAT live-state + t2252 caveat to issue-sync limitation paragraph (#19833)
+- Maintenance: mark t2265 complete (pr:#19813 completed:2026-04-19) [skip ci]
+- plan init_scope field for aidevops init scaffolding (#19813)
+- Maintenance: mark complete in TODO.md (pr:#19816 verified:2026-04-19) (#19830)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2251 complete (pr:#19800 completed:2026-04-19) [skip ci]
+- file brief for gh-signature-helper session+token misdetection (#19800)
+- guard session+terminal titles against default-branch clobber (#19816)
+- Maintenance: mark t2366 complete (pr:#19819 completed:2026-04-19) [skip ci]
+- plan r914 daily repo-aidevops-health-keeper routine (#19819)
+- Maintenance: mark t2219 complete (pr:#19820 completed:2026-04-19) [skip ci]
+- fix(ci): skip title-fallback for For/Ref-referenced issues in issue-sync.yml (#19820)
+- Maintenance: mark t2207 complete (pr:#19786 testing:self-assessed)
+- Maintenance: mark t2259 complete (pr:#19814 completed:2026-04-19) [skip ci]
+- Maintenance: sync ref:GH#19774 to TODO.md [skip ci]
+- Maintenance: mark t2248 complete (pr:#19812 completed:2026-04-19) [skip ci]
+- fix(complexity-regression): switch bash32-compat metric from line-keyed to count-per-pattern diff key (#19812)
+- Maintenance: ratchet QLTY_SMELL_THRESHOLD 29→25 (-4) [skip ci]
+- Maintenance: update simplification state registry
+- refactor(hooks): split pre-commit — fast local checks stay, slow network checks move to pre-push (#19786)
+- add push retry loop to version-manager.sh release (#19811)
+- restrict parent-task body-regex fallback to Children section only (#19810)
+- Restore headless OAuth rotation via XDG_DATA_HOME-aware auth path (#19790)
+- fix(ci): scope Markdown Lint + Biome CI to changed-line ranges (#19785)
+- strip markdown code spans before keyword scan in parent-task-keyword-guard (#19796)
+
+## [3.8.72] - 2026-04-19
+
+### Added
+
+- auto-swap Resolves to For for parent-task issues in _build_pr_body (t2242) (#19794)
+- enforce mutual exclusion of origin:interactive/worker/worker-takeover (t2200) (#19731)
+
+### Changed
+
+- tabby-profile-sync: parse folded YAML, detect worktrees via git (#19793)
+- add curl retry-with-backoff to validate-version-consistency.sh (#19791)
+- add ratchet gate rule and gh pr checks cancelled-vs-fail note
+- briefs for self-healing pulse framework improvements (#19781)
+- Maintenance: update simplification state registry
+- document origin:interactive auto-merge window (#19776)
+- prevent closing-keyword auto-close and unverified attribution (#19696)
+- fix validate_string_literals over-counting empty and short strings (#19775)
+- fix(pre-commit): eliminate positional parameter false positives on awk and comments (#19772)
+- Maintenance: add ref:GH#19774 to t2248 entry
+- fix(pre-commit): replace grep -c || echo "0" with || true to prevent multiline arithmetic errors (#19769)
+- add shell test-harness template encoding set-e and local pitfalls (#19768)
+- wire up Hostinger SSH key auth in wp-helper, hostinger-helper, docs, and template (#19767)
+- Maintenance: mark t2239 complete (pr:#19759)
+- Add opus-4.7 as top auto-escalation rung + model:opus-4-7 opt-in label (#19759)
+- Maintenance: update simplification state registry
+- feat(interactive-session-helper): post-merge subcommand for auto-heal after planning PR merge (#19766)
+- file 7 framework improvement briefs (v3.8.71 lifecycle retrospective) (#19758)
+- plan t2225 + t2227 + t2234 — intrinsic harness improvements for planning-PR incidents (#19745)
+- feat(pulse-merge): idle interactive PR handover to worker pipeline (#19682)
+- ci: add markdownlint-cli2 and biome CI jobs to code-quality.yml (#19711)
+- brief — macOS-specific briefs fail Ubuntu AC verification (planning-only) (#19725)
+- Maintenance: update simplification state registry
+- correct opencode upstream slug to anomalyco/opencode in docs and configs (#19728)
+- add paths-ignore to Qlty workflows to suppress docs-only cancelled-as-fail noise (#19726)
+- fix(pre-commit): make TODO.md duplicate-ID check diff-aware (#19712)
+
+### Fixed
+
+- extend pre-commit duplicate-ID check to declined tasks and routine IDs (#19789)
+- add t2157-style auto-dispatch carve-out to _auto_assign_issue (t2218) (#19788)
+- prevent duplicate task IDs under concurrent CAS invocation (GH#19689) (#19765)
+
+## [3.8.71] - 2026-04-18
+
+### Added
+
+- add complexity-regression pre-push guard and generalize installer (t2198) (#19710)
+
+### Changed
+
+- force base-10 in _resolve_current_counter octal-trap comparisons (#19709)
+- fix PATH ordering and clear AIDEVOPS_BASH_REEXECED env leak (#19707)
+- Documentation: sync cloudron skill files with upstream git.cloudron.io/docs/skills (t2213) (#19708)
+- correct observability.md falsified Tool.execute OTEL root cause and upstream link (#19705)
+- document NMR auto-approval forces auto-dispatch label on maintainer-authored issues (#19704)
+- Maintenance: update simplification state registry
+- install pre-commit hook, biome.json, document Codacy auto-fix anti-pattern (#19683)
+- file Linux worker launch failure diagnosis task for alex-solovyev (#19680)
+- trim INTENT_PARAM_SCHEMA description to reduce per-request token cost (#19676)
+- fix Effect.runPromise terminology and session-introspect-helper.sh naming in observability.md (#19677)
+- fix trap chaining, fixed-string dedup, and --issue validation in issue-sync-relationships.sh (#19674)
+- fix regex to detect combined flag patterns in assoc-array and nameref detection (#19675)
+- Maintenance: update simplification state registry
+- declare agent__intent on tool schemas so Anthropic preserves it (#19663)
+- document opencode run-mode Tool.execute OTEL span gap (#19662)
+- Maintenance: update simplification state registry
+- Maintenance: add t2187 backlog entry + brief (opencode run mode Tool.execute span gap) (#19661)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2186 complete (pr:#19659)
+- fix(headless): include OTEL_* in sandbox passthrough for worker trace export (#19659)
+- fix bash re-exec guard BASH_SOURCE stack walk + plist modern bash (#19656)
+- Maintenance: update simplification state registry
+- feat(pulse-merge): coderabbit-nits-ok label to auto-dismiss CR-only CHANGES_REQUESTED reviews (#19653)
+- tighten observability.md prose (150→143 lines) (#19655)
+- tighten opencode-maintenance.md (163→140 lines) (#19654)
+- fix(pulse-routines): silence unrecognised schedule expression noise (#19652)
+- Maintenance: mark t2184 complete (pr:#19651)
+- fix(observability): capture duration_ms + metadata in tool_calls INSERT (#19651)
+- Maintenance: update simplification state registry
+
+## [3.8.70] - 2026-04-18
+
+### Changed
+
+- wire r913 opencode DB maintenance into platform scheduler (#19650)
+- fix issue-sync enrich 10-minute timeout (#19487)
+- Maintenance: mark t2181 complete (pr:#19644)
+- fix(otel-enrichment): detectTaskId regex for .type- and -type- worktree paths (#19644)
+- Maintenance: trim Codacy noise — disable Prospector/PMD, skip Bandit B404, exclude opencode plugin (#19647)
+- Maintenance: update simplification state registry
+- Maintenance: t2179 + t2180 — pulse-merge coderabbit-nits-ok label + claim-task-id pre-claim discovery (#19640)
+
+## [3.8.69] - 2026-04-18
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Maintenance: mark t2177 complete (pr:#19635)
+- SYNC_PAT — scope + visibility + actionable error (#19489)
+- feat(opencode-plugin): OTEL span enrichment + session-introspect helper (#19635)
+- exclude archived briefs + design/skill docs from Codacy; hide Codacy badge (#19637)
+- feat(opencode): weekly DB maintenance routine (r913) for SQLite lock mitigation (#19630)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+- fix(routine-schedule): recognise 'persistent' as a valid schedule type (#19628)
+- Maintenance: update simplification state registry
+- fix(pulse): add live GraphQL budget probe to defeat cache-poisoning false positives (#19626)
+- add TODO entry for pulse rate-limit cache-poisoning defense (ref GH#19622) (#19625)
+- Maintenance: update simplification state registry
+- fix(large-file-gate): split overloaded simplification-debt into file-size-debt + function-complexity-debt (#19619)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- force base-10 to handle octal-trap IDs (GH#19620) (#19621)
+- replace perl alarm with timeout(1) to reap Go grandchild on Linux (GH#19623) (#19627)
+- document root cause + regression test for false needs-consolidation on single bot comment (t2152) (#19618)
+- replace bash4+ uppercase substitution with tr for bash 3.2 compat (#19617)
+- revert BASH32_COMPAT_THRESHOLD to 78 and consolidate treadmill audit trail (#19616)
+
+## [3.8.68] - 2026-04-17
+
+### Changed
+
+- extract relationships & backfill into issue-sync-relationships.sh (#19613)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2172 complete (pr:#19612 testing:runtime-verified)
+
+## [3.8.67] - 2026-04-17
+
+### Changed
+
+- hotfix: auto-clean broken symlinks in OpenCode runtime dirs (blocks new sessions) (#19612)
+- chore: ratchet-down BASH32_COMPAT_THRESHOLD 78→74 (#19609)
+- Maintenance: update simplification state registry
+- fix NESTING_DEPTH_THRESHOLD 285/290 ping-pong by increasing buffer to 7 units (#19605)
+- extend per-function regression to nesting/bash32/file-size + retire ratchet treadmill (#19592)
+
+## [3.8.66] - 2026-04-17
+
+### Added
+
+- t2169 simplification-outcome-check workflow + gate short-circuit (#19520)
+
+### Changed
+
+- GH#19593: chore: ratchet-down complexity thresholds (#19594)
+- GH#19589: chore: ratchet-down complexity thresholds (#19591)
+- Maintenance: update simplification state registry
+- Maintenance: bump NESTING_DEPTH_THRESHOLD to 290 (GH#19588) (#19590)
+- chore: ratchet-down complexity thresholds (GH#19586) (#19587)
+- chore: ratchet-down complexity thresholds (GH#19582) (#19584)
+- Maintenance: update simplification state registry
+- Maintenance: bump NESTING_DEPTH_THRESHOLD 285→290 for GH#19581 proximity warning (#19583)
+- chore: ratchet-down complexity thresholds (GH#19579) (#19580)
+- Maintenance: update simplification state registry
+- Maintenance: bump NESTING_DEPTH_THRESHOLD to 290 (GH#19577) (#19578)
+- Maintenance: ratchet-down complexity thresholds (GH#19574) (#19575)
+- Maintenance: update simplification state registry
+- Maintenance: bump NESTING_DEPTH_THRESHOLD to 290 (GH#19572) (#19573)
+- Maintenance: ratchet-down complexity thresholds (GH#19569) (#19570)
+- Maintenance: update simplification state registry
+- Maintenance: bump NESTING_DEPTH_THRESHOLD to 290 (GH#19565) (#19567)
+- chore: ratchet-down complexity thresholds (GH#19563) (#19564)
+- Maintenance: ratchet-down complexity thresholds (GH#19554) (#19558)
+- chore(ci): bump NESTING_DEPTH_THRESHOLD 285→290 (283 violations + 7 headroom) (#19560)
+- Maintenance: ratchet-down complexity thresholds (GH#19554) (#19555)
+- chore: ratchet-down BASH32_COMPAT_THRESHOLD 78→74 (#19553)
+- Maintenance: update simplification state registry
+- chore(ci): bump NESTING_DEPTH_THRESHOLD 285→290 (283 violations + 7 headroom) (#19552)
+- chore: ratchet-down complexity thresholds (GH#19547) (#19548)
+- Maintenance: update simplification state registry
+- chore(ci): bump NESTING_DEPTH_THRESHOLD 285→290 (283 violations + 7 headroom) (#19545)
+- Maintenance: ratchet-down complexity thresholds (GH#19541) (#19542)
+- Maintenance: update simplification state registry
+- chore(ci): bump NESTING_DEPTH_THRESHOLD 285→290 (283 violations + 7 headroom) (#19538)
+- chore: ratchet-down BASH32_COMPAT_THRESHOLD 78→74 (#19539)
+- chore: ratchet-down NESTING_DEPTH_THRESHOLD 290→285 (#19535)
+- Maintenance: update simplification state registry
+- chore(ci): bump NESTING_DEPTH_THRESHOLD 285→290 (283 violations + 7 headroom) (#19532)
+- chore: ratchet-down complexity thresholds (nesting 290→285, bash32 78→74) (#19529)
+- Maintenance: update simplification state registry
+- chore: ratchet-down BASH32_COMPAT_THRESHOLD 78→74 (#19525)
+- chore(ci): bump nesting depth threshold 284→290 (283 violations + 7 headroom) (#19527)
+- Maintenance: update simplification state registry
+- fix(pulse-triage): clear stale needs-simplification labels when cited continuations are phantom (#19524)
+- chore: ratchet-down complexity thresholds (GH#19519) (#19522)
+- docs(build.txt): add deployed-vs-source diagnostic rule for runtime investigations (#19518)
+- chore: ratchet-down BASH32_COMPAT_THRESHOLD 78→74 (GH#19516) (#19517)
+- Maintenance: update simplification state registry
+- bump nesting threshold 284→289 (282 violations + 7 headroom) (#19515)
+- Maintenance: update simplification state registry
+- tighten video-seo.md agent doc (109→97 lines) (#19507)
+- restructure video-schema.md into slim index + chapter files (#19509)
+- tighten transcript-seo.md (107→105 lines) (#19510)
+- chore: ratchet-down complexity thresholds (GH#19506) (#19511)
+- Maintenance: update simplification state registry
+- Maintenance: file Fixes C/D/E as children of #19482 (t2163 5-fix plan); mark t2164 complete (#19501)
+- add video-seo, transcript-seo, video-schema agents with cross-reference pass (#19495)
+- bump NESTING_DEPTH_THRESHOLD from 284 to 289 (#19496)
+- tighten large-file-gate path extraction + verify file size before continuation (#19484)
+- chore: ratchet-down complexity thresholds (GH#19480) (#19481)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- bump BASH32_COMPAT_THRESHOLD to 78 (CI reports 76 violations vs threshold 74) (#19576)
+- revert BASH32_COMPAT_THRESHOLD to 78 (CI reports 76 violations vs threshold 74) (#19571)
+- bump BASH32_COMPAT_THRESHOLD 74→78 — CI shows 76 violations post-GH#19531 merge (#19540)
+
+## [3.8.65] - 2026-04-17
+
+### Changed
+
+- skip consolidation when in-flight PR resolves parent (#19477)
+- adopt opencode upstream prompt patterns into build.txt (#19479)
+- Maintenance: update simplification state registry
+
+## [3.8.64] - 2026-04-17
+
+### Added
+
+- cross-check TODO.md historical IDs at allocation (GH#19454) (#19461)
+
+### Changed
+
+- raise claude-opus-4-7 context cap to 250K (align with OpenCode 80% auto-compact) (#19428)
+- Maintenance: bump NESTING_DEPTH_THRESHOLD to 289 (GH#19472) (#19475)
+- Maintenance: update simplification state registry
+- chore: ratchet-down complexity thresholds (#19466)
+- Maintenance: update simplification state registry
+- Maintenance: sync TODO completion for t2159 and t2160 (#19470)
+- Maintenance: update simplification state registry
+- Maintenance: t2160 — file pulse-routines cron-extraction bugfix brief (#19467)
+- fix(pulse-routines): cron schedule extraction truncates at first space (#19468)
+- Maintenance: sync TODO completions (t2156/t2157/t2158) (#19464)
+- feat(ci): per-function complexity regression check (#19463)
+- feat(aidevops-update-check): detect deployed-script drift, hot-redeploy (#19462)
+- Tests: split gh-stub writer into three <100-line helpers (complexity gate) (#19455)
+- Maintenance: t2156/t2157/t2158 — file systemic fix briefs (deployment gap, zombie auto-assign, claim-task-id collision) (#19456)
+- fix(issue-sync-helper): skip auto-assign when #auto-dispatch present (#19460)
+- Maintenance: bump FUNCTION_COMPLEXITY_THRESHOLD 28→31 (GH#19452 drift) (#19457)
+- Maintenance: update simplification state registry
+- add cross-runner advisory lock for consolidation dispatch (Phase B) (#19450)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2006 complete (pr:#18540) — work already merged 2026-04-13 (#19446)
+- Maintenance: mark t2153 complete (pr:#19429) (#19437)
+- Maintenance: bump NESTING_DEPTH_THRESHOLD 283→288 (GH#19430) (#19439)
+- fix(dispatch-dedup-stale): age-floor guard prevents stale recovery on fresh issues (#19429)
+- Maintenance: ratchet-down complexity thresholds (GH#19423) (#19425)
+- Maintenance: update simplification state registry
+- Maintenance: bump NESTING_DEPTH_THRESHOLD to 288 for GH#19419 (#19421)
+- Maintenance: update simplification state registry
+- Maintenance: ratchet down NESTING_DEPTH_THRESHOLD 288→283 (GH#19412) (#19418)
+- Maintenance: add t2151 (Phase B) + t2152 (initial-label investigation) follow-up briefs (#19416)
+- Maintenance: mark t2144 complete (pr:#19411)
+- fix consolidation-task cascade (filter regex + backfill guard + grace window) (#19411)
+- Maintenance: update simplification state registry
+- Maintenance: bump NESTING_DEPTH_THRESHOLD to 288 (GH#19405) (#19409)
+- Maintenance: ratchet-down BASH32_COMPAT_THRESHOLD 78→74 (GH#19397) (#19408)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- fix SC2002 shellcheck violations in test-stale-recovery-escalation.sh (#19449)
+- bump BASH32_COMPAT_THRESHOLD 74→78 (GH#19423 post-merge correction) (#19426)
+
+## [3.8.63] - 2026-04-16
+
+### Changed
+
+- fix agent-discovery TypeError crashing all agent deployment (#19402)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- pass display_to_filename to validate_subagent_refs in agent discovery scripts (#19406)
+
+## [3.8.62] - 2026-04-16
+
+### Changed
+
+- Maintenance: ratchet-down complexity thresholds (GH#19395) (#19401)
+- Maintenance: update simplification state registry
+- tighten pre-dispatch-validators.md (79→75 lines) (#19400)
+- tighten shell-style-guide.md + fix scanner thrash root cause (#19398)
+- Maintenance: update simplification state registry
+- detect + auto-recover stampless origin:interactive claims (#19384)
+- bump NESTING_DEPTH_THRESHOLD 283→288 (281 violations, 2 headroom) (#19392)
+- Maintenance: update simplification state registry
+- Maintenance: ratchet-down NESTING_DEPTH_THRESHOLD 288→283 (GH#19382) (#19386)
+- tighten pre-dispatch-validators.md (remove redundant prose) (#19385)
+- refactor(pulse-triage): centralize consolidation gate defaults at module top (#19383)
+- Maintenance: update simplification state registry
+- bump NESTING_DEPTH_THRESHOLD 283→288 (281 violations, 2 headroom) (#19377)
+- Maintenance: ratchet down BASH32_COMPAT_THRESHOLD 78→74 (GH#19374) (#19378)
+- tighten pre-dispatch-validators.md (82→79 lines) (#19375)
+- Maintenance: update simplification state registry
+- chore: ratchet-down complexity thresholds (#19369)
+- contributor insight pipeline — session-miner upstream issue filing with privacy sanitization (#19372)
+
+### Fixed
+
+- resolve agent basename collisions deterministically (t2149) (#19403)
+
+## [3.8.61] - 2026-04-16
+
+### Changed
+
+- Maintenance: update simplification state registry
+- tighten pre-dispatch-validators.md prose (84→82 lines) (#19366)
+- add role:contributor guard to repos.json — gate scanners for non-maintainer instances (#19350)
+- add role:contributor guard to repos.json — gate scanners for non-maintainer instances (#19361)
+- propagate write failures through all domain command generators (#19362)
+- Maintenance: update simplification state registry
+- simplify null check in _get_min_edit_lag, harden test main-strip (#19360)
+
+### Fixed
+
+- use non-whitespace delimiter in merge-pass field extraction (#19357)
+
+## [3.8.60] - 2026-04-16
+
+### Changed
+
+- memory-pressure-monitor bash 3.2 compat + re-exec guard (#19353)
+- bump NESTING_DEPTH_THRESHOLD from 283 to 288 (#19352)
+- tighten pre-dispatch-validators.md agent doc (#19354)
+- Maintenance: bump BASH32_COMPAT_THRESHOLD 76→80 — absorb pre-existing drift (#19349)
+- Maintenance: mark t2142 complete (pr:#19344)
+- harden consolidation gate against unset threshold vars (#19344)
+- Maintenance: update simplification state registry
+- GH#19331: tighten pre-dispatch-validators.md (108→90 lines) (#19340)
+- register claude-opus-4-7 as opt-in model (#19325)
+- Maintenance: ratchet-down complexity thresholds (GH#19323) (#19328)
+- tighten pre-dispatch-validators.md (126→108 lines) (#19326)
+
+### Fixed
+
+- extend guarded BOLD pattern to DIM, RESET, and remove dead code (GH#19269) (#19306)
+- use anchored pgrep/pkill pattern and verify PID change on restart (#19327)
+
+## [3.8.59] - 2026-04-16
+
+### Changed
+
+- Maintenance: mark t2141 complete (pr:#19315)
+- full-loop-helper merge auto-resolve --admin/--auto mutual exclusion (#19315)
+- route claude-proxy and google-proxy through shared response-helpers.mjs (#19320)
+- Maintenance: update simplification state registry
+- use null-safe iterator in _get_rate_limit_behavior jq filter (#19311)
+
+### Fixed
+
+- guard auto-approve log and counter behind edit exit code (#19318)
+- remove ineffective || return 1 from _generate_seo_commands (#19314)
+- escape regex dots in task_id_match for grep pattern safety (#19319)
+- propagate write failures through full call chain in generate-claude-commands.sh (#19317)
+- remove duplicate SSH command and unreachable returns in ssh-key-audit-helper.sh (#19316)
+- use exit 0 for jq SKIP in test-circuit-breaker.sh (#19313)
+- replace undefined $_arg2 with $2 in sonarcloud-autofix.sh fix command (#19312)
+
+## [3.8.58] - 2026-04-16
+
+### Changed
+
+- Maintenance: mark t2139 complete (pr:#19309)
+- review-bot-gate require positive completion signal in bot_has_real_review (#19309)
+
+## [3.8.57] - 2026-04-16
+
+### Changed
+
+- fix(pulse): Bash 3.2 heredoc-in-$() breaks pulse dispatch (#19276)
+- add || exit guard to SCRIPT_DIR definitions in 4 scripts (#19305)
+- tighten pre-dispatch-validators.md prose (129→126 lines) (#19304)
+- tighten shell-style-guide.md prose (135 lines, 15 improvements) (#19303)
+- fix(opencode-aidevops): address CodeRabbit security findings from PR #19229 (#19254)
+- rename RESET to TEST_RESET in four test harnesses for consistency (#19289)
+- Maintenance: update simplification state registry
+- consolidate jq calls in _get_rate_limit_behavior into single pass (#19285)
+- fix SKIP color and remove unused TEST_YELLOW in 3 test harnesses (#19283)
+
+### Fixed
+
+- convert DIM/RESET to guarded assignments, remove unused BOLD (#19308)
+- replace echo -e with printf in test harness logging functions (GH#19271) (#19307)
+- bump NESTING_DEPTH_THRESHOLD 281→288 to restore headroom (GH#19288) (#19302)
+- use pgrep/pkill for robust pulse restart instead of PID file (#19287)
+- make shared-constants.sh sourcing mandatory in agent-sources-helper, coderabbit-cli, sonarcloud-autofix (#19284)
+- propagate failures in _generate_seo_commands wrapper (#19281)
+- address review bot suggestions from PR #19188 — SKIP color and unused TEST_YELLOW (#19282)
+- propagate helper failures in _generate_seo_commands wrapper (#19280)
+
+## [3.8.56] - 2026-04-16
+
+### Changed
+
+- fix(pulse): reconcile_completed_parent_tasks consults sub-issue graph before body regex (#19250)
+- add brief and TODO for voice-bridge/normalise-markdown test coverage (#19245)
+
+## [3.8.55] - 2026-04-16
+
+### Changed
+
+- t2135: feat(ci): post-merge brief acceptance criteria verification (#19246)
+- plan qlty A-grade file-complexity campaign (6 tasks, 20 smells) (#19228)
+- refactor(misc-scripts): decompose voice-bridge/normalise-markdown/tabby-profile-sync (#19238)
+
+### Fixed
+
+- skip parent-task title-fallback hygiene + atomic status:done mutation (t2137) (#19248)
+
+## [3.8.54] - 2026-04-16
+
+### Changed
+
+- protect override labels from worker self-application + plugin import check (#19242)
+
+## [3.8.53] - 2026-04-16
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.8.52] - 2026-04-16
+
+### Changed
+
+- fix interactive claims broken by stale-recovery + auto-claim conflation (#19237)
+- tighten shell-style-guide.md from 143 to 135 lines (#19240)
+- ratchet down NESTING_DEPTH_THRESHOLD 286→281 (actual 279 + 2 buffer) (#19239)
+- tighten pre-dispatch-validators.md from 134 to 129 lines (#19221)
+- refactor(email-pipeline): decompose email python cluster (#19230)
+- refactor(higgsfield): decompose commands/video/common/image into focused modules (#19232)
+- decompose doc/agent indexing python cluster into shared modules (#19233)
+- Maintenance: update simplification state registry
+
+## [3.8.51] - 2026-04-16
+
+### Changed
+
+- remove redundant backward-compat notes for tier:thinking rename (#19218)
+- tighten shell-style-guide.md prose (153 → 143 lines) (#19219)
+- fix(ci): linked-issue-check workflow fails with 403 on external contributor PRs (#19208)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- treat NMR as transient when approval marker exists (#19231)
+- bump NESTING_DEPTH_THRESHOLD 281→286 to restore headroom (GH#19215) (#19216)
+
+## [3.8.50] - 2026-04-16
+
+### Added
+
+- lock maintainer/worker issues at creation (#19214)
+
+## [3.8.49] - 2026-04-16
+
+### Fixed
+
+- lock issue before posting approval marker to prevent comment injection (#19213)
+
+## [3.8.48] - 2026-04-16
+
+### Fixed
+
+- post approval marker before removing NMR label (#19212)
+
+## [3.8.47] - 2026-04-16
+
+### Added
+
+- auto-close parent-task issues when all children resolved (#19211)
+- shell init pattern lint gate (t2053 Phase 2) (#19210)
+
+## [3.8.46] - 2026-04-16
+
+### Added
+
+- auto-close open issues with merged PRs (#19209)
+
+### Changed
+
+- Maintenance: ratchet-down NESTING_DEPTH_THRESHOLD 286 → 281 (GH#19204) (#19207)
+
+## [3.8.45] - 2026-04-16
+
+### Changed
+
+- final Pattern C migration + zero-violation audit (Phase 7c) (#19180)
+- migrate Tier 1/2 setup-chain helpers to Pattern A (#19183)
+- Maintenance: update simplification state registry
+- Maintenance: mark t2125 complete (pr:#19199)
+- Maintenance: ratchet FUNCTION_COMPLEXITY_THRESHOLD 29→28 (#19199)
+
+### Fixed
+
+- drop origin:interactive exclusion from CI/conflict/review feedback routing (#19205)
+
+## [3.8.44] - 2026-04-15
+
+### Added
+
+- route CI failures and merge conflicts to issues for worker re-dispatch (#19200)
+- t2123 configurable review gate rate-limit behavior per tool and per repo (#19186)
+
+### Changed
+
+- Maintenance: mark t2122 complete (pr:#19181)
+- extend Response.json() fix to remaining opencode plugin Bun.serve callers (#19181)
+- test harness Pattern C batch 2 (Phase 7b) (#19184)
+- BOLD readonly normalization batch 2 (Phase 8b) (#19182)
+- Refactor: Pattern C color variable rename in 5 test harnesses (#19188)
+- Refactor: t2053.6 eliminate banned readonly + final production audit (Phase 6) (#19187)
+
+### Fixed
+
+- use Response.json() in proxy handlers to avoid Bun _Response type mismatch (#19174)
+- replace --limit 1 with --limit 20 + jq local filter in Check 1b and 2 (GH#19140) (#19195)
+- bump NESTING_DEPTH_THRESHOLD 279→286 to restore headroom (GH#19086) (#19192)
+
+## [3.8.43] - 2026-04-15
+
+### Changed
+
+- Refactor: t2053.8a BOLD readonly normalization batch 1 (Phase 8a) (#19179)
+- Maintenance: update simplification state registry
+- Refactor: t2053.8c BOLD readonly normalization batch 3 (Phase 8c) (#19177)
+- migrate Tier 4 standalone helpers (Phase 5) (#19176)
+
+### Fixed
+
+- auto-restart pulse after agent deployment (#19185)
+
+## [3.8.42] - 2026-04-15
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- reset stale-recovery tick counter on auto-approve (#19172)
+
+## [3.8.41] - 2026-04-15
+
+### Changed
+
+- Maintenance: update simplification state registry
+- self-healing wrapper enforcement — pulse reconcile + CI gate + sub-issue body backfill (#19098)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- preserve subtask suffix in task-already-committed check (#19171)
+
+## [3.8.40] - 2026-04-15
+
+### Changed
+
+- feat(ci): systemic gh_create_issue / gh_create_pr wrapper enforcement (#19169)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- preserve subtask decimal suffix in blocked-by parsing (#19170)
+
+## [3.8.39] - 2026-04-15
+
+### Added
+
+- add backfill-sub-issues subcommand (t2114) (#19167)
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- relax kill thresholds to let workers complete (#19168)
+
+## [3.8.38] - 2026-04-15
+
+### Added
+
+- pre-dispatch validator for auto-generated issues (GH#19118) (#19120)
+- dispatch throttle on overlapping file footprints (t2117) (#19117)
+
+### Changed
+
+- Maintenance: update simplification state registry
+- feat(worker-reliability): plist drift regen + no_work escalation guard + no_activity output preservation (#19159)
+- tighten shell-style-guide.md — remove redundant intro, compress prose (145 → 141 lines) (#19157)
+- tighten shell-style-guide.md — move Why section to top (149 → 145 lines) (#19155)
+- Maintenance: update simplification state registry
+- carry forward closed-CONFLICTING PR diff to linked issue (#19144)
+- simplification: tighten pre-dispatch-validators.md (136 → 134 lines) (#19153)
+- Maintenance: update simplification state registry
+- clarify Done When is a single section, not per-file reference (#19150)
+- fix review followup — stream downloads, flexible credential regex, single JSON parse, remove redundant Date.now in filenames, cache qlty sarif output (#19149)
+- GH#19119: simplification: tighten shell-style-guide.md (153 → 149 lines) (#19141)
+- fix review followup — consolidate PR body keyword loops, eliminate separate gh pr view calls, fix stale activity_age reporting (#19148)
+- Maintenance: update simplification state registry
+- simplify _resolve_scripts_dir comment — one check covers all layouts (#19145)
+- Refactor: extract canary failure regex into named local variable (GH#19122) (#19143)
+- Maintenance: update simplification state registry
+- simplification: tighten shell-style-guide.md (155 → 153 lines) (#19116)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+- fix(pulse-merge): update-branch + NMR skip before CONFLICTING-close (#19107)
+- fix(task-id-guard): read counter from origin/main tip, not merge-base (#19078)
+- tighten shell-style-guide.md — reorder by importance, compress prose (#19101)
+- Maintenance: ratchet-down NESTING_DEPTH_THRESHOLD 280 → 279 (GH#19031) (#19104)
+- Refactor: tighten brief composition templates — compress prose, collapse escalation list (#19103)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- DB isolation + output-aware check + archival paste fix (#19166)
+- buffer stream chunks by newline in mcp prefix strip (#19164)
+- populate detailLogPath/detailMaxBytes in quality-hooks ctx (#19162)
+- broaden token-spend sed pattern to handle has-used prefix and any time format (GH#19137) (#19151)
+- harden bash re-exec guard and advisory dismiss (GH#19125) (#19146)
+- pull aidevops worktree fresh before ratchet-check (t2102) (#19108)
+- trigger qlty-regression on pull_request.labeled with label-name guards (#19077)
+
+## [3.8.37] - 2026-04-15
+
+### Changed
+
+- enforce signature footer in gh_create_issue and gh_create_pr wrappers (#19102)
+- refactor: reduce cmd_add() complexity in worktree-helper.sh (#19095)
+- tighten brief.md — fold headless section, compress tier default, drop redundant QR bullet (#19097)
+- Maintenance: update simplification state registry
+- migrate Tier 3 pulse/worker helpers to Pattern A (Phase 4) (#19090)
+
+## [3.8.35] - 2026-04-15
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- restore gitignored node_modules in worktrees
+
+## [3.8.34] - 2026-04-15
+
+### Changed
+
+- fix tier:simple default bias — default to tier:standard everywhere (#19059)
+
+### Fixed
+
+- add self-assign to _label_issue_in_review in full-loop-helper (#19060)
+- make stale-recovery tick comments visible on GitHub (#19058)
+
+## [3.8.32] - 2026-04-15
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Maintenance: t2108 brief + TODO entry for pulse-merge title fallback fix (#19053)
+
+### Fixed
+
+- route orphan worktree removal through trash before delete (#19057)
+
+## [3.8.31] - 2026-04-15
+
+### Added
+
+- harden interactive full-loop with structural issue claim (#19039)
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Maintenance: t2105 brief + TODO entry for aidevops issue CLI subcommand wiring (#19043)
+- stats-functions decomposition Phase 3 — extract stats-health-dashboard.sh (#19033)
+- Maintenance: file t2100 parent + t2101/t2102/t2103 children for #19024 post-mortem
+- Refactor: tighten brief composition templates prose (#19027)
+- feat(tooling): add static scanner for unguarded Linux/macOS-only command calls (#19023)
+- Maintenance: update simplification state registry
+- Refactor: reduce qlty smells 39→20 to achieve maintainability A-grade (#19013)
+- bump NESTING_DEPTH_THRESHOLD 279→284 to restore headroom (#19020)
+- add QLTY_SMELL_THRESHOLD ratchet for multi-language smell count (#18878)
+- Maintenance: ratchet down NESTING_DEPTH_THRESHOLD 284→279 (GH#19015) (#19017)
+- Maintenance: update simplification state registry
+- decompose _create_new_quality_debt_issue into focused helpers (#19011)
+- Maintenance: update simplification state registry
+- reduce _scan_single_pr complexity by extracting helpers (#19012)
+- Maintenance: mark t2099 complete (pr:#19008)
+- Maintenance: update simplification state registry
+- auto-apply 'good first issue' label to tier:simple issues (#19008)
+- fix review-followup scanner to skip empty bot reviews (#19005)
+- bump NESTING_DEPTH_THRESHOLD 281→284 to restore headroom (#19006)
+- Maintenance: update simplification state registry
+- split quality-feedback-helper.sh into focused modules (#19001)
+- Maintenance: update simplification state registry
+- bump NESTING_DEPTH_THRESHOLD 275→281 to restore headroom (#18996)
+- GH#18995: refactor(pulse-prefetch): extract helpers to reduce prefetch_needs_info_replies to 64 lines (#18997)
+- Maintenance: update simplification state registry
+- t2065: add qlty smell regression gate workflow
+- check statusCheckRollup before --admin merge to prevent merging PRs with failing CI (#18968)
+- fix(pulse): disk-space pre-check + worktree count cap + daily cleanup routine (#18990)
+- Refactor: extract parser and index modules from email_imap_adapter.py to eliminate Qlty total-complexity smell (#18992)
+- Maintenance: update simplification state registry
+- fix(pulse): reduce cleanup_worktrees timeout 600s→60s (#18991)
+- fix(worktree-helper): 10s timeout on git fetch --prune in cleanup (#18989)
+- add canary test for pulse-wrapper.sh main() runtime execution (#18982)
+- route review feedback from stuck worker PRs to linked issue (#18972)
+
+### Fixed
+
+- link worktree branch names to issue numbers, reuse existing worktrees (#19052)
+- use gh pr checks --required to filter required-only checks (GH#19040, t2104) (#19041)
+- skip gh issue close on parent-task linked issues (t2099) (#19034)
+- resolve 9 of 11 medium+ issues from GH#19013 refactor (#19022)
+- keep ANTHROPIC_API_KEY for native CLI fallback + rename provider (#18975)
+- exclude signature_not_fetched from systemic clusters (#18999)
+- dedup recently-closed simplification-debt issues before re-filing (#18969)
+- show full --confidence high|medium|low placeholder in memory-helper store example (#18903)
+- prevent cleanup-stage stall on rate-limit exhaustion + reduce full-sweep interval + add pulse health check (#18986)
+
+## [3.8.30] - 2026-04-14
+
+### Changed
+
+- skip expensive prefetch for idle repos — reduce GraphQL consumption ~50% (#18985)
+- fail-loud on GraphQL rate-limit exhaustion in pulse prefetch (#18983)
+
+### Fixed
+
+- isolate dispatch_with_dedup in subshell to survive silent abort (GH#18804) (#18825)
+
+## [3.8.29] - 2026-04-14
+
+### Changed
+
+- add linked-issue-check workflow — require issue ref on every PR (#18971)
+- add claude-sonnet-4-5 and claude-opus-4-5 to claudecli proxy model list (#18967)
+
+### Fixed
+
+- restore pool_ops_token_utils.py with bug fixes (#18977)
+- native CLI auth fallback when pool rate-limited; rename provider to 'Claude CLI' (#18974)
+- probe existing proxy before launch — survive hot-reload and non-Bun runtimes (#18973)
+
+## [3.8.28] - 2026-04-14
+
+### Added
+
+- ensure subcommand — auto-upgrade bash in setup + update (GH#18965/t2094) (#18966)
+
+## [3.8.27] - 2026-04-14
+
+### Changed
+
+- fix canary failure cached as permanent triage failure; fix ratchet-down dedup (#18959)
+- exempt parent-task/meta issues from large-file simplification gate (#18952)
+- fix(post-merge-review-scanner): add NOOP_RE deny-list anchored to terminal position
+
+### Fixed
+
+- dispatch-dedup self-login bypass + worker closed-issue guard + process docs (#18963)
+
+## [3.8.26] - 2026-04-14
+
+### Fixed
+
+- make test-bash-reexec-guard.sh robust to scripts/ layout (GH#18950 follow-up) (#18957)
+
+## [3.8.25] - 2026-04-14
+
+### Changed
+
+- Refactor: extract stale-recovery and PR-evidence into dispatch-dedup modules (GH#18916) (#18955)
+- Maintenance: ratchet-down complexity thresholds (GH#18949) (#18953)
+- Maintenance: update simplification state registry
+- Maintenance: bump NESTING_DEPTH_THRESHOLD 274→279 (GH#18938) (#18942)
+- Maintenance: update simplification state registry
+- tighten tier-standard.md — merge fallback/done-when sections, 79→62 lines (#18941)
+- tighten pulse-sweep.md — compress t2041 read contract, fix tier:reasoning alias bug (439→426 lines) (#18939)
+- Maintenance: update simplification state registry
+- Maintenance: ratchet-down NESTING_DEPTH_THRESHOLD 279→274 (GH#18928) (#18937)
+- tighten brief.md — extract headless resilience detail to tier-standard.md (#18933)
+- tighten define.md workflow doc (122→120 lines) (#18932)
+- GH#18924: tighten pulse.md — compress intro, merge How-to-Think into Prime Directive, remove redundancy (#18930)
+- Maintenance: update simplification state registry
+- fix(dispatch-dedup): detect open PRs by body closing-keyword (race on #18779) (#18915)
+- rename tier:reasoning to tier:thinking across framework (#18918)
+- bump NESTING_DEPTH_THRESHOLD from 272 to 279 (#18920)
+- Maintenance: update simplification state registry
+- decompose opencode plugin cluster — cursor/proxy.js, ttsr.mjs, provider-auth.mjs, google-proxy.mjs (#18906)
+- add TEST_ROOT guard clauses to _write_gh_stub_binary and _setup_gh_stub_globals (#18913)
+- Maintenance: update simplification state registry
+- fix grammar in ubicloud.md — add 'versions' noun after self-hosted (#18909)
+- refactor(claude-proxy): drop Codacy complexity + non-static dispatch findings (#18900)
+- restore check_dedup docblock and PID sentinel protocol (GH#4324) (#18902)
+- consolidate triple jq calls into single pass in _ff_parse_entry (#18896)
+- refactor(claude-proxy): decompose into 6 sibling modules to clear all qlty smells (#18893)
+- refactor(t2069): decompose pool_ops.py into per-command modules (#18891)
+- decompose _isc_scan_closed_pr_orphans into focused helpers (#18873)
+- extract dedup layers, large-file gate, worker launch from pulse-dispatch-core.sh (#18874)
+- defensive auto-close sweep for spurious zero-smell re-queue issues (#18890)
+- Maintenance: ratchet-down NESTING_DEPTH_THRESHOLD 276→272 (GH#18845) (#18887)
+- consolidate email_imap_adapter modules (#18888)
+- Maintenance: update simplification state registry
+- add qlty new-file smell gate (#18885)
+- fix(t2066): local SARIF primary, retuned simplification caps, smell delta (#18886)
+
+### Fixed
+
+- jq null-fallback and single-pass consolidation (GH#18866) (#18905)
+- harden jq filter and pgrep patterns in pulse-issue-reconcile.sh (#18910)
+- optimise enrichment helpers in pulse-quality-debt.sh (#18911)
+- address review bot suggestions from PR #18676 (#18908)
+- guard getent empty output in real-home resolvers (#18907)
+- apply gemini review fixes to issue-sync-helper.sh enrich helpers (#18897)
+- apply review bot suggestions from PR #18708 (#18901)
+- fail-CLOSED on comments API error in _is_stale_assignment (GH#18816) (#18894)
+- include crash_type in fast-fail state update path (#18895)
+
+## [3.8.24] - 2026-04-14
+
+### Changed
+
+- GH#18830: fix root cause of silent dispatch abort (bash 3.2 NUL parser bug) (#18877)
+- Maintenance: update simplification state registry
+
+## [3.8.23] - 2026-04-14
+
+### Added
+
+- detect closed-not-merged PRs with still-open linked issues (#18828)
+
+### Changed
+
+- Refactor: decompose _sweep_shellcheck into focused helpers (GH#18810) (#18849)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- [HOTFIX] oauth-pool third-party detection — namespace tool names (#18860)
+- prevent spurious re-queue issues when qlty reports zero smells (#18848)
+
+## [3.8.19] - 2026-04-14
+
+### Changed
+
+- Maintenance: ratchet-down complexity thresholds (func:30→23, nest:272→269) (#18812)
+
+### Fixed
+
+- file-overlap verification before auto-closing conflicting worker PRs (#18820)
+- move completed tasks to ## Done instead of in-place [x] marking (#18806)
+
+## [3.8.16] - 2026-04-14
+
+### Fixed
+
+- repair claim flow under set -euo pipefail (GH#18786) (#18793)
+
+## [3.8.14] - 2026-04-14
+
+### Changed
+
+- brief-first issue body inlining — fix Sonnet worker first-pass failures (#18782)
+
+## [3.8.12] - 2026-04-14
+
+### Added
+
+- add --admin/--auto pass-through to cmd_merge (GH#18731) (#18757)
+
+### Changed
+
+- Documentation: tighten cross-runner-coordination reference (GH#18658) (#18758)
+- Maintenance: ratchet-down FUNCTION_COMPLEXITY_THRESHOLD 33→30 (GH#18729) (#18755)
+- file follow-up brief to complete t2046 Deliverable A audit (#18752)
+
+## [3.8.11] - 2026-04-13
+
+### Changed
+
+- wire interactive-session-helper into worktree-helper, claim-task-id, approval-helper (#18747)
+- Maintenance: backfill Ready→Done in TODO.md and add --admin fallback to merge wrapper (#18748)
+- Maintenance: mark t2054 complete (pr:#18736)
+- GraphQL review-thread resolution filter + diffHunk context + refresh backfill (#18736)
+- interactive-session-helper.sh foundation + AI-guidance prompt rule (#18744)
+
+## [3.8.10] - 2026-04-13
+
+### Fixed
+
+- flip to worker-is-triager model — workers decide, humans approve (GH#18538 follow-up) (#18743)
+
+## [3.8.9] - 2026-04-13
+
+### Changed
+
+- fix(pulse-triage) address gemini-code-assist review feedback from PR #18388 (#18628)
+- Maintenance: update simplification state registry
+- Maintenance: update simplification state registry
+- Maintenance: ratchet-down FUNCTION_COMPLEXITY_THRESHOLD 43→33 (#18720)
+- Maintenance: update simplification state registry
+- Refactor: decompose cmd_enrich() into focused helpers under 100 lines (#18715)
+- Refactor: decompose generate_subagent_stub() into focused helper functions (#18717)
+- Maintenance: ratchet down FUNCTION_COMPLEXITY_THRESHOLD 46 → 43 (GH#18695) (#18703)
+- Maintenance: update simplification state registry
+- extract _read_lock_pid + _handle_existing_lock from acquire_instance_lock (#18701)
+- Refactor: split _normalize_unassign_stale into focused helpers (GH#18690) (#18700)
+
+### Fixed
+
+- declare install_brew/install_python locals before setup_prompt (SC2154) (#18742)
+- setup.sh readonly GREEN cascade + dep-graph complexity (#18728)
+- complete remaining CodeRabbit findings on claude-proxy (#18730)
+- bump nesting threshold 266 → 272 (+7 headroom) (#18727)
+- strip origin:worker label independently of simplification-debt (#18726)
+- address review feedback from PR #18407 — jq null fallback, --arg safety, jq over python3 (#18566)
+- address review-followup findings in new-task-helper.sh (#18725)
+
+## [3.8.8] - 2026-04-13
+
+### Changed
+
+- make memory recall mandatory in build.txt + AGENTS.md (#18698)
+- remove flock from pulse instance lock — mkdir-only is sufficient (#18688)
+
+## [3.8.7] - 2026-04-13
+
+### Added
+
+- use SYNC_PAT for sync-on-pr-merge push (t2048) (#18677)
+- add task-id collision guard commit-msg hook + CI check (#18662)
+- parent-task lifecycle hardening — fail-closed guard + PR keyword guard (#18663)
+- add characterization safety net for stats-functions decomposition (t2044) (#18611)
+
+### Changed
+
+- Maintenance: update simplification state registry
+- Refactor: reduce setup_gh_stub() complexity in test-consolidation-dispatch.sh (#18687)
+- Maintenance: update simplification state registry
+- simplify shopify agent doc (93→80 lines) (#18673)
+- Maintenance: update simplification state registry
+- t2038: research decision + t2048 child brief (#18647)
+- fix(dispatch) force-dispatch override + portable timeout + label seed + test refactor (#18645)
+- remove dead _get_active_claim_meta() with stale index() jq filter (#18638)
+- simplify _has_active_claim() jq filter using any() (#18632)
+- Documentation: add worker brief improvements for high-reference tasks (GH#18458) (#18625)
+- Documentation: add missing triedEmails JSDoc param to handle429Recovery (#18613)
+
+### Fixed
+
+- resolve SUDO_USER home for sudo approve on Linux (#18686)
+- widen origin:worker allowlist to include repository owner (#18685)
+- gh fail-open on API error/offline + fix cross-ref logic (#18665)
+- declare headless origin at pulse-wrapper main() + harden issue-creation sites + cleanup mistagged issues (#18676)
+- strip ANSI from worktree pre-creation + detect automation-applied NMR (#18672)
+- remove trap with local var in parent-task-keyword-guard.sh (#18664)
+- post one-time rebase nudge on interactive CONFLICTING PR (#18651)
+- exempt bot-generated review-followup from ever-NMR permanence trap (#18649)
+- require closing keyword in Check 3 body match (#18642)
+- address Gemini review feedback from PR #18396 (GH#18550) (#18582)
+- prevent simplification-state churn in ratchet-down PRs (#18637)
+- add refresh-description subcommand to make description refresh truthful (#18631)
+- align claude-opus-4-6 maxTokens to 64000 in claude-proxy.mjs (GH#18619) (#18633)
+- scan all args for --self-check and --dry-run flags (GH#18614) (#18629)
+- gate review-followup issues on human triage (GH#18538) (#18610)
+- add jq // fallback operator and remove redundant null checks in pulse-repo-meta.sh and pulse-routines.sh (#18612)
+- address gemini-code-assist review findings from PR #18368 (GH#18593) (#18626)
+
+## [3.8.5] - 2026-04-13
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.8.3] - 2026-04-13
+
+### Fixed
+
+- t2042 — clean stale gate comments + classify zero-artifact stale-recovery (#18569)
+
+## [3.8.2] - 2026-04-13
+
+### Added
+
+- cost-per-issue circuit breaker (t2007) (#18558)
+- schedule post-merge-review-scanner as daily pulse routine (t1993) (#18557)
+
+### Changed
+
+- refactor: split headless-runtime-helper.sh below 2000 LOC simplification gate (#18562)
+- Maintenance: mark t1992 complete (pr:#18544)
+
+### Fixed
+
+- bump publish-packages to Node 24 to avoid npm self-replace death (#18574)
+- address review bot feedback on dispatch-core and dispatch-engine (#18575)
+- replace hardcoded helper paths and non-portable grep in pulse modules (#18576)
+- address gemini review findings in pulse-prefetch.sh (GH#18554) (#18578)
+- add language specifiers to fenced code blocks in t1990-brief.md (GH#18541) (#18570)
+- address Gemini review feedback on claim-task-id _check_duplicate_issue (#18567)
+- GH#18542 — prefix build-agent path with .agents/ for consistency (#18564)
+- use (.labels // []) null-fallback for all label jq filters (GH#18537) (#18563)
+- add origin:interactive exemption to Job 3 (GH#18532) (#18559)
+
+## [3.8.1] - 2026-04-13
+
+### Fixed
+
+- t1992 — preserve multi-line sweep sections + count shellcheck notes (#18544)
+- tier label source fix — parse Selected tier line + replace existing tier:* labels (t2012) (#18545)
+
+## [3.8.0] - 2026-04-13
+
+### Added
+
+- wire circuit breaker, canary invalidation, adaptive throttle (t1959) (#18527)
+
+### Fixed
+
+- parse URL from gh issue create instead of invalid --json flag (#18533)
+- copy restricted agents verbatim instead of permissive stub (GH#18509) (#18528)
+
+## [3.7.8] - 2026-04-13
+
+### Added
+
+- auto-assign issues from interactive sessions (t2028) (#18500)
+
+### Changed
+
+- Maintenance: mark t2033 complete (pr:#18519 testing:self-assessed) (#18520)
+- fix(pulse): enforce mutually-exclusive status labels via helper (#18519)
+- Maintenance: mark t2034 complete (pr:#18514 testing:self-assessed)
+- file plans for upstream wrapper auto-assign + runtime-debug diagnostic rule (#18518)
+- Maintenance: mark t2030 complete (pr:#18512 testing:self-assessed)
+- Maintenance: mark t2028 complete (pr:#18500 testing:self-assessed)
+- Maintenance: mark t2031 complete (pr:#18505)
+
+### Fixed
+
+- guard session-rename-helper against main/master titles (#18525)
+- add GH_TOKEN to Update TODO.md proof-log step (t2034) (#18514)
+
+## [3.7.7] - 2026-04-13
+
+### Changed
+
+- fix(pulse-dep-graph): respect non-dep blocks when auto-unblocking (#18505)
+
+## [3.7.6] - 2026-04-13
+
+### Added
+
+- setup.sh completion sentinel + verify-setup-log.sh + auto-update wiring (#18510)
+
+### Changed
+
+- Maintenance: mark t2032 complete (pr:#18502)
+- Maintenance: mark t2029 complete (pr:#18506 testing:runtime-verified)
+- scope simplification gate on cited line ranges, not file size alone (#18497)
+
+### Fixed
+
+- make sync-on-pr-merge push failure visible (t2029) (#18506)
+
+## [3.7.5] - 2026-04-13
+
+### Changed
+
+- tighten pulse deterministic merge-pass close-comment wording (GH#17574) (#18502)
+
+## [3.7.4] - 2026-04-13
+
+### Changed
+
+- Maintenance: add brief and TODO entry for init-routines-helper readonly collision (#18487)
+- split pulse-simplification.sh state cluster below 2000 LOC gate (#18488)
+- file bash 3.2 scanner hardening task (planning only) (#18490)
+- fix(pulse-triage): parse JSON output + inline prompt + shape validation (#18491)
+- teach /review-issue-pr to do temporal-duplicate, framing, and second-order-effects checks (#18480)
+- Maintenance: mark t2018 complete (pr:#18481 testing:self-assessed)
+
+### Fixed
+
+- Job 3 re-runs Job 1 to refresh required CheckRun (#18481)
+
+## [3.7.3] - 2026-04-13
+
+### Added
+
+- stale-recovery escalation after N consecutive cycles (t2008) (#18462)
+- implement tier-label dedup via GitHub Action and dispatcher fallback (#18441)
+- guard cmd_enrich body writes with sentinel+content-diff gate; add --batch mode to /new-task (#18416)
+- canonical stays on main in interactive sessions, no exceptions (#18414)
+
+### Changed
+
+- fix(pulse-triage): surface triage failures — escalation comment + label provisioning (#18476)
+- Maintenance: mark t2015 complete (pr:#18474 testing:runtime-verified)
+- fix(pulse-dep-graph): parse markdown-formatted blocked-by bodies (#18474)
+- cut TRIAGE_MAX_RETRIES default 3→1 to eliminate lock/unlock churn (#18472)
+- docs: cross-runner coordination reference doc (#18465)
+- feat: add /build-agent slash command and ubicloud hosting agent (#18407)
+- Maintenance: mark t1998 complete (pr:#18438) (#18440)
+- fix simplification re-eval short-circuit that left #18346 stuck forever (#18438)
+- Maintenance: sync TODO.md completion markers for t1962, t1963, t1986 (#18435)
+- Maintenance: mark t1981/t1983/t1984/t1985/t1995 complete (#18436)
+- Tests: stub-based harness for issue-sync-lib.sh with t1983 regression (#18430)
+- post-checkout hook warning when canonical goes off main (#18427)
+- feat(claudecli): map OpenCode reasoning level to Claude CLI --effort flag (#18424)
+- plan: post-checkout hook to auto-restore main in canonical worktree (#18422)
+- parent-task dispatch guard — label survival + #parent tag + dispatch short-circuit (#18419)
+- Maintenance: add TODO completion marker for merged PR #18414 (#18417)
+
+### Fixed
+
+- preserve trailing newline and embed OPENCODE_BIN on Linux pulse (#18477)
+- add auto-dispatch to _is_protected_label exact-match list (#18469)
+- dispatch-dedup audit — add combined label+assignee guard (t1996) (#18446)
+- add logging to two silent skip paths in cleanup_worktrees() Pass 2 (#18442)
+- sync-todo-to-issues workflow tags issues origin:interactive and assigns human pusher (#18431)
+- P0 BSD awk dynamic-regex silently broke add_gh_ref_to_todo on macOS (#18423)
+
+## [3.7.2] - 2026-04-12
+
+### Added
+
+- setup.sh auto-installs privacy guard in every initialized repo (#18373)
+- add git pre-push privacy guard for private slug leaks (#18361)
+
+### Changed
+
+- fix(pulse-triage): consolidation flow never creates the promised child issue (#18405)
+- chore(ci): add Complexity Analysis to required status checks on main (#18397)
+- Phase 10 (FINAL) — quality-debt + ancillary-dispatch, CLEARS 2000-line gate (#18392)
+- Phase 9 — extract dispatch-core + dispatch-engine (26 fns, 2,141 lines) (#18390)
+- Phase 8 — extract triage cluster (10 fns, 428 lines) (#18388)
+- Phase 7 — extract prefetch cluster (26 fns, 1,668 lines) (#18386)
+- Phase 6 — extract simplification cluster (1,990 lines, 29 fns, largest) (#18384)
+- Phase 5 — extract cleanup + issue-reconcile clusters (#18381)
+- Phase 4 — extract pr-gates + merge cycle into pulse-merge.sh (#18379)
+- Maintenance: bump complexity threshold 40→43 (post-#18376 Phase 3 hotfix) (#18377)
+- Maintenance: mark t1970 complete (pr:#18374)
+- Maintenance: mark t1969 complete (pr:#18375)
+- Maintenance: mark t1968 complete (pr:#18373)
+- fix interactive-claim race — auto-assign + dedup excludes closed (#18374)
+- stub-based tests for privacy-guard (caught a latent cache bug) (#18375)
+- Phase 3 — extract operational plumbing (capacity, logging, watchdog, capacity-alloc) (#18376)
+- Phase 2 — extract 4 leaves with fan-in (queue-governor, nmr-approval, dep-graph, fast-fail) (#18368)
+- Phase 1 — extract 5 leaf modules (model-routing, instance-lock, meta-parse, repo-meta, routines) (#18366)
+- Phase 0 safety net — characterization tests, --self-check, --dry-run (#18362)
+- Maintenance: mark t1965 complete (pr:#18361)
+- Maintenance: mark t1964 complete (pr:#18360)
+- Maintenance: add r005 mirror-sync routine — daily sync of private mirror repos from their upstream sources
+- Maintenance: mark t1961 complete (pr:#18355)
+- skip pulse dispatch for interactive-session issues (#18353)
+- Maintenance: mark complete — shipped in #18351 (v3.7.1)
+
+### Fixed
+
+- copy all session-miner *.py modules to workspace (#18409)
+- exact tNNN-prefix dedup instead of fuzzy substring search (#18396)
+- remove context betas, prevent infinite 429 rotation (#18363)
+- skip fake-metric update when core tracking issue already exists (#18360)
+
+## [3.7.1] - 2026-04-12
+
+### Changed
+
+- Maintenance: add TODO entry and brief for 1M context window fix
+
+### Fixed
+
+- enable 1M context window for Claude models in opencode-aidevops plugin (#18351)
+
+## [3.7.0] - 2026-04-12
+
+### Changed
+
+- Claude CLI transport proxy for OpenCode plugin (#18343)
+- fix model definitions — image modality, names, attachments (#18345)
+
+## [3.6.244] - 2026-04-12
+
+### Added
+
+- register anthropic and claudecli models via config-hook
+
+### Changed
+
+- Maintenance: changelog for 3.6.244
+
+## [3.6.244] - 2026-04-12
+
+### Added
+
+- register anthropic and claudecli models via config-hook
+
+## [3.6.243] - 2026-04-12
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.6.243] - 2026-04-12
+
+### Fixed
+
+- thinking
+
+## [3.6.242] - 2026-04-11
+
+### Added
+
+- external PR gate — require linked issue + crypto approval (t1958) (#18339)
+
+### Changed
+
+- complete MCP audit — all installed MCPs in plugin registry, DEPRECATED_MCPS cleanup, fix sentry secret, update docs (#18335)
+- origin:interactive implies maintainer approval — skip auto-close and gate (#18334)
+- add shopify-dev-mcp to plugin registry and AGENT_MCP_TOOLS (#18331)
+- register shopify-dev-mcp in generate-runtime-config.sh so setup/update installs it (#18329)
+- add flock deadlock detection, self-recovery, and health alerting (#18328)
+- chore: ratchet-down NESTING_DEPTH_THRESHOLD 254→249 (GH#18326) (#18327)
+- add shopify-dev-mcp agent, fix MCP audit gaps, add permission-migration TODOs (#18311)
+
+## [3.6.241] - 2026-04-11
+
+### Changed
+
+- harden maintainer gate — admin-only simplification, authorship exemption, origin:worker protection
+- fix FD 9 inheritance — replace ineffective python3 fcntl with bash 9>&- (#18309)
+- Documentation: tighten .agents/content/yt-dlp.md slash command doc (75→66 lines) (#18315)
+- tighten postflight-loop.md agent doc (50→40 lines) (#18323)
+- fix: add throughput check to sweep stall detection (GH#18286) (#18325)
+- tighten agent doc budget-analysis.md (52 → 25 lines) (#18320)
+- bump NESTING_DEPTH_THRESHOLD to 254 to restore headroom (#18321)
+- tighten agent doc /security-review (52 → 50 lines) (#18322)
+- tighten list-verify.md (51 → 40 lines) (#18324)
+- tighten agent doc /optimize-tiers (.agents/workflows/optimize-tiers.md, 121 → 100 lines) (#18193)
+- tighten seo-audit.md from 98 to 84 lines (#18228)
+- tighten marketing-sales agent doc (#18235)
+- tighten runners-check.md active workers comment (#18237)
+- tighten .agents/workflows/remember.md (77→64 lines) (#18245)
+- Documentation: tighten dashboard.md workflow doc (78→63 lines) (#18246)
+- Documentation: tighten .agents/workflows/skills.md (80→70 lines) (#18248)
+- Maintenance: tighten aidevops.md agent doc (92→75 lines) (#18252)
+- Documentation: tighten youtube-research.md agent doc (145→138 lines) (#18253)
+- tighten save-todo.md workflow doc (118→105 lines) (#18256)
+- Documentation: tighten agent doc legal.md prose and structure (#18259)
+- Documentation: tighten aidevops-business.md agent doc (#18261)
+- Documentation: tighten automate agent doc prose (#18262)
+- Documentation: tighten log-issue-aidevops.md prose (146→138 lines) (#18263)
+- Documentation: tighten SEO main agent doc prose (#18265)
+- Documentation: tighten autoagent.md workflow doc prose (#18266)
+- tighten add-skill.md workflow doc (74→70 lines) (#18281)
+- tighten research.md agent doc (74→45 lines) (#18312)
+- tighten health.md — merge disclaimer, compress pre-flight, remove duplicate notice (#18305)
+- tighten youtube-setup.md agent doc (101→94 lines) (#18299)
+- tighten cross-review.md — remove redundant parse step, flatten usage block (#18302)
+- Documentation: tighten worktree-cleanup.md — promote --delete-branch warning, inline key rules (#18304)
+- ratchet-down NESTING_DEPTH_THRESHOLD 254 → 249 (#18307)
+- Maintenance: ratchet down NESTING_DEPTH_THRESHOLD 254→249 (GH#18293) (#18308)
+- Documentation: tighten memory-log.md workflow doc (61→52 lines) (#18301)
+- tighten venv-health.md — remove redundant opening sentence, format discovery note as blockquote (#18300)
+- tighten email-inbox.md — reorder security first, merge after-check prose (#18298)
+- tighten email-outreach.md — merge Options+Examples, add status command (#18297)
+- tighten list-todo.md — compress prose, preserve all rules (#18296)
+
+## [3.6.238] - 2026-04-11
+
+### Added
+
+- claude alias with --dangerously-skip-permissions + idempotent alias block updates (#18114)
+
+### Fixed
+
+- setup.sh deploys slash commands to all installed runtimes (GH#18106) (#18109)
+
+## [3.6.236] - 2026-04-11
+
+### Added
+
+- main-agent slash commands across 14 AI clients with aidevops- prefix (#18096)
+
+### Changed
+
+- Maintenance: drop t15473 TODO — scripts/commands reorg not needed (#18100)
+- restore nesting threshold headroom (#18087)
+
+### Fixed
+
+- restrict GH#NNN auto-close to PR title and add dedup guard on closing comments (#18102)
+- detect billing outage failures in gh-failure-miner (#18095)
+
+## [3.6.229] - 2026-04-10
+
+### Fixed
+
+- merge custom routing table with default for complete tier coverage (#18055)
+
+## [3.6.228] - 2026-04-10
+
+### Fixed
+
+- optimize model resolution for performance and Bash 3.2 compat (#18053)
+
+## [3.6.227] - 2026-04-10
+
+### Fixed
+
+- resolve model tier shorthands to FQIDs at deploy time (GH#18043) (#18051)
+
+## [3.6.224] - 2026-04-10
+
+### Changed
+
+- chore: ratchet-down NESTING_DEPTH_THRESHOLD 252→247 (#18029)
+
+## [3.6.222] - 2026-04-09
+
+### Changed
+
+- fix npm install 630MB peer deps on every update (#18019)
+- ratchet down nesting depth threshold (#18017)
+
+## [3.6.221] - 2026-04-09
+
+### Changed
+
+- restore nesting threshold headroom (#18014)
+
+### Fixed
+
+- prevent large-file gate from blocking issues targeting non-code files (GH#17897) (#18015)
+
+## [3.6.220] - 2026-04-09
+
+### Changed
+
+- remove BSD grep noise from headless runtime diagnostics (#18012)
+
+## [3.6.218] - 2026-04-09
+
+### Fixed
+
+- exclude review feedback, tier escalation, and quality-debt auto-gen from consolidation filter (#17988)
+
+## [3.6.217] - 2026-04-09
+
+### Fixed
+
+- exclude audit-trail/history files from simplification scanner (#17987)
+
+## [3.6.214] - 2026-04-09
+
+### Added
+
+- improve simplification gate — exclude non-code files, create debt issues immediately, auto-clear stale labels (#17980)
+
+## [3.6.213] - 2026-04-09
+
+### Added
+
+- add architectural protection for routines repo + port fixes from closed PRs (#17977)
+
+## [3.6.211] - 2026-04-09
+
+### Fixed
+
+- centralise known bots list so workflow stays current via aidevops update (#17971)
+
+## [3.6.210] - 2026-04-09
+
+### Added
+
+- generate OS-specific routine descriptions with cross-platform footnote (#17970)
+
+## [3.6.209] - 2026-04-09
+
+### Added
+
+- seed core routine descriptions and tracking issues into routines repo (#17967)
+
+### Fixed
+
+- exclude pulse gate comments from consolidation filter (self-referential loop) (#17968)
+
+## [3.6.207] - 2026-04-09
+
+### Added
+
+- add unknown bot detection workflow with auto-issue creation (#17966)
+
+## [3.6.206] - 2026-04-09
+
+### Fixed
+
+- add consolidation label re-evaluation pass before early fill floor (#17964)
+- bump nesting depth threshold to 256 to resolve CI proximity warning (#17963)
+
+## [3.6.205] - 2026-04-09
+
+### Fixed
+
+- tighten consolidation filter to exclude operational comments + auto-clear stale labels (#17962)
+
+## [3.6.204] - 2026-04-09
+
+### Added
+
+- run routines repo setup in non-interactive mode (aidevops update) (#17960)
+
+### Changed
+
+- convert if/else to && || chain in run-tests.sh (#17951)
+
+### Fixed
+
+- update dispatch comment jq patterns for ops marker compatibility (#17961)
+- redirect progress echo to stderr in _check_ext_files (#17925)
+- verify mergedAt before closing issues against PRs (GH#17871) (#17931)
+
+## [3.6.202] - 2026-04-08
+
+### Changed
+
+- Maintenance: add bot noise and operational comment skip rules (#8c, #8d) (#17957)
+
+## [3.6.199] - 2026-04-08
+
+### Fixed
+
+- quote script_path and log paths in systemd unit generation (#17948)
+
+## [3.6.197] - 2026-04-08
+
+### Added
+
+- deterministic blocked-by resolution via cached dependency graph (t1935) (#17953)
+
+### Changed
+
+- fix: remove 2>/dev/null from framework-routing-helper call in cch-canary.sh (#17949)
+
+### Fixed
+
+- check-generator-rules.py argument validation and regex robustness (#17950)
+
+## [3.6.193] - 2026-04-08
+
+### Changed
+
+- Maintenance: add provenance skip markers for quality-debt issues (rule #8b) (#17940)
+
+## [3.6.192] - 2026-04-08
+
+### Fixed
+
+- improve readability of exit code check in test-runtime-registry.sh (#17939)
+- simplify --days condition in seo-export-helper.sh for readability (#17938)
+- use if blocks for format conversion clarity (#17937)
+
+## [3.6.189] - 2026-04-08
+
+### Changed
+
+- Maintenance: add rule #8a to skip signature footers when reading GH threads (#17932)
+
+## [3.6.187] - 2026-04-08
+
+### Changed
+
+- skip approval gate for maintainer-authored quality-debt issues (#17922)
+
+### Fixed
+
+- memory-pressure-monitor.sh review feedback from PR #17858 (#17926)
+
+## [3.6.185] - 2026-04-08
+
+### Fixed
+
+- improve pulse throughput — reduce dedup TTL, clear dedup on crash, dispatch-first ordering (#17921)
+- restore anti-pattern detail and fix routine_id fallback in AGENTS.md (#17919)
+
+## [3.6.184] - 2026-04-08
+
+### Added
+
+- crash-type-aware tier escalation, issue consolidation, and large-file simplification gate (#17918)
+
+## [3.6.182] - 2026-04-08
+
+### Changed
+
+- auto-set assignee on crypto approval (#17888)
+- harden _detect_opencode_server curl logic and plugin symlink cleanup (#17884)
+
+### Fixed
+
+- Bash 3.2 compat — replace ${var^} with tr in oauth-pool-helper.sh (#17885)
+
+## [3.6.180] - 2026-04-08
+
+### Security
+
+- protect needs-maintainer-review label on PRs (mirror issue protection) (#17877)
+
+## [3.6.178] - 2026-04-08
+
+### Changed
+
+- remove unauthorized external code, revert unreviewed PRs, harden merge gates (#17868)
+
+## [3.6.168] - 2026-04-08
+
+### Changed
+
+- reduce function complexity in oauth-pool.mjs (#17818)
+- Maintenance: update simplification state registry
+- feat: aidevops init-routines (#17814)
+
+### Fixed
+
+- _is_task_committed_to_main subject-only matching for tNNN/GH#NNN patterns (#17802)
+
+## [3.6.158] - 2026-04-08
+
+### Changed
+
+- Documentation: add objective tier assignment validation to prevent mis-tagging (t1921) (#17765)
+- Refactor: consolidate model tier mappings to single source of truth (#17763)
+- Maintenance: update simplification state registry
+- Maintenance: tighten pageindex.md agent doc (153→107 lines) (#17760)
+- Maintenance: update simplification state registry
+
+## [3.6.157] - 2026-04-07
+
+### Changed
+
+- add task for silent gh auth failure in approval-helper.sh (GH#17754)
+- add task for resolve_api_key subshell export bug
+- Maintenance: update simplification state registry
+- Refactor: decompose opencode-aidevops plugin into focused modules (t1914) (#17752)
+
+### Fixed
+
+- restrict Closes/Fixes keywords to code fix commits only
+
+## [3.6.156] - 2026-04-07
+
+### Added
+
+- add 'diagnose' command to model-accounts-pool (GH#17746) (#17756)
+- add PageIndex vectorless RAG skill doc (#17753)
+
+### Changed
+
+- Maintenance: update simplification state registry
+
+## [3.6.155] - 2026-04-07
+
+### Added
+
+- reasoning-tier enrichment for failed worker issues (#17748)
+
+### Changed
+
+- add triage dedup guard to prevent repeated lock/unlock cycles (#17751)
+- check open PRs in dedup Layer 4 — prevent duplicate dispatch (#17749)
+- Maintenance: update simplification state registry
+- Refactor: decompose compute_file_metrics() into language-specific helpers (GH#17713) (#17747)
+- Refactor: extract verbose output condition helper (#17745)
+- Maintenance: update simplification state registry
+- add qlty verification to simplification brief template and code-simplifier (#17741)
+- Maintenance: update simplification state registry
+- fix: Linux scheduler dual-execution and systemd migration completion (#17730)
+- include PID 1 in OpenCode runtime detection (#17736)
+- Performance: replace while-read loop with awk in _read_brief_what_section (#17737)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- dedup checks commit messages, not PR bodies — closes go in commits (#17750)
+- remove blocking sleep and fix gh pr view exit code in merge pass (#17744)
+- add systemd install mode to routine helper (#17739)
+- replace $(uname) with $OSTYPE in file_size_bytes for efficiency (#17732)
+- tighten conversation-end loop scan wording (#17738)
+
+## [3.6.152] - 2026-04-07
+
+### Changed
+
+- fix remaining TZ=UTC-missing date calls across 3 scripts (#17716)
+- Maintenance: update simplification state registry
+
+## [3.6.151] - 2026-04-07
+
+### Changed
+
+- fix _ts_to_epoch() timezone bug causing premature stale recovery (#17710)
+- extend complexity scanner to Qlty-scored file types (.py/.mjs/.js/.ts) (#17708)
+- remove approval gate from pulse triage dispatch (#17709)
+- add briefs and plan for triage gate fix and Linux scheduler completion
+- Maintenance: update simplification state registry
+- Maintenance: add t1909 brief and TODO entry for install-systemd subcommand (ref:GH#17692)
+- CI: add HOL skill-publish validate workflow (#17671)
+- Maintenance: update simplification state registry
+
+### Fixed
+
+- avoid stat output pollution and suppress wal pragma output (#17685)
+
+## [3.6.139] - 2026-04-07
+
+### Added
+
+- cascade tier dispatch with tier:simple/standard/reasoning (#17645)
+- restore daily full codebase review via CodeRabbit (GH#17640) (#17641)
+
+## [3.6.138] - 2026-04-07
+
+### Changed
+
+- fix ESCAPE clause — 4 backslashes produced 2-char string, SQLite requires 1 (#17638)
+
+### Fixed
+
+- remove claim guard — mismatched comment format rejected every dispatch
+
+## [3.6.136] - 2026-04-07
+
+### Changed
+
+- register colormind-helper.sh in simplification state (depth already 4 ≤ 8) (#17634)
+
+### Fixed
+
+- pass gate immediately when review bot is rate-limited — feedback caught by daily sweeps
+- skip nesting-only violations in complexity scan issue creation (GH#17632) (#17633)
+
+## [3.6.135] - 2026-04-07
+
+### Fixed
+
+- reduce review-bot grace period from 4h to 30min — rate-limited bot blocked entire merge pipeline
+- eliminate signature gate false positives from TUI flash (#17631)
+
+## [3.6.134] - 2026-04-06
+
+### Added
+
+- claim release on worker failure + lifecycle logging
+
+## [3.6.132] - 2026-04-06
+
+### Fixed
+
+- unpin opencode — root cause was SQLite contention, not version-specific
+
+## [3.6.131] - 2026-04-06
+
+### Added
+
+- merge worker session DB back to shared DB after completion
+
+### Changed
+
+- fix full-loop-helper.sh review feedback from PR #17547 (#17625)
+
+## [3.6.130] - 2026-04-06
+
+### Fixed
+
+- isolate worker SQLite DBs — shared DB with busy_timeout=0 caused silent stream death
+
+## [3.6.129] - 2026-04-06
+
+### Fixed
+
+- pin opencode to 1.3.15 — 1.3.16 stalls mid-session with silent stream death
+
+## [3.6.128] - 2026-04-06
+
+### Fixed
+
+- headless contract V5 — warn workers about 300s watchdog, max 240s waits
+
+## [3.6.127] - 2026-04-06
+
+### Fixed
+
+- version guard runs every dispatch, not just on canary cache miss
+
+## [3.6.126] - 2026-04-06
+
+### Fixed
+
+- watchdog monitors continuously — previous design exited after first activity, missing mid-session stalls
+
+## [3.6.125] - 2026-04-06
+
+### Fixed
+
+- version guard reinstalls pinned opencode if drifted — unknown process keeps upgrading to 1.3.17
+- move canary before dispatch claim — failure no longer triggers backoff or blocks re-dispatch
+
+## [3.6.124] - 2026-04-06
+
+### Changed
+
+- broaden signature gate regex to match all footer variable patterns (#17623)
+
+### Fixed
+
+- canary uses sonnet (verified working) — haiku model name not in 1.3.16 registry
+
+## [3.6.123] - 2026-04-06
+
+### Changed
+
+- add canary smoke test and two-phase activity watchdog (#17624)
+- reduce nesting depth in cch-traffic-monitor.sh (#17619)
+- tighten completion detection in JSON parsing block (#17621)
+
+### Fixed
+
+- update safety-policy-check to find deny rules in extracted Python file (#17622)
+
+## [3.6.122] - 2026-04-06
+
+### Changed
+
+- Maintenance: bump opencode pin from 1.3.15 to 1.3.16 — bisect confirmed safe
+- parse OpenCode token aggregates via pipe-delimited stats (#17612)
+- Refactor: extract command defs and Python settings to reduce nesting depth (GH#17559) (#17620)
+- fix now_ms fallback and add WAL cleanup trap in opencode-db-archive (#17618)
+- propagate domain generator failures in orchestrator (#17614)
+- use DISPATCH_COMMENT_MAX_AGE as default for STALE_ASSIGNMENT_THRESHOLD_SECONDS (#17613)
+- deduplicate oauth endpoint constants in pool ops (#17617)
+- use github.paginate for full comment dedup in nmr-hold-comment (#17610)
+- harden tabby fix-shell YAML patching without PyYAML (#17615)
+- pin opencode-ai to 1.3.15 to prevent auto-upgrade to broken 1.3.17 (#17609)
+
+### Fixed
+
+- restore provider delegation for CLI helpers (GH#17600) (#17611)
+
+## [3.6.119] - 2026-04-06
+
+### Changed
+
+- align stale assignment TTL with dispatch comment TTL (1800s) (#17572)
+- reduce nesting depth in oauth-pool-helper.sh from 109 to 3 (#17570)
+- add code scaffolding requirement to plans.md Save Flow
+- fix profile-readme session hours hardcoded to ~/Git/aidevops (#17568)
+- Refactor: reduce nesting depth in generate-claude-commands.sh (#17569)
+- decompose cmd_fix_shell() into focused helpers (#17555)
+
+### Fixed
+
+- track logind sessions by ID to avoid hostname matching (GH#17551) (#17566)
+
+## [3.6.118] - 2026-04-06
+
+### Fixed
+
+- prevent set -e from aborting release on git ls-remote exit code 2 (#17554)
+
+## [3.6.100] - 2026-04-05
+
+### Fixed
+
+- add exact close-reference verification to has_open_pr() (#17435)
+- consistent persistent label, LLM stall detection, test suite, release preflight (t1890) (#17437)
+- remove time_total from curl write-out to fix http_code extraction (#17439)
+
+## [3.6.98] - 2026-04-05
+
+### Changed
+
+- preserve local script edits + fix OpenCode relative paths (#17421)
+- Maintenance: fix version references to 3.6.97 (missed in #17425) (#17426)
+
+### Fixed
+
+- parse probe_provider HTTP code trailer (GH#17427) (#17430)
+- improve detect_default_shell() with reliable system query (#17424)
+- add zero-debt guard to _complexity_llm_sweep_due (GH#17422) (#17423)
+- add PID file guard to scan mode to prevent multiple instances (GH#17415) (#17418)
+- warn when deployed scripts differ from canonical source (GH#17414) (#17417)
+- add PID file guard to daemon mode to prevent multiple instances (GH#17408) (#17416)
+
+## [3.6.97] - 2026-04-05
+
+### Fixed
+
+- `_complexity_llm_sweep_due` in `pulse-wrapper.sh` missing zero-debt guard; when debt is zero, `0 < 0 = false` falls through to "sweep due" triggering false-positive stall issues (GH#17422)
+
+## [3.6.94] - 2026-04-05
+
+### Fixed
+
+- `_install_pulse_systemd` missing PATH env var causes workers to exit 127 on Linux; add `Environment=PATH=...` to service unit matching launchd plist behaviour (GH#17405)
+- `_install_pulse_systemd` timer stalls on mid-session install due to missing `OnActiveSec`; add `OnActiveSec=10s` to bootstrap first service run (GH#17405)
+
+## [3.6.89] - 2026-04-04
+
+### Fixed
+
+- `aidevops update` now regenerates existing systemd service files in non-interactive mode — fixes broken service files from GH#17369 not reaching users via `aidevops update` (#17382)
+
+## [3.5.840] - 2026-04-03
+
+### Changed
+
+- Tightened glm-ocr.md agent doc (79→75 lines) — moved limitations to Quick Reference, consolidated bash blocks, replaced model comparison table with decision table (#16324)
+
+## [3.5.829] - 2026-04-03
+
+### Changed
+
+- Tightened hyperdrive-patterns.md agent doc (125→115 lines) — consolidated redundant SET examples in Connection Pooling section; zero information loss (#16441)
+
+## [3.5.827] - 2026-04-03
+
+### Changed
+
+- Tightened git-security.md agent doc (114→108 lines) — removed redundant frontmatter defaults, out-of-scope auth examples, and redundant tool mention; zero information loss (#16442)
+
+## [3.5.784] - 2026-04-03
+
+### Changed
+
+- Tightened toon.md agent doc (94→80 lines) — removed redundant Format Examples section (inline in Quick Reference), renamed section header; zero information loss (#15872)
+
+## [3.5.694] - 2026-04-02
+
+### Changed
+
+- Tightened github-actions.md agent doc (79→69 lines) — removed redundant Workflow Behavior section, condensed CODACY_API_TOKEN setup steps (#15899)
+
+## [3.5.636] - 2026-04-02
+
+### Fixed
+
+- Fix broken chapter links in production-video.md index — corrected 9 paths from video/NN-*.md to production-video-NN-*.md (#15684)
+
+## [3.5.635] - 2026-04-02
+
+### Changed
+
+- Tightened changelog.md agent doc (66→59 lines) — compressed prose, merged redundant sections, zero content loss (#15672)
+
+## [3.5.596] - 2026-04-02
+
+### Changed
+
+- plan Linux/WSL2 platform support — brief and TODO entry
+
+### Fixed
+
+- make changelog entries self-explanatory by resolving task IDs (#15392)
+
+## [3.5.555] - 2026-04-01
+
+### Changed
+
+- Maintenance: claim t1734
+- Maintenance: claim t1733
+
+### Fixed
+
+- resilient token rotation — wait instead of crashing on exhaustion (#15183)
+
+## [3.5.554] - 2026-04-01
+
+### Changed
+
+- Maintenance: claim t1732
+- Maintenance: claim t1731
+
+### Fixed
+
+- bypass broken select subprocess for model selection (#15181)
+
+## [3.5.553] - 2026-04-01
+
+### Changed
+
+- Maintenance: claim t1730
+- Maintenance: claim t1729
+- Maintenance: claim t1728
+- Maintenance: claim t1727
+- Maintenance: claim t1726
+- Maintenance: claim t1725
+- Maintenance: claim t1724
+- Maintenance: claim t1723
+- Maintenance: claim t1722
+- Maintenance: claim t1721
+- Maintenance: claim t1720
+- Maintenance: claim t1719
+- Maintenance: claim t1718
+- Maintenance: claim t1717
+- Maintenance: claim t1716
+- Maintenance: claim t1715
+
+### Fixed
+
+- isolate supervisor backoff from worker dispatch (#15167)
+
+## [3.5.552] - 2026-04-01
+
+### Fixed
+
+- activity watchdog exit code race condition (#15120)
+
+## [3.5.551] - 2026-04-01
+
+### Fixed
+
+- isolate headless worker auth via XDG_DATA_HOME (#15114)
+
+## [3.5.550] - 2026-04-01
+
+### Fixed
+
+- stop false provider backoff from local/worker failures (#15108)
+
+## [3.5.549] - 2026-04-01
+
+### Fixed
+
+- stop headless workers from rotating shared OAuth token (#15099)
+
+## [3.5.548] - 2026-04-01
+
+### Fixed
+
+- normalize expired cooldowns in MJS inject functions (#15098)
+
+## [3.5.547] - 2026-04-01
+
+### Fixed
+
+- pre-dispatch backoff check — don't launch workers on dead providers (#15097)
+- align output format fields with mission-orchestrator expectations (#14863)
+
+## [3.5.546] - 2026-04-01
+
+### Fixed
+
+- detect and kill stalled workers on rate-limited providers (#15086)
+
+## [3.5.545] - 2026-04-01
+
+### Added
+
+- deterministic merge pass — auto-merge ready PRs every cycle (#15080)
+
+## [3.5.544] - 2026-04-01
+
+### Changed
+
+- Maintenance: claim t1714
+- Documentation: tighten wrangler-patterns.md — remove duplication with sibling files (#13672)
+- Documentation: tighten cloudron-server-ops-skill.md (142→118 lines, GH#13704) (#13716)
+- Documentation: tighten revenuecat.md agent doc (158 → 152 lines) (#13748)
+- Documentation: tighten concurrency.md agent doc (221 -> 169 lines) (#13749)
+- Documentation: tighten feature-slicing migration.md (159→148 lines, regression fix) (#13761)
+- Documentation: tighten drizzle.md (132→122 lines) (#13770)
+- Documentation: tighten cro-chapter-25.md — remove structural noise and redundant prose (#13863)
+- Documentation: tighten meta-ads-foundations-algorithm.md — remove structural noise (#13898)
+- Documentation: tighten CRO chapter 02 — compress prose, preserve all knowledge (#13966)
+- Documentation: tighten video-higgsfield-ui.md (188→158 lines) — remove redundant CLI Options table, compress prompt tips and prose (#14049)
+- Documentation: tighten hexagonal.md 181→160 lines — flatten mermaid nesting, compress code blocks, remove redundant path comments (GH#14040) (#14061)
+- Documentation: tighten playwright-emulation.md (175→153 lines) — merge config blocks, consolidate touch into options, remove redundant multi-device recipe (#14062)
+- Documentation: tighten security.md (106→80 lines, 25% reduction) (#14086)
+- Documentation: tighten agent-browser.md (170→161 lines) — merge Sessions+Wait sections, fold iOS env vars into code block, move License to Quick Reference (#14115)
+- Documentation: tighten hashline-edit-format.md (139→135 lines, zero knowledge loss) (#14127)
+- Documentation: tighten research.md (113→106 lines) — clarify section semantics, compact sufficiency test (#14159)
+- Documentation: tighten sandbox-patterns.md — remove structural noise, preserve all knowledge (#14161)
+- Documentation: tighten serper.md (114→101 lines) — DRY curl headers, reorder by importance (#14188)
+- Documentation: tighten turborepo.md (137→122 lines) (#14205)
+- Maintenance: tighten bash-compat.md agent doc (105→77 lines) (#14221)
+- Documentation: tighten axe-cli.md (114→102 lines) — merge buttons into keyboard section, compress code comments, remove redundant Quick Reference lines (#14266)
+- Documentation: tighten smart-placement.md (90→79 lines) and deduplicate gotchas (87→72 lines) (#14301)
+- Documentation: tighten hyperdrive-patterns.md — remove structural noise, preserve all knowledge (#14376)
+- Documentation: tighten r2-gotchas.md — remove structural noise, merge common errors into sections (94→82 lines) (#14377)
+- Documentation: tighten budget-analysis.md — remove structural noise, compress prose (63→50 lines) (#14396)
+- Documentation: tighten pages-functions.md — compress prose, fix See Also links (57→49 lines) (#14432)
+- Refactor: split _install_pulse_launchd into focused subfunctions (#14493)
+- Documentation: tighten extraction-workflow.md prose without knowledge loss (#14506)
+- Documentation: tighten es2016-es2017.md reference doc (#14508)
+- Documentation: tighten Stagehand benchmark scripts agent doc (#14537)
+- Documentation: tighten Amazon SES provider guide (GH#14007) (#14540)
+- Documentation: tighten model-routing.md (135→111 lines, zero info loss) (#14555)
+- Documentation: tighten services.md prose (7.6% byte reduction, zero knowledge loss) (#14556)
+- Documentation: tighten app-dev-testing.md agent doc (131→115 lines) (#14563)
+- Documentation: tighten ahrefs integration quick reference (#14568)
+- Documentation: tighten email sequences framework agent doc (#14569)
+- Documentation: tighten toon.md - remove redundant description line (#14583)
+- Documentation: tighten durable-objects.md and fix broken internal links (#14584)
+- Maintenance: tighten agent doc legal.md (128→86 lines) (#14597)
+- Maintenance: merge cheatsheet-queries.md into queries.md, remove duplicate (#14600)
+- Documentation: tighten LinkedIn Content Subagent agent doc (#14640)
+- Documentation: tighten api-shield-patterns.md (127→101 lines) (#14641)
+- Documentation: tighten browser-benchmark.md (125 → 86 lines) (#14667)
+- Maintenance: tighten agent sources doc (#14684)
+- Maintenance: tighten conversation starter prompt flow (#14689)
+- Documentation: tighten mutations cheatsheet (65→56 lines) (#14691)
+- Maintenance: tighten campaign launch checklist (#14699)
+
+### Fixed
+
+- add session-level account affinity to prevent cross-session token overwrites (t1714) (#15079)
+- address PR #14278 review feedback on maintainer-gate.yml (#14443)
+- handle missing paths during setup backup rotation (#14632)
+
+## [3.5.543] - 2026-04-01
+
+### Changed
+
+- Maintenance: bump version to 3.5.542
+- Maintenance: tighten content/editor.md agent doc (GH#14243) (#15064)
+
+## [3.5.541] - 2026-04-01
+
+### Changed
+
+- Maintenance: add Claude CLI alignment comments to oauth-pool-helper.sh (#15063)
+
+## [3.5.540] - 2026-04-01
+
+### Changed
+
+- Maintenance: update simplification state
+
+### Fixed
+
+- break orphaned-assignment deadlock and fix silent prefetch failures (GH#15060) (#15058)
+
+## [3.5.539] - 2026-04-01
+
+### Changed
+
+- Maintenance: claim t1713
+- Documentation: tighten agent doc Git Worktree Workflow (#14816)
+- Maintenance: claim t1712
+- Documentation: tighten security-deps command doc (GH#14991)
+- Documentation: tighten memory-audit.md command doc (52→32 lines)
+- Documentation: tighten email-design-test.md (110 → 53 lines)
+- Documentation: tighten glm-ocr.md agent doc (GH#14181)
+- Maintenance: tighten Cloudflare Zaraz agent doc (110→102 lines)
+- Documentation: tighten xcodebuild-mcp.md agent doc
+- Documentation: tighten cold-outreach.md agent doc
+- Documentation: tighten feature.md agent doc (112->80 lines, 11% byte reduction)
+- Documentation: tighten self-improvement.md agent doc (GH#14450)
+- Documentation: tighten landing page structure framework (GH#14845)
+- Documentation: tighten GEO strategy guidance (GH#14842)
+- Documentation: clarify skill-scanner security override (GH#14833)
+- Documentation: tighten skill-scanner agent doc (GH#14833)
+- Documentation: tighten api-integrations.md — fix broken links, consolidate redundant columns
+- Documentation: tighten ddos-gotchas.md (116 -> 94 lines, 8% byte reduction)
+- Documentation: tighten dspyground.md agent doc (116 → 105 lines)
+- Documentation: tighten workers-ai.md (116 -> 15 lines, 87% reduction)
+- Documentation: tighten youtube-script.md command doc (61→49 lines)
+- Maintenance: record Playwright doc simplification state
+- Documentation: tighten playwright.md quick reference
+- Maintenance: track GH#14295 simplification state
+- Documentation: align email sequence pattern references
+- Documentation: tighten api-key-management.md (122 → 54 lines, 56% reduction)
+- Documentation: improve email sequence chapter navigation
+- Documentation: tighten bot-management-patterns guidance
+- Documentation: tighten and restructure Agents SDK gotchas (recheck)
+- Documentation: tighten ranking-opportunities.md (123→91 lines)
+- Documentation: tighten email-campaign.md (123→105 lines)
+- Maintenance: tighten instantly.md agent doc (71→61 lines) (#14678)
+
+### Fixed
+
+- resolve broken aidevops CLI symlink and add to non-interactive setup (#15057)
+- redirect _install_beads_node_tools() output to stderr
+
+## [3.5.538] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten model-specific subagent routing guide (#15012)
+
+## [3.5.537] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten cro-chapter-24.md from 123 to 54 lines (#14712)
+
+## [3.5.536] - 2026-03-31
+
+### Added
+
+- clarify chromium debug routing handoffs (#15006)
+- add chromium-debug-use skill and local CDP helper (#15007)
+
+## [3.5.535] - 2026-03-31
+
+### Added
+
+- add chromium-debug-use skill and local CDP helper (#15007)
+
+## [3.5.534] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+## [3.5.532] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten SRO Grounding agent doc (GH#14210) (#14919)
+- Maintenance: claim t1711
+
+## [3.5.531] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten encryption stack overview (#14526)
+
+## [3.5.530] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.529] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.528] - 2026-03-31
+
+### Fixed
+
+- count headless worker wrappers in pulse (#14955)
+
+## [3.5.527] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten LeadsForge agent doc (105→83 lines) (#14920)
+- Maintenance: add chromium-debug-use follow-up planning
+
+## [3.5.526] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.525] - 2026-03-31
+
+### Changed
+
+- Maintenance: claim t1710
+- Maintenance: claim t1709
+- Maintenance: claim t1708
+- Maintenance: claim t1707
+- Maintenance: claim t1706
+
+## [3.5.524] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten Hyperdrive agent doc (GH#14399) (#14900)
+- Documentation: tighten Socket MCP agent doc (#14882)
+- Documentation: tighten fallback-chains.md agent doc (GH#14190) (#14878)
+
+### Fixed
+
+- harden deterministic pulse fill floor counts (#14840)
+
+## [3.5.523] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten Hyperdrive agent doc (GH#14399) (#14900)
+- Documentation: tighten Socket MCP agent doc (#14882)
+- Documentation: tighten fallback-chains.md agent doc (GH#14190) (#14878)
+
+### Fixed
+
+- harden deterministic pulse fill floor counts (#14840)
+
+## [3.5.522] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.521] - 2026-03-31
+
+### Fixed
+
+- backfill simplification state before complexity scan (GH#14841) (#14846)
+
+## [3.5.520] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.519] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten worker-efficiency protocol prompt (GH#14810) (#14821)
+
+## [3.5.518] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten datasets.md agent doc wording (#14819)
+- Documentation: tighten worker-efficiency-protocol.md (122→120 lines, 12% byte reduction) (#14723)
+- Maintenance: tighten orbstack.md agent doc (121→75 lines) (#14746)
+- Documentation: tighten datasets.md agent doc (121→101 lines) (#14754)
+- Documentation: tighten email-verification.md agent doc (121 -> 95 lines) (#14757)
+- Maintenance: tighten pre-edit.md agent doc (118 -> 80 lines) (#14778)
+- Maintenance: tighten git-security.md agent doc (118 -> 95 lines) (#14780)
+- Documentation: tighten skill-scanner.md (118 -> 98 lines) (#14784)
+- Documentation: tighten geo-strategy.md agent doc (118 -> 106 lines) (#14785)
+- Documentation: tighten heygen-skill.md index — remove verbose sections, use tables (#14786)
+- Documentation: tighten list-todo.md (117 -> 62 lines) (#14793)
+- Documentation: tighten landing-page-structure agent doc (117 -> 103 lines) (#14795)
+
+## [3.5.517] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten api-shield-gotchas.md (51 -> 46 lines) (#14776)
+
+## [3.5.516] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.515] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.514] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.513] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten chore branch workflow guidance (#14722)
+- Documentation: tighten workers-patterns.md — add context, deduplicate deployment commands (#14724)
+
+## [3.5.512] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.511] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.510] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.509] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten bot-management-patterns.md (125→113 lines) (#14698)
+
+## [3.5.508] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.507] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.506] - 2026-03-31
+
+### Changed
+
+- Maintenance: tighten Claude-Flow comparison doc (#14688)
+
+## [3.5.504] - 2026-03-31
+
+### Changed
+
+- Maintenance: tighten aidevops-opencode plugin architecture doc (#14682)
+
+## [3.5.503] - 2026-03-31
+
+### Fixed
+
+- restore Tabby profile sync on Python 3.9 (#14680)
+
+## [3.5.502] - 2026-03-31
+
+### Changed
+
+- Maintenance: tighten jujutsu.md agent doc (125→90 lines) (#14665)
+
+## [3.5.501] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.500] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.499] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.498] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.497] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.496] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.495] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.494] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.493] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.492] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.491] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.490] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.489] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.488] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.487] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.486] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.485] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.484] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.483] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.482] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.481] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.480] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.479] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.478] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.477] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.476] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten workerd.md — merge intro sections, compress to table, fix See Also links (52→34 lines) (#14538)
+- Documentation: tighten workerd.md — merge intro sections, compress to table, fix See Also links (52→34 lines) (#14538)
+
+### Fixed
+
+- refill underfilled pulse slots during active monitoring (#14498)
+
+## [3.5.475] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.474] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.473] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.472] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.471] - 2026-03-31
+
+### Changed
+
+- Documentation: restore explanatory intros in es2016-es2017.md (#14504)
+
+## [3.5.470] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.469] - 2026-03-31
+
+### Changed
+
+- Documentation: tighten AEO/GEO content pattern wording (#14496)
+
+## [3.5.468] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.467] - 2026-03-31
+
+### Changed
+
+- Maintenance: tighten aeo-geo-patterns.md headings and MD031 compliance (#14488)
+
+## [3.5.466] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.465] - 2026-03-31
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.464] - 2026-03-30
+
+### Changed
+
+- Documentation: tighten SKILL-SCAN-RESULTS.md — collapse duplicate scan rows, compress prose (68→37 lines) (#14417)
+
+### Fixed
+
+- address PR #14352 review feedback on agents-sdk-gotchas (#14461)
+
+## [3.5.463] - 2026-03-30
+
+### Changed
+
+- Documentation: tighten mac.md — merge sections, remove structural noise (93→50 lines) (#14375)
+- Documentation: tighten score-responses.md command doc (#14364)
+- Documentation: tighten infraforge outreach agent guidance (#14353)
+- Documentation: tighten Agent SDK gotchas guidance (#14352)
+- Documentation: tighten sandbox.md — merge architecture into header, fix broken links (GH#14293) (#14299)
+- Documentation: tighten workerd-patterns.md — add context line, fix broken link (#13991)
+- Documentation: tighten meta-ads-creative-frameworks.md headings and structure (GH#13965) (#13997)
+- Documentation: tighten CQRS & Domain Events agent doc (191→183 lines) (#14000)
+- Documentation: tighten campaign launch checklist (175→144 lines) (#14004)
+
+### Fixed
+
+- clear expired cooldowns during pool reads (#14341)
+- preserve multiline health dashboard sections (#11001) (#14328)
+- reduce secret scan and npm audit noise (#14255)
+- add null-safety for missing .mcp key in migrations.sh (GH#14220) (#14237)
+
+## [3.5.462] - 2026-03-30
+
+### Fixed
+
+- tolerate missing mcp object in jq migration (#14244)
+
+## [3.5.461] - 2026-03-30
+
+### Fixed
+
+- guard legacy overwrite helper usage (#14236)
+
+## [3.5.460] - 2026-03-30
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.459] - 2026-03-30
+
+### Fixed
+
+- harden unattended worker progress under provider limits (#14219)
+
+## [3.5.458] - 2026-03-30
+
+### Changed
+
+- Documentation: tighten langflow.md (162→153 lines) — DRY install steps, merge API sections, proper autolinks (#14187)
+
+## [3.5.457] - 2026-03-30
+
+### Changed
+
+- Documentation: tighten onboarding wizard guide for GH#13999 (#14141)
+
+## [3.5.456] - 2026-03-30
+
+### Added
+
+- seed mission-control init and improve self-activity triage (#14126)
+
+### Changed
+
+- Documentation: tighten sales emails analysis language (#14139)
+- Documentation: tighten ahrefs.md (114→109 lines) — DRY auth headers, reorder by importance (#14140)
+- Documentation: tighten postgres-drizzle-skill.md (160→88 lines, 45% reduction) (#14113)
+- Maintenance: claim t1705
+
+## [3.5.455] - 2026-03-30
+
+### Changed
+
+- Documentation: tighten voice-ai-models.md (154→147 lines) — compress Pick lines, collapse GPU table, remove formatting noise (#14038)
+- Documentation: tighten hexagonal.md 183→181 lines, zero information loss (GH#13970) (#13986)
+- Documentation: tighten pages-functions-patterns.md (173→171 lines) (#13990)
+- Documentation: tighten playwright-emulation.md prose and structure (#13987)
+- Documentation: tighten Higgsfield UI Automator agent doc (#13988)
+- Documentation: add star history chart to README
+- Maintenance: release v3.5.454
+- Documentation: tighten hexagonal.md 186→183 lines, zero information loss (GH#13933) (#13957)
+- Maintenance: tighten workerd-patterns.md, remove redundant prose (#13960)
+- Documentation: tighten playwright-emulation.md (GH#13935) (#13952)
+
+### Fixed
+
+- restore automatic OpenCode session title sync (#14074)
+
+## [3.5.443] - 2026-03-30
+
+### Changed
+
+- Maintenance: update marketplace.json for v3.5.442
+- Maintenance: release v3.5.442
+- Maintenance: bump version to 3.5.442
+- Documentation: tighten pages-functions-patterns.md (182→178 lines) (#13929)
+
+## [3.5.438] - 2026-03-30
+
+### Changed
+
+- Version bump and maintenance updates
+
+
+## [3.5.410] - 2026-03-30
+
+### Changed
+
+- Maintenance: bump version to 3.5.407
+- Documentation: tighten mission-orchestrator.md — merge duplicate dispatch blocks, normalize unicode, compress prose (#13841)
+- Documentation: tighten email-composition.md — remove structural noise and redundancy (158 → 144 lines) (#13837)
 
 ## [3.5.373] - 2026-03-30
 

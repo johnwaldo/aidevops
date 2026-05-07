@@ -1,5 +1,5 @@
 ---
-description: AI DevOps code review tools and resources
+description: Code review tools — linters, quality platforms, and config references
 mode: subagent
 tools:
   read: true
@@ -12,28 +12,18 @@ tools:
   task: true
 ---
 
-# AI DevOps Resources
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
-<!-- AI-CONTEXT-START -->
+# Code Review Tools
 
 ## Quick Reference
 
-- Linter manager: `bash .agents/scripts/linter-manager.sh detect|install-detected|install-all|install [lang]`
+- Linter manager: `linter-manager.sh detect|install-detected|install-all|install [lang]`
 - Config files: `.eslintrc.*`, `.pylintrc`, `.shellcheckrc`, `.hadolint.yaml`, `.stylelintrc.*`
-- Best practices: start conservative, customize gradually, version control configs
+- Rule refs: [ESLint](https://eslint.org/docs/rules/) · [Pylint](https://pylint.pycqa.org/en/latest/technical_reference/features.html) · [ShellCheck](https://github.com/koalaman/shellcheck/wiki) · [Stylelint](https://stylelint.io/user-guide/rules/list) · [Awesome Static Analysis](https://github.com/analysis-tools-dev/static-analysis)
 
-<!-- AI-CONTEXT-END -->
-
-## Linter Manager
-
-```bash
-bash .agents/scripts/linter-manager.sh detect            # detect languages
-bash .agents/scripts/linter-manager.sh install-detected  # install for detected langs
-bash .agents/scripts/linter-manager.sh install-all       # install all supported
-bash .agents/scripts/linter-manager.sh install python    # install for specific lang
-```
-
-## Language-Specific Linters
+## Language Linters
 
 | Language | Tools | Config |
 |----------|-------|--------|
@@ -58,9 +48,7 @@ bash .agents/scripts/linter-manager.sh install python    # install for specific 
 | PowerShell | PSScriptAnalyzer 1.24.0 | `PSScriptAnalyzerSettings.psd1` |
 | Security | Trivy 0.67.2 | `trivy.yaml` |
 
-Reference: [CodeFactor Analysis Tools](https://docs.codefactor.io/bootcamp/analysis-tools/)
-
-## Quality Analysis Platforms
+## Quality Platforms
 
 | Platform | Integration | Auto-Fix | Notes |
 |----------|-------------|----------|-------|
@@ -68,21 +56,5 @@ Reference: [CodeFactor Analysis Tools](https://docs.codefactor.io/bootcamp/analy
 | Codacy | CLI + Web | Yes (70-90%) | 40+ langs, style/best-practices/security |
 | SonarCloud | CLI + Web | No | Enterprise analysis, security vuln detection, tech debt |
 | Qlty | CLI | Yes (80-95%) | 70+ tools, 40+ langs, auto-formatting |
-| CodeFactor | Web only | No | Reference collection for tool selection |
-
-**ESLint** auto-fix: 60-80% (JS/TS style + best practices)
-
-## Workflow Integration
-
-- **Pre-commit hooks**: run linters before commits
-- **CI/CD pipeline**: integrate with build process
-- **IDE plugins**: configure editor integration
-- **Quality gates**: block merges on violations
-
-## Additional Resources
-
-- [ESLint Rules](https://eslint.org/docs/rules/)
-- [Pylint Messages](https://pylint.pycqa.org/en/latest/technical_reference/features.html)
-- [ShellCheck Wiki](https://github.com/koalaman/shellcheck/wiki)
-- [Stylelint Rules](https://stylelint.io/user-guide/rules/list)
-- [Awesome Static Analysis](https://github.com/analysis-tools-dev/static-analysis)
+| CodeFactor | Web only | No | [Tool reference](https://docs.codefactor.io/bootcamp/analysis-tools/) for tool selection |
+| ESLint | CLI | Yes (60-80%) | JS/TS style + best practices |

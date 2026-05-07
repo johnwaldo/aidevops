@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025-2026 Marcus Quinn
 # =============================================================================
 # OpenCode Version Sandbox
 # =============================================================================
@@ -86,7 +88,7 @@ _latest_sandbox() {
 			local ver
 			ver=$(basename "$dir")
 			local mtime
-			mtime=$(stat -f '%m' "$dir" 2>/dev/null || stat -c '%Y' "$dir" 2>/dev/null || echo "0")
+			mtime=$(_file_mtime_epoch "$dir")
 			if [[ "$mtime" -gt "$latest_time" ]]; then
 				latest_time="$mtime"
 				latest="$ver"

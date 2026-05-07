@@ -6,28 +6,21 @@ metadata:
   category: Animation
 ---
 
-# Using Lottie Animations in Remotion
+<!-- SPDX-License-Identifier: MIT -->
+<!-- SPDX-FileCopyrightText: 2025-2026 Marcus Quinn -->
 
-## Prerequisites
-
-First, the @remotion/lottie package needs to be installed.  
-If it is not, use the following command:
+## Install
 
 ```bash
-npx remotion add @remotion/lottie # If project uses npm
-bunx remotion add @remotion/lottie # If project uses bun
-yarn remotion add @remotion/lottie # If project uses yarn
-pnpm exec remotion add @remotion/lottie # If project uses pnpm
+npx remotion add @remotion/lottie # npm
+bunx remotion add @remotion/lottie # bun
+yarn remotion add @remotion/lottie # yarn
+pnpm exec remotion add @remotion/lottie # pnpm
 ```
 
 ## Displaying a Lottie file
 
-To import a Lottie animation:
-
-- Fetch the Lottie asset
-- Wrap the loading process in `delayRender()` and `continueRender()`
-- Save the animation data in a state
-- Render the Lottie animation using the `Lottie` component from the `@remotion/lottie` package
+Fetch the asset inside `delayRender()`/`continueRender()`, store in state, render with `<Lottie>`:
 
 ```tsx
 import {Lottie, LottieAnimationData} from '@remotion/lottie';
@@ -61,7 +54,7 @@ export const MyAnimation = () => {
 
 ## Styling and animating
 
-Lottie supports the `style` prop to allow styles and animations:
+Use the `style` prop:
 
 ```tsx
 return <Lottie animationData={animationData} style={{width: 400, height: 400}} />;
